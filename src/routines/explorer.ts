@@ -483,6 +483,11 @@ async function* sampleResourcePoi(
       const msg = mineResp.error.message.toLowerCase();
       if (msg.includes("no asteroids") || msg.includes("depleted") || msg.includes("no minable") || msg.includes("nothing to mine")) break;
       if (msg.includes("cargo") && msg.includes("full")) break;
+      // Missing module — mark as explored to avoid revisiting, but don't sample
+      if (msg.includes("gas harvester") || msg.includes("ice harvester")) {
+        mapStore.markExplored(systemId, poi.id);
+        return;
+      }
       if (mined === 0) cantMine = true;
       break;
     }

@@ -266,33 +266,54 @@ class MapStore {
     ) as Array<Record<string, unknown>>;
 
     const existingMarket = new Map(poi.market.map((m) => [m.item_id, m]));
+    const freshItemIds = new Set<string>();
 
     for (const item of items) {
       const itemId = (item.item_id as string) || (item.id as string) || "";
       if (!itemId) continue;
+      freshItemIds.add(itemId);
 
       const buyPrice = item.buy_price as number ?? item.buy as number ?? null;
       const sellPrice = item.sell_price as number ?? item.sell as number ?? null;
       const prev = existingMarket.get(itemId);
 
-      // Extract order quantities from order book data
+      // Extract order quantities from order book data — use fresh values as-is,
+      // don't fall back to stale cached quantities (they may no longer be available)
       const buyQty = (item.buy_quantity as number) ?? (item.buy_volume as number) ?? (item.buy_orders as number) ?? 0;
       const sellQty = (item.sell_quantity as number) ?? (item.sell_volume as number) ?? (item.sell_orders as number) ?? 0;
 
       existingMarket.set(itemId, {
         item_id: itemId,
         item_name: (item.name as string) || (item.item_name as string) || prev?.item_name || itemId,
-        best_buy: buyPrice !== null ? buyPrice : prev?.best_buy ?? null,
-        best_sell: sellPrice !== null ? sellPrice : prev?.best_sell ?? null,
-        buy_quantity: buyQty > 0 ? buyQty : prev?.buy_quantity ?? 0,
-        sell_quantity: sellQty > 0 ? sellQty : prev?.sell_quantity ?? 0,
+        best_buy: buyPrice,
+        best_sell: sellPrice,
+        buy_quantity: buyQty,
+        sell_quantity: sellQty,
         last_updated: now(),
       });
+    }
+
+    // Remove items not in the fresh API response — they're no longer on this market
+    if (freshItemIds.size > 0) {
+      for (const [id] of existingMarket) {
+        if (!freshItemIds.has(id)) existingMarket.delete(id);
+      }
     }
 
     poi.market = [...existingMarket.values()];
     poi.last_updated = now();
     this.scheduleSave();
+  }
+
+  /** Remove an item from a station's cached market data (e.g. when buy fails with item_not_available). */
+  removeMarketItem(systemId: string, poiId: string, itemId: string): void {
+    const sys = this.data.systems[systemId];
+    if (!sys) return;
+    const poi = sys.pois.find((p) => p.id === poiId);
+    if (!poi) return;
+    const before = poi.market.length;
+    poi.market = poi.market.filter((m) => m.item_id !== itemId);
+    if (poi.market.length < before) this.scheduleSave();
   }
 
   /** Update player buy/sell orders at a station POI. */

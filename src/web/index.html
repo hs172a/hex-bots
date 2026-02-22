@@ -3430,7 +3430,7 @@ const QUERY_COMMANDS = new Set([
   'get_skills', 'get_missions', 'get_active_missions',
   'get_battle_status', 'get_notifications', 'get_trades', 'get_wrecks',
   'view_market', 'view_orders', 'view_storage', 'view_faction_storage',
-  'list_ships', 'get_ships', 'catalog', 'scan', 'help', 'get_location',
+  'list_ships', 'get_ships', 'catalog', 'shipyard_showroom', 'commission_status', 'scan', 'help', 'get_location',
   'get_map', 'get_poi', 'faction_info', 'faction_list', 'search_systems',
   'find_route', 'get_commands', 'get_base', 'get_notes', 'get_version',
   'estimate_purchase', 'get_insurance_quote', 'facility',
@@ -7529,8 +7529,9 @@ function renderShipOverview(data, username) {
   if (!data) return '<div class="faction-no-data">No ship data available</div>';
 
   const ship = extractShip(data);
-  const name = ship.name || ship.ship_name || '?';
+  const rawShipName = ship.name || ship.ship_name || '';
   const cls = ship.class || ship.ship_class || '';
+  const name = (rawShipName && rawShipName.toLowerCase() !== 'unnamed') ? rawShipName : (cls || '?');
   const tier = ship.tier || '';
   const hull = ship.hull ?? ship.current_hull ?? '?';
   const maxHull = ship.max_hull ?? ship.hull_max ?? hull;
@@ -7638,17 +7639,46 @@ function renderShipOverview(data, username) {
 
 // ── Fleet panel ─────────────────────────────────────────────
 function fetchFleetList(username) {
-  sendExec(username, 'list_ships', undefined, (result) => {
+  let ownedShips = null;
+  let commissions = null;
+
+  function mergeFleet() {
+    if (ownedShips === null || commissions === null) return;
     if (shipyardSelectedBot !== username || shipyardActivePanel !== 'fleet') return;
+    const combined = [...ownedShips, ...commissions];
+    shipyardFleetData = combined;
+    renderFleetInline(username, combined);
+  }
+
+  // 1. Owned ships
+  sendExec(username, 'list_ships', undefined, (result) => {
     if (!result.ok || !result.data) {
-      shipyardFleetData = [];
-      renderFleetInline(username, [], result.error);
-      return;
+      ownedShips = [];
+    } else {
+      const d = result.data;
+      ownedShips = Array.isArray(d) ? d : (d.ships || d.owned_ships || []);
+      // Check for pending commissions embedded in list_ships response
+      const pending = d.commissions || d.pending || d.building || d.orders || [];
+      if (pending.length > 0) {
+        for (const p of pending) p._commission = true;
+        commissions = pending;
+      }
     }
-    const d = result.data;
-    const ships = Array.isArray(d) ? d : (d.ships || d.owned_ships || []);
-    shipyardFleetData = ships;
-    renderFleetInline(username, ships);
+    mergeFleet();
+  });
+
+  // 2. Try commission_status for pending builds
+  sendExec(username, 'commission_status', undefined, (result) => {
+    if (commissions !== null) return; // already got from list_ships
+    if (result.ok && result.data) {
+      console.log('[fleet] commission_status:', JSON.stringify(result.data));
+      const d = result.data;
+      const orders = Array.isArray(d) ? d : (d.commissions || d.orders || d.pending || d.ships || []);
+      commissions = orders.map(o => ({ ...o, _commission: true }));
+    } else {
+      commissions = [];
+    }
+    mergeFleet();
   });
 }
 
@@ -7679,21 +7709,57 @@ function renderFleetPanel(ships, username, error) {
   } else {
     for (const s of ships) {
       const id = s.id || s.ship_id || '';
-      const name = s.name || s.ship_name || 'Unnamed';
-      const cls = s.class || s.ship_class || '';
+      const rawName = s.name || s.ship_name || '';
+      const cls = s.class_name || s.class || s.ship_class || s.ship_type || s.type || '';
+      const classId = s.class_id || '';
+      const name = (rawName && rawName.toLowerCase() !== 'unnamed') ? rawName : (cls || classId || 'Unknown');
       const rawLoc = s.location || s.system || '';
       const loc = resolveLocation(rawLoc) || rawLoc;
-      const docked = s.docked ? 'Docked' : (s.status || '');
-      const isActive = id === activeShipId || s.active;
+      const isActive = id === activeShipId || s.active || s.is_active;
+
+      // Parse stats — API returns "71/100" string format or numeric fields
+      function parseStat(val) {
+        if (val == null) return null;
+        if (typeof val === 'string' && val.includes('/')) {
+          const [cur, max] = val.split('/').map(Number);
+          return isNaN(cur) ? null : { cur, max: isNaN(max) ? cur : max };
+        }
+        if (typeof val === 'number') return { cur: val, max: val };
+        return null;
+      }
+      const hull = parseStat(s.hull ?? s.current_hull);
+      const shield = parseStat(s.shield ?? s.current_shield);
+      const fuel = parseStat(s.fuel ?? s.current_fuel);
+      const cargoUsed = s.cargo_used ?? s.cargo ?? null;
+      const cargoMax = s.cargo_capacity ?? s.max_cargo ?? s.cargo_max ?? null;
+      const modCount = typeof s.modules === 'number' ? s.modules : (Array.isArray(s.modules) ? s.modules.length : null);
+
+      const stats = [];
+      if (hull) stats.push(`<span style="color:var(--red)">Hull ${hull.cur}/${hull.max}</span>`);
+      if (shield) stats.push(`<span style="color:var(--cyan)">Shd ${shield.cur}/${shield.max}</span>`);
+      if (fuel) stats.push(`<span>Fuel ${fuel.cur}/${fuel.max}</span>`);
+      if (cargoUsed != null) stats.push(`<span>Cargo ${cargoUsed}${cargoMax != null ? '/' + cargoMax : ''}</span>`);
+      if (modCount != null) stats.push(`<span style="color:var(--magenta)">${modCount} mod${modCount !== 1 ? 's' : ''}</span>`);
+      const statsHtml = stats.length > 0 ? `<div class="ssc-stats">${stats.join('')}</div>` : '';
+
+      const isBuilding = s._commission || s.status === 'building' || s.status === 'commissioned' || s.status === 'pending';
+      const buildPct = s.progress ?? s.build_progress ?? s.completion ?? null;
+      const buildEta = s.eta ?? s.ready_at ?? s.completion_time ?? s.estimated_completion ?? null;
+      const buildBadge = isBuilding
+        ? `<span style="font-size:10px;padding:2px 8px;background:#2d1b4e;color:#c084fc;border-radius:3px">Building${buildPct != null ? ` ${buildPct}%` : ''}</span>`
+        : '';
+      const etaHtml = buildEta ? `<span style="font-size:10px;color:var(--text-dim);margin-left:4px">${esc(String(buildEta))}</span>` : '';
 
       html += `<div class="shipyard-ship-card">
-        <div>
-          <div class="ssc-name">${esc(name)} ${isActive ? '<span class="shipyard-active-badge">Active</span>' : ''}</div>
-          <div class="ssc-detail">${esc(cls)}${loc ? ` &middot; ${esc(loc)}` : ''}${docked ? ` &middot; ${esc(docked)}` : ''}</div>
+        <div style="flex:1">
+          <div class="ssc-name">${esc(name)} ${cls && name !== cls ? `<span style="font-weight:400;color:var(--text-dim);font-size:11px">${esc(cls)}</span>` : ''} ${isActive ? '<span class="shipyard-active-badge">Active</span>' : ''}${buildBadge}${etaHtml}</div>
+          <div class="ssc-detail">${esc(loc)}</div>
+          ${statsHtml}
         </div>
         <div class="ssc-actions">
-          ${!isActive ? `<button class="sm" onclick="shipSwitch('${esc(username)}','${esc(id)}')">Switch</button>` : ''}
-          ${!isActive ? `<button class="sm" style="color:var(--red)" onclick="shipSell('${esc(username)}','${esc(id)}','${esc(name)}')">Sell</button>` : ''}
+          ${!isActive && !isBuilding ? `<button class="sm" onclick="shipGoTo('${esc(username)}','${esc(id)}','${esc(rawLoc)}')">Go</button>` : ''}
+          ${!isActive && !isBuilding ? `<button class="sm" onclick="shipSwitch('${esc(username)}','${esc(id)}')">Switch</button>` : ''}
+          ${!isActive && !isBuilding ? `<button class="sm" style="color:var(--red)" onclick="shipSell('${esc(username)}','${esc(id)}','${esc(name)}')">Sell</button>` : ''}
         </div>
       </div>`;
     }
@@ -7724,32 +7790,78 @@ function renderFleetPanel(ships, username, error) {
 
 // ── Shipyard (catalog) panel ────────────────────────────────
 function fetchShipCatalog(username) {
-  // Use cached catalog ships if available
-  const catalogShips = Object.values(catalog.ships || {});
-  if (catalogShips.length > 0) {
-    if (shipyardSelectedBot !== username || shipyardActivePanel !== 'shipyard') return;
-    shipyardCatalogData = catalogShips;
-    renderCatalogInline(username, catalogShips);
+  const bot = bots.find(b => b.username === username);
+  if (!bot || !bot.docked) {
+    shipyardCatalogData = [];
+    renderCatalogInline(username, [], 'Must be docked at a station with a shipyard');
     return;
   }
-  sendExec(username, 'catalog', { type: 'ships' }, (result) => {
+  // Fetch both showroom (direct buy) and full catalog (commission) in parallel
+  let showroomShips = null;
+  let catalogDone = false;
+  const allCatalogShips = Object.values(catalog.ships || {});
+
+  function mergeAndRender() {
+    if (showroomShips === null || !catalogDone) return; // wait for both
     if (shipyardSelectedBot !== username || shipyardActivePanel !== 'shipyard') return;
-    if (!result.ok || !result.data) {
-      // Fallback to get_ships
-      sendExec(username, 'get_ships', undefined, (r2) => {
-        if (shipyardSelectedBot !== username || shipyardActivePanel !== 'shipyard') return;
-        const d = r2.ok && r2.data ? r2.data : {};
-        const ships = Array.isArray(d) ? d : (d.ships || d.available || []);
-        shipyardCatalogData = ships;
-        renderCatalogInline(username, ships, r2.ok ? null : (r2.error || 'Could not load catalog'));
-      });
-      return;
+
+    const showroomIds = new Set(showroomShips.map(s => s.id || s.ship_id || s.class_id || s.class || ''));
+
+    // Mark showroom ships as buyable
+    for (const s of showroomShips) s._buyType = 'buy';
+
+    // Catalog ships not in showroom = commissionable
+    const commissionShips = allCatalogShips
+      .filter(s => {
+        const catId = s.id || s.ship_id || s.class_id || s.class || '';
+        return catId && !showroomIds.has(catId);
+      })
+      .map(s => ({ ...s, _buyType: 'commission' }));
+
+    const combined = [...showroomShips, ...commissionShips];
+    shipyardCatalogData = combined;
+    renderCatalogInline(username, combined, combined.length === 0 ? 'No shipyard at this station' : null);
+  }
+
+  // 1. Showroom — ships available for direct purchase at this station
+  sendExec(username, 'shipyard_showroom', undefined, (result) => {
+    if (result.ok && result.data) {
+      const d = result.data;
+      showroomShips = Array.isArray(d) ? d : (d.ships || d.showroom || d.available || []);
+      // Enrich with catalog data
+      for (const s of showroomShips) {
+        const catId = s.id || s.ship_id || s.class_id || '';
+        const catEntry = catalog.ships[catId];
+        if (catEntry) {
+          if (!s.description && catEntry.description) s.description = catEntry.description;
+          if (!s.category && catEntry.category) s.category = catEntry.category;
+          if (!s.tier && catEntry.tier) s.tier = catEntry.tier;
+        }
+      }
+    } else {
+      showroomShips = [];
     }
-    const d = result.data;
-    const ships = Array.isArray(d) ? d : (d.ships || d.catalog || d.items || []);
-    shipyardCatalogData = ships;
-    renderCatalogInline(username, ships);
+    mergeAndRender();
   });
+
+  // 2. Catalog — if we already have it cached, use it; otherwise fetch
+  if (allCatalogShips.length > 0) {
+    catalogDone = true;
+    mergeAndRender();
+  } else {
+    sendExec(username, 'catalog', { type: 'ships', page_size: 50 }, (result) => {
+      if (result.ok && result.data) {
+        const d = result.data;
+        const ships = Array.isArray(d) ? d : (d.items || d.ships || d.catalog || []);
+        for (const s of ships) {
+          const catId = s.id || s.class_id || '';
+          if (catId) catalog.ships[catId] = s;
+        }
+      }
+      catalogDone = true;
+      mergeAndRender();
+    });
+  }
 }
 
 function renderCatalogInline(username, ships, error) {
@@ -7802,7 +7914,7 @@ function renderCatalogInline(username, ships, error) {
       <span style="font-size:12px;color:var(--text-dim)">${credits} cr</span>
     </div>
     <div class="shipyard-panel-nav">${panelNav}</div>
-    <div class="faction-section"><div class="faction-section-title">Available Ships <span class="count-badge">${(ships || []).length}</span></div>${html}</div>
+    <div class="faction-section"><div class="faction-section-title">Station Shipyard <span class="count-badge">${(ships || []).length}</span>${bot?.location ? `<span style="font-size:11px;color:var(--text-dim);font-weight:400;margin-left:8px">${esc(bot.location)}</span>` : ''}</div>${html}</div>
   `;
 }
 
@@ -7869,9 +7981,16 @@ function renderCatalogCards(ships, username) {
       `<span${st.color ? ` style="color:${st.color}"` : ''}>${esc(st.label)}: ${esc(String(st.value))}</span>`
     ).join('');
 
+    // Buy vs Commission badge
+    const isCommission = s._buyType === 'commission';
+    const typeLabel = isCommission ? 'Commission' : 'Buy';
+    const typeBadge = isCommission
+      ? '<span style="font-size:9px;padding:1px 6px;background:#2d1b4e;color:#c084fc;border-radius:3px;margin-left:6px">Commission</span>'
+      : '<span style="font-size:9px;padding:1px 6px;background:#1a3a2a;color:#4ade80;border-radius:3px;margin-left:6px">Buy</span>';
+
     html += `<div class="shipyard-ship-card" data-category="${esc(String(category))}" data-tier="${esc(String(tier))}">
       <div style="flex:1">
-        <div class="ssc-name">${esc(name)} ${tier ? `<span class="count-badge">T${esc(String(tier))}</span>` : ''}</div>
+        <div class="ssc-name">${esc(name)} ${tier ? `<span class="count-badge">T${esc(String(tier))}</span>` : ''}${typeBadge}</div>
         <div class="ssc-detail">${esc(cls)}${category ? ` &middot; ${esc(category)}` : ''}</div>
         ${desc ? `<div style="font-size:11px;color:var(--text-dim);margin-top:2px">${esc(desc)}</div>` : ''}
         <div class="ssc-stats">${statsHtml}</div>
@@ -7880,7 +7999,7 @@ function renderCatalogCards(ships, username) {
         <span style="font-size:12px;color:var(--yellow);white-space:nowrap">${typeof price === 'number' ? num(price) + ' cr' : esc(String(price))}</span>
         <div style="display:flex;gap:4px">
           <button class="sm" onclick="shipCatalogDetails('${esc(username)}','${esc(id)}',this)">Details</button>
-          <button class="primary sm" onclick="shipBuy('${esc(username)}','${esc(id)}',${typeof price === 'number' ? price : 0})">Buy</button>
+          <button class="primary sm" onclick="shipBuy('${esc(username)}','${esc(id)}',${typeof price === 'number' ? price : 0},'${isCommission ? 'commission' : 'buy'}')">${typeLabel}</button>
         </div>
       </div>
     </div>`;
@@ -8147,16 +8266,20 @@ function renderModItemsList(items, username, source) {
 }
 
 // ── Shipyard actions ────────────────────────────────────────
-function shipBuy(username, classId, price) {
+function shipBuy(username, classId, price, mode) {
   if (!classId) return;
-  const msg = price > 0 ? `Buy this ship for ${num(price)} credits?` : 'Buy this ship?';
+  const isCommission = mode === 'commission';
+  const action = isCommission ? 'Commission' : 'Buy';
+  const msg = price > 0 ? `${action} this ship for ${num(price)} credits?` : `${action} this ship?`;
   if (!confirm(msg)) return;
-  sendExec(username, 'buy_ship', { id: classId }, (result) => {
+  const command = isCommission ? 'commission_ship' : 'buy_ship';
+  sendExec(username, command, { ship_class: classId }, (result) => {
     if (result.ok) {
-      appendLine('system', `${username} purchased a new ship!`);
+      appendLine('system', `${username} ${isCommission ? 'commissioned' : 'purchased'} a new ship!`);
       fetchShipDetails(username);
+      if (shipyardActivePanel === 'fleet') fetchFleetList(username);
     } else {
-      appendLine('system', `Buy ship failed: ${result.error || 'unknown'}`);
+      appendLine('system', `${action} ship failed: ${result.error || 'unknown'}`);
     }
   });
 }
@@ -8164,7 +8287,7 @@ function shipBuy(username, classId, price) {
 function shipSell(username, shipId, name) {
   if (!shipId) return;
   if (!confirm(`Sell ${name || 'this ship'}? This cannot be undone.`)) return;
-  sendExec(username, 'sell_ship', { id: shipId }, (result) => {
+  sendExec(username, 'sell_ship', { ship_id: shipId }, (result) => {
     if (result.ok) {
       appendLine('system', `${username} sold ${name || 'a ship'}`);
       if (shipyardActivePanel === 'fleet') fetchFleetList(username);
@@ -8176,13 +8299,145 @@ function shipSell(username, shipId, name) {
 
 function shipSwitch(username, shipId) {
   if (!shipId) return;
-  sendExec(username, 'switch_ship', { id: shipId }, (result) => {
+  sendExec(username, 'switch_ship', { ship_id: shipId }, (result) => {
     if (result.ok) {
       appendLine('system', `${username} switched to a different ship`);
       fetchShipDetails(username);
+      if (shipyardActivePanel === 'fleet') fetchFleetList(username);
     } else {
       appendLine('system', `Switch ship failed: ${result.error || 'unknown'}`);
     }
+  });
+}
+
+/** Find system ID that contains a base/station matching the given name. */
+function findSystemByBaseName(baseName) {
+  if (!baseName) return null;
+  const lower = baseName.toLowerCase();
+  for (const [sysId, sys] of Object.entries(mapData)) {
+    for (const poi of (sys.pois || [])) {
+      const poiName = (poi.name || poi.id || '').toLowerCase();
+      if (poiName === lower) return { systemId: sysId, systemName: sys.name || sysId, poiId: poi.id, poiName: poi.name || poi.id };
+    }
+    // Also match system name itself
+    if ((sys.name || '').toLowerCase() === lower || sysId.toLowerCase() === lower) {
+      return { systemId: sysId, systemName: sys.name || sysId, poiId: null, poiName: null };
+    }
+  }
+  return null;
+}
+
+async function shipGoTo(username, shipId, locationStr) {
+  if (!username || !shipId) return;
+  // Parse location — strip "stored at " prefix
+  const baseName = (locationStr || '').replace(/^stored at\s+/i, '').trim();
+  if (!baseName) { appendLine('system', 'Cannot determine ship location'); return; }
+
+  // Try local map data first, then fall back to search_systems API
+  let target = findSystemByBaseName(baseName);
+  if (!target) {
+    appendLine('system', `Searching for "${baseName}"...`);
+    target = await new Promise(resolve => {
+      sendExec(username, 'search_systems', { query: baseName }, (result) => {
+        if (!result.ok || !result.data) { resolve(null); return; }
+        const d = result.data;
+        const systems = d.systems || d.results || (Array.isArray(d) ? d : []);
+        // Search through systems' POIs for a matching base name
+        const lower = baseName.toLowerCase();
+        for (const sys of systems) {
+          const sysId = sys.system_id || sys.id || '';
+          const sysName = sys.name || sysId;
+          for (const poi of (sys.pois || sys.points_of_interest || [])) {
+            const poiName = (poi.name || poi.id || '').toLowerCase();
+            if (poiName.includes(lower) || lower.includes(poiName)) {
+              resolve({ systemId: sysId, systemName: sysName, poiId: poi.id, poiName: poi.name || poi.id });
+              return;
+            }
+          }
+          // Match system name
+          if (sysName.toLowerCase().includes(lower)) {
+            resolve({ systemId: sysId, systemName: sysName, poiId: null, poiName: null });
+            return;
+          }
+        }
+        resolve(null);
+      });
+    });
+  }
+  if (!target) { appendLine('system', `Cannot find system for "${baseName}"`); return; }
+
+  const bot = bots.find(b => b.username === username);
+  if (!bot) return;
+
+  if (bot.system === target.systemId) {
+    // Already in the right system — just dock and switch
+    appendLine('system', `Already in ${target.systemName} — docking and switching...`);
+    if (!bot.docked) {
+      const dockOk = await new Promise(resolve => {
+        sendExec(username, 'dock', target.poiId ? { target_poi: target.poiId } : undefined, (r) => {
+          if (r.ok) { appendLine('system', `${username} docked`); resolve(true); }
+          else { appendLine('system', `Dock failed: ${r.error || 'unknown'}`); resolve(false); }
+        });
+      });
+      if (!dockOk) return;
+    }
+    shipSwitch(username, shipId);
+    return;
+  }
+
+  // Route to the target system
+  appendLine('system', `Routing ${username} to ${target.systemName} for ship pickup...`);
+
+  sendExec(username, 'find_route', { target_system: target.systemId }, async (result) => {
+    if (!result.ok || !result.data) {
+      appendLine('system', `Route failed: ${result.error || 'no route data'}`);
+      return;
+    }
+    const d = result.data;
+    const route = d.route || d.path || d.systems || d.hops || [];
+    const allHops = route.map(h => typeof h === 'string' ? h : (h.system_id || h.id || h));
+    const currentSys = bot.system || '';
+    const hops = allHops[0] === currentSys ? allHops.slice(1) : allHops;
+
+    if (!hops.length) { appendLine('system', 'No route found'); return; }
+    appendLine('system', `Route: ${hops.length} jump${hops.length !== 1 ? 's' : ''} to ${target.systemName}`);
+
+    // Undock if needed
+    if (bot.docked) {
+      const undockOk = await new Promise(resolve => {
+        sendExec(username, 'undock', undefined, (r) => resolve(r.ok));
+      });
+      if (!undockOk) { appendLine('system', 'Undock failed'); return; }
+    }
+
+    // Jump through each hop
+    for (let i = 0; i < hops.length; i++) {
+      const hop = hops[i];
+      appendLine('system', `${username} jumping ${i + 1}/${hops.length}...`);
+      const jumpOk = await new Promise(resolve => {
+        sendExec(username, 'jump', { target_system: hop }, (jr) => {
+          if (jr.ok) resolve(true);
+          else { appendLine('system', `Jump failed: ${jr.error || 'unknown'}`); resolve(false); }
+        });
+      });
+      if (!jumpOk) return;
+      if (i < hops.length - 1) await new Promise(r => setTimeout(r, 1000));
+    }
+
+    appendLine('system', `${username} arrived in ${target.systemName} — docking...`);
+
+    // Dock at the station
+    const dockOk = await new Promise(resolve => {
+      sendExec(username, 'dock', target.poiId ? { target_poi: target.poiId } : undefined, (r) => {
+        if (r.ok) resolve(true);
+        else { appendLine('system', `Dock failed: ${r.error || 'unknown'}`); resolve(false); }
+      });
+    });
+    if (!dockOk) return;
+
+    // Switch to the ship
+    appendLine('system', `Switching to ship...`);
+    shipSwitch(username, shipId);
   });
 }
 

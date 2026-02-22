@@ -183,7 +183,11 @@ export class Bot {
         (command === "get_missions" && code !== "session_invalid") ||
         (command === "complete_mission" && code === "mission_incomplete") ||
         (command === "get_insurance_quote" && code !== "session_invalid") ||
-        (command === "survey_system" && code === "no_scanner");
+        (command === "survey_system" && code === "no_scanner") ||
+        (command === "faction_deposit_items" && code === "no_faction_storage") ||
+        (command === "faction_deposit_credits" && code === "no_faction_storage") ||
+        (command === "withdraw_items" && code === "cargo_full") ||
+        (command === "faction_withdraw_items" && code === "cargo_full");
       if (!quiet) {
         this.log("error", `${command}: ${resp.error.message}`);
       }
@@ -247,7 +251,9 @@ export class Bot {
       const ship = r.ship as Record<string, unknown> | undefined;
       debugLog("bot:ship", `${this.username} ship object`, ship);
       if (ship) {
-        this.shipName = (ship.name as string) || (ship.ship_type as string) || (ship.type as string) || this.shipName;
+        const rawName = (ship.name as string) || "";
+        const shipType = (ship.ship_type as string) || (ship.type as string) || "";
+        this.shipName = (rawName && rawName.toLowerCase() !== "unnamed" ? rawName : shipType) || this.shipName;
         this.fuel = (ship.fuel as number) ?? this.fuel;
         this.maxFuel = (ship.max_fuel as number) ?? this.maxFuel;
         this.cargo = (ship.cargo_used as number) ?? this.cargo;

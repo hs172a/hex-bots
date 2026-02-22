@@ -159,14 +159,19 @@ async function withdrawStorageMaterials(ctx: RoutineContext, recipe: Recipe): Pr
     const inCargo = countInCargo(ctx, comp.item_id);
     if (inCargo >= comp.quantity) continue;
 
+    // Check cargo space before withdrawing
+    const freeSpace = bot.cargoMax > 0 ? bot.cargoMax - bot.cargo : 0;
+    if (freeSpace <= 0) break;
+
     const needed = comp.quantity - inCargo;
     const inStorage = bot.storage.find(i => i.itemId === comp.item_id);
     if (!inStorage || inStorage.quantity <= 0) continue;
 
-    const withdrawQty = Math.min(needed, inStorage.quantity);
+    const withdrawQty = Math.min(needed, inStorage.quantity, freeSpace);
     const resp = await bot.exec("withdraw_items", { item_id: comp.item_id, quantity: withdrawQty });
     if (!resp.error) {
       ctx.log("craft", `Withdrew ${withdrawQty}x ${comp.name || comp.item_id} from station storage`);
+      await bot.refreshStatus(); // update cargo count
     }
   }
   await bot.refreshCargo();
@@ -179,15 +184,20 @@ async function withdrawFactionMaterials(ctx: RoutineContext, recipe: Recipe): Pr
     const inCargo = countInCargo(ctx, comp.item_id);
     if (inCargo >= comp.quantity) continue;
 
+    // Check cargo space before withdrawing
+    const freeSpace = bot.cargoMax > 0 ? bot.cargoMax - bot.cargo : 0;
+    if (freeSpace <= 0) break;
+
     const needed = comp.quantity - inCargo;
     const inFaction = bot.factionStorage.find(i => i.itemId === comp.item_id);
     if (!inFaction || inFaction.quantity <= 0) continue;
 
-    const withdrawQty = Math.min(needed, inFaction.quantity);
+    const withdrawQty = Math.min(needed, inFaction.quantity, freeSpace);
     const resp = await bot.exec("faction_withdraw_items", { item_id: comp.item_id, quantity: withdrawQty });
     if (!resp.error) {
       ctx.log("craft", `Withdrew ${withdrawQty}x ${comp.name || comp.item_id} from faction storage`);
       logFactionActivity(ctx, "withdraw", `Withdrew ${withdrawQty}x ${comp.name || comp.item_id} from faction storage`);
+      await bot.refreshStatus(); // update cargo count
     }
   }
   await bot.refreshCargo();
@@ -266,7 +276,7 @@ async function craftPrerequisites(
 
     // Withdraw materials for the prerequisite
     // First deposit any crafted items in cargo to make space
-    for (const item of bot.inventory) {
+    for (const item of [...bot.inventory]) {
       if (item.quantity <= 0) continue;
       const lower = item.itemId.toLowerCase();
       if (lower.includes("fuel") || lower.includes("energy_cell")) continue;
@@ -278,6 +288,7 @@ async function craftPrerequisites(
       }
     }
     await bot.refreshCargo();
+    await bot.refreshStatus();
 
     await withdrawFactionMaterials(ctx, prereqRecipe);
     await withdrawStorageMaterials(ctx, prereqRecipe);
@@ -354,7 +365,7 @@ async function grindCraftingXP(
   ctx.log("craft", `Grinding XP: crafting ${target.name} (${target.components.map(c => `${c.quantity}x ${c.name}`).join(", ")})...`);
 
   // Deposit non-essential cargo to make space
-  for (const item of bot.inventory) {
+  for (const item of [...bot.inventory]) {
     if (item.quantity <= 0) continue;
     const lower = item.itemId.toLowerCase();
     if (lower.includes("fuel") || lower.includes("energy_cell")) continue;
@@ -365,6 +376,7 @@ async function grindCraftingXP(
     }
   }
   await bot.refreshCargo();
+  await bot.refreshStatus();
 
   const MAX_XP_CRAFTS = 5;
   for (let i = 0; i < MAX_XP_CRAFTS && bot.state === "running"; i++) {
@@ -441,7 +453,7 @@ export const crafterRoutine: Routine = async function* (ctx: RoutineContext) {
     // ── Clear cargo space for material withdrawal ──
     await bot.refreshCargo();
     if (bot.docked && bot.inventory.length > 0) {
-      for (const item of bot.inventory) {
+      for (const item of [...bot.inventory]) {
         if (item.quantity <= 0) continue;
         const lower = item.itemId.toLowerCase();
         if (lower.includes("fuel") || lower.includes("energy_cell")) continue;
@@ -451,6 +463,7 @@ export const crafterRoutine: Routine = async function* (ctx: RoutineContext) {
         }
       }
       await bot.refreshCargo();
+      await bot.refreshStatus();
     }
 
     // ── Refresh inventory (cargo + personal storage + faction storage) ──
@@ -589,6 +602,28 @@ export const crafterRoutine: Routine = async function* (ctx: RoutineContext) {
           skillSummary.push(`${recipe.name} (skill too low, no XP recipes available)`);
         }
       }
+    }
+
+    // ── Deposit crafted goods back to faction storage ──
+    if (totalCrafted > 0 && bot.docked) {
+      await bot.refreshCargo();
+      const depositedItems: string[] = [];
+      for (const item of [...bot.inventory]) {
+        if (item.quantity <= 0) continue;
+        const lower = item.itemId.toLowerCase();
+        if (lower.includes("fuel") || lower.includes("energy_cell")) continue;
+        const dResp = await bot.exec("faction_deposit_items", { item_id: item.itemId, quantity: item.quantity });
+        if (!dResp.error) {
+          depositedItems.push(`${item.quantity}x ${item.name}`);
+          logFactionActivity(ctx, "deposit", `Deposited ${item.quantity}x ${item.name} (crafted)`);
+        } else {
+          await bot.exec("deposit_items", { item_id: item.itemId, quantity: item.quantity });
+        }
+      }
+      if (depositedItems.length > 0) {
+        ctx.log("trade", `Deposited to faction: ${depositedItems.join(", ")}`);
+      }
+      await bot.refreshCargo();
     }
 
     // ── Single summary line ──
