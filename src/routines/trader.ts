@@ -524,8 +524,9 @@ export const traderRoutine: Routine = async function* (ctx: RoutineContext) {
         yield "withdraw_faction";
         await ensureDocked(ctx);
 
-        // Clear cargo: keep fuel cells scaled to route length, deposit everything else
-        const RESERVE_FC = Math.max(3, candidate.jumps);
+        // Clear cargo: keep fuel cells scaled to route length, cap at 25% cargo
+        const maxFuelFC = bot.cargoMax > 0 ? Math.floor(bot.cargoMax * 0.25) : 10;
+        const RESERVE_FC = Math.min(Math.max(3, candidate.jumps), maxFuelFC);
         await bot.refreshCargo();
         for (const item of [...bot.inventory]) {
           if (item.quantity <= 0) continue;
@@ -717,8 +718,9 @@ export const traderRoutine: Routine = async function* (ctx: RoutineContext) {
         continue;
       }
 
-      // Scale fuel reserve with route length (1 cell per jump, min 3)
-      const RESERVE_FUEL_CELLS = Math.max(3, candidate.jumps);
+      // Scale fuel reserve with route length — cap at 25% of cargo so trade goods fit
+      const maxFuelSlots = bot.cargoMax > 0 ? Math.floor(bot.cargoMax * 0.25) : 10;
+      const RESERVE_FUEL_CELLS = Math.min(Math.max(3, candidate.jumps), maxFuelSlots);
 
       // Clear cargo: keep fuel cells + trade item, deposit everything else
       await bot.refreshCargo();
@@ -744,15 +746,19 @@ export const traderRoutine: Routine = async function* (ctx: RoutineContext) {
 
       // Ensure we have enough fuel cells for the route
       await bot.refreshCargo();
+      await bot.refreshStatus();
       let fuelInCargo = 0;
       for (const item of bot.inventory) {
         const lower = item.itemId.toLowerCase();
         if (lower.includes("fuel") || lower.includes("energy_cell")) fuelInCargo += item.quantity;
       }
       if (fuelInCargo < RESERVE_FUEL_CELLS) {
-        const needed = RESERVE_FUEL_CELLS - fuelInCargo;
-        ctx.log("trade", `Buying ${needed} fuel cells for ${candidate.jumps}-jump route...`);
-        await bot.exec("buy", { item_id: "fuel_cell", quantity: needed });
+        const freeSpace = bot.cargoMax > 0 ? bot.cargoMax - bot.cargo : 0;
+        const needed = Math.min(RESERVE_FUEL_CELLS - fuelInCargo, freeSpace);
+        if (needed > 0) {
+          ctx.log("trade", `Buying ${needed} fuel cells for ${candidate.jumps}-jump route...`);
+          await bot.exec("buy", { item_id: "fuel_cell", quantity: needed });
+        }
       }
 
       // Check if we already have the trade item in cargo (kept during clear)
