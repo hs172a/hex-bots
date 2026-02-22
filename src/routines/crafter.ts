@@ -340,15 +340,28 @@ async function grindCraftingXP(
   ctx: RoutineContext,
   recipes: Recipe[],
   recipeIndex: Map<string, Recipe>,
+  allowedRecipeIds?: Set<string>,
 ): Promise<string[]> {
   const { bot } = ctx;
   const crafted: string[] = [];
 
   // Find recipes we can actually craft right now (have materials, not skill-blocked)
-  // Prefer recipes with fewest/cheapest components (basic refining)
+  // Only consider recipes from settings (or their prerequisites) — not random items
   const candidates: Array<{ recipe: Recipe; complexity: number }> = [];
 
   for (const recipe of recipes) {
+    // If settings specify allowed recipes, only grind those (or their components)
+    if (allowedRecipeIds && allowedRecipeIds.size > 0) {
+      const isAllowed = allowedRecipeIds.has(recipe.recipe_id) ||
+        allowedRecipeIds.has(recipe.name) ||
+        allowedRecipeIds.has(recipe.name.toLowerCase());
+      // Also allow recipes whose output is a component of an allowed recipe
+      const isPrereq = [...allowedRecipeIds].some(id => {
+        const parent = recipeIndex.get(id);
+        return parent?.components.some(c => c.item_id === recipe.output_item_id);
+      });
+      if (!isAllowed && !isPrereq) continue;
+    }
     if (!hasMaterialsAnywhere(ctx, recipe)) continue;
     // Complexity = total number of component items needed
     const complexity = recipe.components.reduce((sum, c) => sum + c.quantity, 0);
@@ -593,9 +606,10 @@ export const crafterRoutine: Routine = async function* (ctx: RoutineContext) {
         craftedSummary.push(`${crafted}x ${recipe.name}`);
       }
 
-      // ── Skill too low: try grinding XP on craftable recipes ──
+      // ── Skill too low: try grinding XP on configured recipes only ──
       if (hitSkillBlock && bot.state === "running") {
-        const xpCrafted = await grindCraftingXP(ctx, recipes, recipeIndex);
+        const allowedIds = new Set(settings.craftLimits.map(cl => cl.recipeId));
+        const xpCrafted = await grindCraftingXP(ctx, recipes, recipeIndex, allowedIds);
         if (xpCrafted.length > 0) {
           skillSummary.push(`${recipe.name} (skill too low, ground ${xpCrafted.join(", ")} for XP)`);
         } else {
