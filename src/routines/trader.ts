@@ -1,4 +1,4 @@
-import type { Routine, RoutineContext } from "../bot.js";
+import type { Bot, Routine, RoutineContext } from "../bot.js";
 import { mapStore } from "../mapstore.js";
 import {
   ensureDocked,
@@ -15,6 +15,15 @@ import {
   readSettings,
   sleep,
 } from "./common.js";
+
+/** Free cargo space as min(weight-based, item-count-based).
+ *  The game may enforce item count limits separately from cargo weight. */
+function getFreeSpace(bot: Bot): number {
+  if (bot.cargoMax <= 0) return 999;
+  const byWeight = bot.cargoMax - bot.cargo;
+  const byCount = bot.cargoMax - bot.inventory.reduce((s, i) => s + i.quantity, 0);
+  return Math.max(0, Math.min(byWeight, byCount));
+}
 
 // ── Settings ─────────────────────────────────────────────────
 
@@ -405,7 +414,7 @@ async function sellFactionStorageItems(ctx: RoutineContext): Promise<number> {
   for (const item of toSell) {
     // Check cargo space
     await bot.refreshStatus();
-    const freeSpace = bot.cargoMax > 0 ? bot.cargoMax - bot.cargo : 999;
+    const freeSpace = getFreeSpace(bot);
     if (freeSpace <= 0) break;
 
     const qty = Math.min(item.qty, freeSpace);
@@ -577,7 +586,7 @@ export const traderRoutine: Routine = async function* (ctx: RoutineContext) {
 
             // Withdraw and sell
             await bot.refreshStatus();
-            const freeSpace = bot.cargoMax > 0 ? bot.cargoMax - bot.cargo : 0;
+            const freeSpace = getFreeSpace(bot);
             if (freeSpace <= 0) break;
             const qty = Math.min(item.quantity, freeSpace);
             const wResp = await bot.exec("withdraw_items", { item_id: item.itemId, quantity: qty });
@@ -680,7 +689,7 @@ export const traderRoutine: Routine = async function* (ctx: RoutineContext) {
 
           while (remaining > 0 && bot.state === "running") {
             await bot.refreshStatus();
-            const freeSpace = bot.cargoMax > 0 ? bot.cargoMax - bot.cargo : 999;
+            const freeSpace = getFreeSpace(bot);
             if (freeSpace <= 0) {
               ctx.log("trade", "Cargo full — selling before withdrawing more");
               // Sell what we have first
@@ -742,7 +751,7 @@ export const traderRoutine: Routine = async function* (ctx: RoutineContext) {
         }
 
         // ── Cross-system faction route: withdraw what fits, travel to sell ──
-        const freeSpaceF = bot.cargoMax > 0 ? bot.cargoMax - bot.cargo : 999;
+        const freeSpaceF = getFreeSpace(bot);
         let qty = Math.min(candidate.buyQty, availQty, freeSpaceF);
         if (qty <= 0) {
           ctx.log("trade", "No cargo space for faction withdrawal — trying next route");
@@ -876,7 +885,7 @@ export const traderRoutine: Routine = async function* (ctx: RoutineContext) {
         if (lower.includes("fuel") || lower.includes("energy_cell")) fuelInCargo += item.quantity;
       }
       if (fuelInCargo < RESERVE_FUEL_CELLS) {
-        const freeSpace = bot.cargoMax > 0 ? bot.cargoMax - bot.cargo : 0;
+        const freeSpace = getFreeSpace(bot);
         const needed = Math.min(RESERVE_FUEL_CELLS - fuelInCargo, freeSpace);
         if (needed > 0) {
           ctx.log("trade", `Buying ${needed} fuel cells for ${candidate.jumps}-jump route...`);
@@ -891,7 +900,7 @@ export const traderRoutine: Routine = async function* (ctx: RoutineContext) {
 
       // Determine buy quantity
       await bot.refreshStatus();
-      const freeSpace = bot.cargoMax > 0 ? bot.cargoMax - bot.cargo : 999;
+      const freeSpace = getFreeSpace(bot);
       let qty = Math.min(candidate.buyQty - alreadyHave, freeSpace);
       if (settings.maxCargoValue > 0) {
         qty = Math.min(qty, Math.floor(settings.maxCargoValue / candidate.buyPrice));
@@ -958,7 +967,7 @@ export const traderRoutine: Routine = async function* (ctx: RoutineContext) {
           if (lower.includes("fuel") || lower.includes("energy_cell")) continue;
           if (item.itemId === route.itemId) continue; // skip the trade item itself
           const destItem = destMarket.find(m => m.item_id === item.itemId);
-          if (destItem && destItem.best_sell !== null && destItem.best_sell > 0) {
+          if (destItem && destItem.best_buy !== null && destItem.best_buy > 0) {
             storageToSell.push({ itemId: item.itemId, name: item.name, qty: item.quantity });
           }
         }
@@ -966,9 +975,9 @@ export const traderRoutine: Routine = async function* (ctx: RoutineContext) {
         if (storageToSell.length > 0) {
           const withdrawnItems: string[] = [];
           for (const si of storageToSell) {
-            // Re-check actual free space each iteration (items may weigh >1 unit)
+            // Re-check actual free space each iteration
             await bot.refreshStatus();
-            const freeSpace = bot.cargoMax > 0 ? bot.cargoMax - bot.cargo : 0;
+            const freeSpace = getFreeSpace(bot);
             if (freeSpace <= 0) break;
             const wQty = Math.min(si.qty, freeSpace);
             if (wQty <= 0) continue;
@@ -1196,16 +1205,29 @@ export const traderRoutine: Routine = async function* (ctx: RoutineContext) {
       }
     }
 
-    // Sell any other non-fuel items from cargo
+    // Sell any other non-fuel items from cargo (extra storage items carried along)
     await bot.refreshCargo();
-    for (const item of bot.inventory) {
+    for (const item of [...bot.inventory]) {
       if (item.itemId === route.itemId) continue;
       const lower = item.itemId.toLowerCase();
       if (lower.includes("fuel") || lower.includes("energy_cell")) continue;
       if (item.quantity <= 0) continue;
       const sResp = await bot.exec("sell", { item_id: item.itemId, quantity: item.quantity });
       if (!sResp.error) {
-        ctx.log("trade", `Sold ${item.quantity}x ${item.name} from storage`);
+        // Verify what actually sold
+        await bot.refreshCargo();
+        const afterSell = bot.inventory.find(i => i.itemId === item.itemId)?.quantity ?? 0;
+        const actuallySold = item.quantity - afterSell;
+        if (actuallySold > 0) {
+          ctx.log("trade", `Sold ${actuallySold}x ${item.name} (extra cargo)`);
+        }
+        if (afterSell > 0) {
+          // Sell claimed success but items remain — deposit them
+          const fResp = await bot.exec("faction_deposit_items", { item_id: item.itemId, quantity: afterSell });
+          if (fResp.error) {
+            await bot.exec("deposit_items", { item_id: item.itemId, quantity: afterSell });
+          }
+        }
       } else {
         const fResp = await bot.exec("faction_deposit_items", { item_id: item.itemId, quantity: item.quantity });
         if (fResp.error) {
