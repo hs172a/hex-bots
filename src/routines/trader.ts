@@ -325,16 +325,19 @@ async function tryMissions(ctx: RoutineContext): Promise<void> {
  * Withdraws non-fuel items that can be sold here, sells them, and logs profit.
  * Must be docked.
  */
-async function sellFactionStorageItems(ctx: RoutineContext): Promise<number> {
+async function sellFactionStorageItems(ctx: RoutineContext): Promise<{ count: number; revenue: number }> {
   const { bot } = ctx;
-  if (!bot.docked) return 0;
+  if (!bot.docked) return { count: 0, revenue: 0 };
+
+  await bot.refreshStatus();
+  const creditsBefore = bot.credits;
 
   await bot.refreshFactionStorage();
-  if (bot.factionStorage.length === 0) return 0;
+  if (bot.factionStorage.length === 0) return { count: 0, revenue: 0 };
 
   // Get current station's market to check what's sellable
   const marketResp = await bot.exec("view_market");
-  if (!marketResp.result || typeof marketResp.result !== "object") return 0;
+  if (!marketResp.result || typeof marketResp.result !== "object") return { count: 0, revenue: 0 };
 
   const marketData = marketResp.result as Record<string, unknown>;
   const listings = (
@@ -352,7 +355,7 @@ async function sellFactionStorageItems(ctx: RoutineContext): Promise<number> {
     if (itemId && buyPrice > 0) buyableItems.add(itemId);
   }
 
-  if (buyableItems.size === 0) return 0;
+  if (buyableItems.size === 0) return { count: 0, revenue: 0 };
 
   // Find faction storage items we can sell here
   const toSell: Array<{ itemId: string; name: string; qty: number }> = [];
@@ -363,7 +366,7 @@ async function sellFactionStorageItems(ctx: RoutineContext): Promise<number> {
     toSell.push({ itemId: item.itemId, name: item.name, qty: item.quantity });
   }
 
-  if (toSell.length === 0) return 0;
+  if (toSell.length === 0) return { count: 0, revenue: 0 };
 
   let totalSold = 0;
   const soldItems: string[] = [];
@@ -397,7 +400,8 @@ async function sellFactionStorageItems(ctx: RoutineContext): Promise<number> {
     await bot.refreshStatus();
   }
 
-  return totalSold;
+  const revenue = Math.max(0, bot.credits - creditsBefore);
+  return { count: totalSold, revenue };
 }
 
 // ── Trader routine ───────────────────────────────────────────
@@ -429,6 +433,7 @@ export const traderRoutine: Routine = async function* (ctx: RoutineContext) {
       hullThresholdPct: settings.repairThreshold,
       autoCloak: settings.autoCloak,
     };
+    let extraRevenue = 0;
 
     // ── Ensure docked (also records market data + analyzes market) ──
     yield "dock";
@@ -446,6 +451,8 @@ export const traderRoutine: Routine = async function* (ctx: RoutineContext) {
 
     // ── Priority 1: Sell any non-fuel items already in cargo ──
     yield "sell_cargo";
+    await bot.refreshStatus();
+    const cargoSellCreditsBefore = bot.credits;
     await bot.refreshCargo();
     const cargoToSell = bot.inventory.filter(i => {
       if (i.quantity <= 0) return false;
@@ -520,12 +527,17 @@ export const traderRoutine: Routine = async function* (ctx: RoutineContext) {
         await bot.exec("deposit_items", { item_id: item.itemId, quantity: remaining });
       }
     }
+    await bot.refreshStatus();
+    extraRevenue += bot.credits - cargoSellCreditsBefore;
 
     // ── Priority 2: Sell station storage items at current market ──
     if (bot.docked) {
-      await sellFactionStorageItems(ctx);
+      const { revenue: fsRevenue1 } = await sellFactionStorageItems(ctx);
+      extraRevenue += fsRevenue1;
 
       // Sell station storage items that this market buys
+      await bot.refreshStatus();
+      const storageSellCredits = bot.credits;
       await bot.refreshStorage();
       if (bot.storage.length > 0) {
         const marketResp = await bot.exec("view_market");
@@ -563,6 +575,8 @@ export const traderRoutine: Routine = async function* (ctx: RoutineContext) {
           }
         }
       }
+      await bot.refreshStatus();
+      extraRevenue += Math.max(0, bot.credits - storageSellCredits);
     }
 
     // ── Priority 3: Find new trade opportunities ──
@@ -720,7 +734,7 @@ export const traderRoutine: Routine = async function* (ctx: RoutineContext) {
 
           route = candidate;
           buyQty = totalSold;
-          investedCredits = totalSold * candidate.buyPrice;
+          investedCredits = 0; // faction storage items are free
           alreadySold = true; // items already sold in batch loop
           mapStore.reserveTradeQuantity("", "", candidate.destSystem, candidate.destPoi, candidate.itemId, totalSold);
           ctx.log("trade", `In-station faction sale complete: ${totalSold}x ${candidate.itemName}`);
@@ -756,9 +770,9 @@ export const traderRoutine: Routine = async function* (ctx: RoutineContext) {
 
         route = candidate;
         buyQty = qty;
-        investedCredits = qty * candidate.buyPrice; // material cost basis
+        investedCredits = 0; // faction storage items are free — all revenue is profit
         mapStore.reserveTradeQuantity("", "", candidate.destSystem, candidate.destPoi, candidate.itemId, qty);
-        ctx.log("trade", `Withdrew ${qty}x ${candidate.itemName} from faction storage (material cost: ${investedCredits}cr)`);
+        ctx.log("trade", `Withdrew ${qty}x ${candidate.itemName} from faction storage`);
         break;
       }
 
@@ -990,11 +1004,12 @@ export const traderRoutine: Routine = async function* (ctx: RoutineContext) {
     // ── Phase 2: Travel to destination and sell ──
     if (alreadySold) {
       // In-station faction route — items already sold in batch loop
-      const localProfit = buyQty * (route.sellPrice - route.buyPrice);
+      const localRevenue = buyQty * route.sellPrice;
+      const localProfit = localRevenue + extraRevenue;
       bot.stats.totalTrades++;
       bot.stats.totalProfit += localProfit;
       await recordMarketData(ctx);
-      ctx.log("trade", `Trade run complete: ${buyQty}x ${route.itemName} — sold at ${route.destPoiName} (${route.sellPrice}cr/ea) — profit ${localProfit}cr`);
+      ctx.log("trade", `Trade run complete: ${buyQty}x ${route.itemName} — profit ${localProfit}cr (${localRevenue}cr trade + ${extraRevenue}cr other sales)`);
       await factionDonateProfit(ctx, localProfit);
       yield "post_trade_maintenance";
       await tryRefuel(ctx);
@@ -1198,10 +1213,11 @@ export const traderRoutine: Routine = async function* (ctx: RoutineContext) {
     }
 
     // Sell faction storage items at this market too
-    await sellFactionStorageItems(ctx);
+    const { revenue: fsRevenue2 } = await sellFactionStorageItems(ctx);
+    extraRevenue += fsRevenue2;
 
-    // Profit = sell revenue minus cost of newly purchased goods
-    const actualProfit = sellRevenue - investedCredits;
+    // Profit = sell revenue + other sales - cost of market purchases (faction storage is free)
+    const actualProfit = sellRevenue + extraRevenue - investedCredits;
     bot.stats.totalTrades++;
     bot.stats.totalProfit += actualProfit;
 
@@ -1210,7 +1226,7 @@ export const traderRoutine: Routine = async function* (ctx: RoutineContext) {
 
     // ── Trade summary ──
     const soldLabel = totalSold < buyQty ? `${totalSold}/${buyQty}` : `${buyQty}`;
-    ctx.log("trade", `Trade run complete: ${soldLabel}x ${route.itemName} — profit ${actualProfit}cr (${route.jumps} jumps)`);
+    ctx.log("trade", `Trade run complete: ${soldLabel}x ${route.itemName} — profit ${actualProfit}cr (${sellRevenue}cr sells + ${extraRevenue}cr other - ${investedCredits}cr cost, ${route.jumps} jumps)`);
 
     // ── Faction donation (10% of profit) ──
     await factionDonateProfit(ctx, actualProfit);
