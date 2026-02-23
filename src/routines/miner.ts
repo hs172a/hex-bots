@@ -252,6 +252,29 @@ export const minerRoutine: Routine = async function* (ctx: RoutineContext) {
   const depletedSystems = new Set<string>();
   let lastTargetOre = "";
 
+  // ── Startup: dump non-fuel cargo to storage so we mine with a clean hold ──
+  await bot.refreshCargo();
+  const nonFuelCargo = bot.inventory.filter(i => {
+    const lower = i.itemId.toLowerCase();
+    return !lower.includes("fuel") && !lower.includes("energy_cell") && i.quantity > 0;
+  });
+  if (nonFuelCargo.length > 0) {
+    await ensureDocked(ctx);
+    const settings0 = getMinerSettings(bot.username);
+    for (const item of nonFuelCargo) {
+      if (settings0.depositMode === "faction") {
+        const fResp = await bot.exec("faction_deposit_items", { item_id: item.itemId, quantity: item.quantity });
+        if (fResp.error) {
+          await bot.exec("deposit_items", { item_id: item.itemId, quantity: item.quantity });
+        }
+      } else {
+        await bot.exec("deposit_items", { item_id: item.itemId, quantity: item.quantity });
+      }
+    }
+    const names = nonFuelCargo.map(i => `${i.quantity}x ${i.name}`).join(", ");
+    ctx.log("mining", `Startup: deposited ${names} — clearing cargo for mining`);
+  }
+
   while (bot.state === "running") {
     // ── Death recovery ──
     const alive = await detectAndRecoverFromDeath(ctx);

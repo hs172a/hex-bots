@@ -7,6 +7,7 @@
  */
 import type { Bot, Routine, RoutineContext } from "../bot.js";
 import { mapStore } from "../mapstore.js";
+import { catalogStore } from "../catalogstore.js";
 import {
   ensureDocked,
   ensureUndocked,
@@ -125,6 +126,9 @@ function findFactionSellRoutes(
   for (const item of bot.factionStorage) {
     const lower = item.itemId.toLowerCase();
     if (lower.includes("fuel") || lower.includes("energy_cell")) continue;
+    // Never trade raw ores, ice, or gas — those are crafting inputs
+    const catItem = catalogStore.getItem(item.itemId);
+    if (catItem?.category === "ore") continue;
     if (item.quantity <= 0) continue;
 
     // Filter by allowed items if configured

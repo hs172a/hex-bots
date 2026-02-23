@@ -1,5 +1,6 @@
 import type { Bot, Routine, RoutineContext } from "../bot.js";
 import { mapStore } from "../mapstore.js";
+import { catalogStore } from "../catalogstore.js";
 import {
   ensureDocked,
   ensureUndocked,
@@ -182,6 +183,9 @@ function findFactionStorageRoutes(
   for (const item of bot.factionStorage) {
     const lower = item.itemId.toLowerCase();
     if (lower.includes("fuel") || lower.includes("energy_cell")) continue;
+    // Never trade raw ores, ice, or gas — those are crafting inputs
+    const catItem = catalogStore.getItem(item.itemId);
+    if (catItem?.category === "ore") continue;
     if (item.quantity <= 0) continue;
 
     // Filter by allowed items if configured
@@ -422,11 +426,14 @@ async function sellFactionStorageItems(ctx: RoutineContext): Promise<{ count: nu
 
   if (buyableItems.size === 0) return { count: 0, revenue: 0 };
 
-  // Find faction storage items we can sell here
+  // Find faction storage items we can sell here (skip fuel, raw ores, ice, gas)
   const toSell: Array<{ itemId: string; name: string; qty: number }> = [];
   for (const item of bot.factionStorage) {
     const lower = item.itemId.toLowerCase();
     if (lower.includes("fuel") || lower.includes("energy_cell")) continue;
+    // Never sell raw ores, ice, or gas — those are crafting inputs
+    const catItem = catalogStore.getItem(item.itemId);
+    if (catItem?.category === "ore") continue;
     if (!buyableItems.has(item.itemId)) continue;
     toSell.push({ itemId: item.itemId, name: item.name, qty: item.quantity });
   }
@@ -461,12 +468,13 @@ async function sellFactionStorageItems(ctx: RoutineContext): Promise<{ count: nu
   }
 
   if (soldItems.length > 0) {
-    ctx.log("trade", `Sold from faction storage: ${soldItems.join(", ")}`);
     await bot.refreshStatus();
+    const revenue = Math.max(0, bot.credits - creditsBefore);
+    ctx.log("trade", `Sold from faction storage: ${soldItems.join(", ")} — earned ${revenue}cr`);
+    return { count: totalSold, revenue };
   }
 
-  const revenue = Math.max(0, bot.credits - creditsBefore);
-  return { count: totalSold, revenue };
+  return { count: 0, revenue: 0 };
 }
 
 // ── Trader routine ───────────────────────────────────────────
