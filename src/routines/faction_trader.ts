@@ -415,7 +415,23 @@ export const factionTraderRoutine: Routine = async function* (ctx: RoutineContex
 
       if (bot.system !== route.destSystem) {
         ctx.log("travel", `Heading to ${route.destPoiName} in ${route.destSystem}...`);
-        const arrived = await navigateToSystem(ctx, route.destSystem, { ...safetyOpts, noJettison: true });
+        const arrived = await navigateToSystem(ctx, route.destSystem, {
+          ...safetyOpts,
+          noJettison: true,
+          onJump: async (jumpNum) => {
+            if (jumpNum % 3 !== 0) return true;
+            const buys = mapStore.getAllBuyDemand();
+            const destBuyer = buys.find(b =>
+              b.itemId === route.itemId && b.systemId === route.destSystem && b.poiId === route.destPoi
+            );
+            if (!destBuyer || destBuyer.quantity <= 0) {
+              ctx.log("trade", `Mid-route check (jump ${jumpNum}): buyer gone at ${route.destPoiName} — aborting`);
+              return false;
+            }
+            ctx.log("trade", `Mid-route check (jump ${jumpNum}): trade valid (${destBuyer.price}cr × ${destBuyer.quantity} at dest)`);
+            return true;
+          },
+        });
         if (!arrived) {
           ctx.log("error", "Failed to reach destination — selling locally");
           await ensureDocked(ctx);

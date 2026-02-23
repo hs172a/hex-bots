@@ -969,7 +969,7 @@ export async function depositNonFuelCargo(ctx: RoutineContext): Promise<boolean>
 export async function navigateToSystem(
   ctx: RoutineContext,
   targetSystemId: string,
-  opts: { fuelThresholdPct: number; hullThresholdPct: number; noJettison?: boolean; autoCloak?: boolean },
+  opts: { fuelThresholdPct: number; hullThresholdPct: number; noJettison?: boolean; autoCloak?: boolean; onJump?: (jumpNumber: number) => Promise<boolean> },
 ): Promise<boolean> {
   const { bot } = ctx;
   const MAX_JUMPS = 20;
@@ -1044,6 +1044,12 @@ export async function navigateToSystem(
     // Auto-cloak in dangerous systems
     if (opts.autoCloak) {
       await autoCloakIfDangerous(ctx);
+    }
+
+    // Call onJump validation callback (e.g., mid-route trade validation)
+    if (opts.onJump) {
+      const shouldContinue = await opts.onJump(attempt + 1);
+      if (!shouldContinue) return false;
     }
 
     ctx.log("travel", `Arrived in ${bot.system}`);

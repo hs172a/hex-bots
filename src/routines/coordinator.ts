@@ -369,6 +369,38 @@ function flattenToRawMaterials(
   return raw;
 }
 
+/** Collect intermediate recipes needed to craft a recipe, with required batch counts. */
+function collectIntermediateRecipes(
+  recipe: Recipe,
+  recipeIndex: Map<string, Recipe>,
+  batchCount: number,
+  depth: number = 0,
+): Map<string, number> {
+  if (depth > 5) return new Map();
+  const intermediates = new Map<string, number>();
+
+  for (const comp of recipe.components) {
+    const subRecipe = recipeIndex.get(comp.item_id);
+    if (!subRecipe) continue; // raw material, skip
+
+    const totalNeeded = comp.quantity * batchCount;
+    const batchesNeeded = Math.ceil(totalNeeded / (subRecipe.output_quantity || 1));
+
+    intermediates.set(
+      subRecipe.recipe_id,
+      (intermediates.get(subRecipe.recipe_id) || 0) + batchesNeeded,
+    );
+
+    // Recurse for deeper intermediates
+    const deeper = collectIntermediateRecipes(subRecipe, recipeIndex, batchesNeeded, depth + 1);
+    for (const [id, qty] of deeper) {
+      intermediates.set(id, (intermediates.get(id) || 0) + qty);
+    }
+  }
+
+  return intermediates;
+}
+
 /** Check if faction storage has enough raw materials. Returns max craftable batches. */
 function checkMaterialAvailability(
   rawNeeds: Map<string, number>,
@@ -787,9 +819,34 @@ export const coordinatorRoutine: Routine = async function* (ctx: RoutineContext)
         }
       }
 
-      // Zero out limits for recipes that no longer have demand or profitability
+      // Add intermediate recipes needed by profitable final products
+      const intermediateIds = new Set<string>();
+      const intermediateNeeds = new Map<string, number>();
+      for (const [recipeId, limit] of Object.entries(newLimits)) {
+        if (limit <= 0) continue;
+        const recipe = recipes.find(r => r.recipe_id === recipeId);
+        if (!recipe) continue;
+        const intermediates = collectIntermediateRecipes(recipe, recipeIndex, limit);
+        for (const [intId, intQty] of intermediates) {
+          intermediateIds.add(intId);
+          intermediateNeeds.set(intId, Math.max(intermediateNeeds.get(intId) || 0, intQty));
+        }
+      }
+
+      for (const [intRecipeId, intQty] of intermediateNeeds) {
+        if (profitableIds.has(intRecipeId)) continue; // already set by direct demand
+        const prev = newLimits[intRecipeId] || 0;
+        const capped = Math.min(intQty, settings.maxCraftLimit);
+        if (capped !== prev && capped > 0) {
+          newLimits[intRecipeId] = capped;
+          const intName = recipes.find(r => r.recipe_id === intRecipeId)?.name || intRecipeId;
+          adjustments.push(`${intName}: ${prev} → ${capped} (intermediate)`);
+        }
+      }
+
+      // Zero out limits for recipes that no longer have demand, profitability, or intermediate need
       for (const [recipeId, limit] of Object.entries(currentLimits)) {
-        if (limit > 0 && !profitableIds.has(recipeId)) {
+        if (limit > 0 && !profitableIds.has(recipeId) && !intermediateIds.has(recipeId)) {
           newLimits[recipeId] = 0;
           const recipeName = recipes.find(r => r.recipe_id === recipeId)?.name || recipeId;
           adjustments.push(`${recipeName}: ${limit} → 0 (no demand/profit)`);

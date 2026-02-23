@@ -900,6 +900,39 @@ export const traderRoutine: Routine = async function* (ctx: RoutineContext) {
         qty = Math.min(qty, Math.floor(bot.credits / candidate.buyPrice));
       }
 
+      // Pre-buy validation: check actual available stock and real item cost
+      if (qty > 0) {
+        const estCheck = await bot.exec("estimate_purchase", { item_id: candidate.itemId, quantity: qty });
+        if (!estCheck.error && estCheck.result && typeof estCheck.result === "object") {
+          const est = estCheck.result as Record<string, unknown>;
+          // Cap to available stock
+          const avail = (est.available_quantity as number) || (est.available as number) || (est.max_quantity as number) || 0;
+          if (avail > 0 && avail < qty) {
+            ctx.log("trade", `Market only has ${avail}x available (wanted ${qty}) — adjusting`);
+            qty = avail;
+          }
+          // Cap by actual total cost (API may charge different from cached price)
+          const totalCost = (est.total_cost as number) || (est.total as number) || (est.cost as number) || 0;
+          if (totalCost > 0 && totalCost > bot.credits - 500) {
+            const affordQty = Math.max(0, Math.floor(qty * ((bot.credits - 500) / totalCost)));
+            if (affordQty < qty) {
+              ctx.log("trade", `Actual cost ${totalCost}cr exceeds budget — reducing to ${affordQty}x`);
+              qty = affordQty;
+            }
+          }
+          // Derive actual item weight from estimate if possible (total_weight / qty)
+          const totalWeight = (est.total_weight as number) || (est.cargo_required as number) || (est.weight as number) || 0;
+          if (totalWeight > 0 && qty > 0) {
+            const realItemWeight = totalWeight / qty;
+            const fitsInCargo = Math.floor(freeSpace / realItemWeight);
+            if (fitsInCargo < qty) {
+              ctx.log("trade", `Cargo can fit ${fitsInCargo}x at ${realItemWeight} weight/ea (not ${qty}) — adjusting`);
+              qty = fitsInCargo;
+            }
+          }
+        }
+      }
+
       if (qty <= 0 && alreadyHave <= 0) {
         ctx.log("trade", "Cannot afford any items or cargo full — trying next route");
         continue;
@@ -907,6 +940,7 @@ export const traderRoutine: Routine = async function* (ctx: RoutineContext) {
 
       // Buy items (skip if we already have enough)
       yield "buy";
+      const creditsBefore = bot.credits;
       if (qty > 0) {
         ctx.log("trade", `Buying ${qty}x ${candidate.itemName} at ${candidate.buyPrice}cr/ea...`);
         const buyResp = await bot.exec("buy", { item_id: candidate.itemId, quantity: qty });
@@ -928,11 +962,23 @@ export const traderRoutine: Routine = async function* (ctx: RoutineContext) {
       }
 
       await bot.refreshStatus();
+      await bot.refreshCargo();
+      const actualInCargo = bot.inventory.find(i => i.itemId === candidate.itemId)?.quantity ?? 0;
+      const actualReceived = Math.max(0, actualInCargo - alreadyHave);
+      const actualSpent = Math.max(0, creditsBefore - bot.credits);
+
+      if (actualReceived < qty && qty > 0) {
+        ctx.log("trade", `Partial fill: received ${actualReceived}/${qty} items (cargo: ${actualInCargo} total)`);
+        if (actualSpent > actualReceived * candidate.buyPrice + 10) {
+          ctx.log("error", `OVERCHARGE: spent ${actualSpent}cr for ${actualReceived} items (expected ~${actualReceived * candidate.buyPrice}cr) — charged for ${Math.round(actualSpent / candidate.buyPrice)} items`);
+        }
+      }
+
       route = candidate;
-      buyQty = qty + alreadyHave;
-      investedCredits = qty * candidate.buyPrice; // only count newly purchased items
+      buyQty = actualInCargo; // use actual cargo count, not requested
+      investedCredits = actualSpent; // use actual credits spent, not theoretical
       if (qty > 0) {
-        ctx.log("trade", `Purchased ${qty}x ${candidate.itemName} for ${investedCredits}cr${alreadyHave > 0 ? ` (+${alreadyHave}x already in cargo)` : ""}`);
+        ctx.log("trade", `Purchased ${actualReceived}x ${candidate.itemName} for ${actualSpent}cr (${actualSpent > 0 ? Math.round(actualSpent / Math.max(actualReceived, 1)) : candidate.buyPrice}cr/ea)${alreadyHave > 0 ? ` (+${alreadyHave}x already in cargo)` : ""}`);
       }
 
       // Reserve this trade in cached market data so other bots don't chase the same route
@@ -1035,7 +1081,26 @@ export const traderRoutine: Routine = async function* (ctx: RoutineContext) {
 
     if (bot.system !== route.destSystem) {
       ctx.log("travel", `Heading to ${route.destPoiName} in ${route.destSystem}...`);
-      const arrived2 = await navigateToSystem(ctx, route.destSystem, cargoSafetyOpts);
+      const arrived2 = await navigateToSystem(ctx, route.destSystem, {
+        ...cargoSafetyOpts,
+        onJump: async (jumpNum) => {
+          if (jumpNum % 3 !== 0) return true; // validate every 3 jumps
+          const buys = mapStore.getAllBuyDemand();
+          const destBuyer = buys.find(b =>
+            b.itemId === route!.itemId && b.systemId === route!.destSystem && b.poiId === route!.destPoi
+          );
+          if (!destBuyer || destBuyer.quantity <= 0) {
+            ctx.log("trade", `Mid-route check (jump ${jumpNum}): buyer gone at ${route!.destPoiName} — aborting`);
+            return false;
+          }
+          if (investedCredits > 0 && destBuyer.price * buyQty < investedCredits) {
+            ctx.log("trade", `Mid-route check (jump ${jumpNum}): price dropped to ${destBuyer.price}cr, would lose money — aborting`);
+            return false;
+          }
+          ctx.log("trade", `Mid-route check (jump ${jumpNum}): trade valid (${destBuyer.price}cr × ${destBuyer.quantity} at dest)`);
+          return true;
+        },
+      });
       if (!arrived2) {
         ctx.log("error", "Failed to reach destination — selling at nearest station");
         await ensureDocked(ctx);
