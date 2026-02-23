@@ -704,40 +704,9 @@ export async function ensureFueled(
       }
     }
 
-    // Step 3: Nearly out of fuel — jettison cheap cargo + scavenge as last resort
-    if (bot.fuel <= 1 && !opts?.noJettison) {
-      const cargoResp = await bot.exec("get_cargo");
-      if (cargoResp.result && typeof cargoResp.result === "object") {
-        const cResult = cargoResp.result as Record<string, unknown>;
-        const cargoItems = (
-          Array.isArray(cResult) ? cResult :
-          Array.isArray(cResult.items) ? (cResult.items as Array<Record<string, unknown>>) :
-          Array.isArray(cResult.cargo) ? (cResult.cargo as Array<Record<string, unknown>>) :
-          []
-        ).filter((item: Record<string, unknown>) => {
-          const itemId = ((item.item_id as string) || "").toLowerCase();
-          return itemId && !itemId.includes("fuel") && !itemId.includes("energy_cell");
-        });
-
-        cargoItems.sort((a: Record<string, unknown>, b: Record<string, unknown>) => {
-          const aVal = (a.value as number) ?? (a.price as number) ?? (a.sell_price as number) ?? 0;
-          const bVal = (b.value as number) ?? (b.price as number) ?? (b.sell_price as number) ?? 0;
-          if (aVal !== bVal) return aVal - bVal;
-          const aQty = (a.quantity as number) || 0;
-          const bQty = (b.quantity as number) || 0;
-          return bQty - aQty;
-        });
-
-        for (const item of cargoItems) {
-          const itemId = (item.item_id as string) || "";
-          const quantity = (item.quantity as number) || 0;
-          if (!itemId || quantity <= 0) continue;
-          const displayName = (item.name as string) || itemId;
-          ctx.log("system", `Jettisoning ${quantity}x ${displayName} to make room for fuel...`);
-          await bot.exec("jettison", { item_id: itemId, quantity });
-        }
-      }
-
+    // Step 3: Nearly out of fuel — scavenge wrecks for fuel as last resort (never jettison cargo)
+    if (bot.fuel <= 1) {
+      ctx.log("system", "Nearly out of fuel — scavenging for fuel cells...");
       const looted = await scavengeWrecks(ctx, { fuelOnly: true });
       if (looted > 0) {
         const scavRefuel = await bot.exec("refuel");
