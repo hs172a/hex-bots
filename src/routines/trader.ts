@@ -605,7 +605,11 @@ export const traderRoutine: Routine = async function* (ctx: RoutineContext) {
         }
       }
       await bot.refreshStatus();
-      extraRevenue += Math.max(0, bot.credits - storageSellCredits);
+      const storageRevenue = Math.max(0, bot.credits - storageSellCredits);
+      if (storageRevenue > 0) {
+        ctx.log("trade", `Station storage sales earned ${storageRevenue}cr`);
+      }
+      extraRevenue += storageRevenue;
     }
 
     // ── Priority 3: Find new trade opportunities ──
