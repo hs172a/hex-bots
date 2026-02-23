@@ -312,9 +312,15 @@ export const minerRoutine: Routine = async function* (ctx: RoutineContext) {
     let targetBeltName = "";
 
     if (targetOre) {
-      const oreLocations = mapStore.findOreLocations(targetOre);
+      const allOreLocations = mapStore.findOreLocations(targetOre);
+      // Filter to ore belts only — exclude ice fields, gas clouds, etc.
+      const oreLocations = allOreLocations.filter(loc => {
+        const sys = mapStore.getSystem(loc.systemId);
+        const poi = sys?.pois.find(p => p.id === loc.poiId);
+        return poi ? isOreBeltPoi(poi.type) : true; // keep if type unknown
+      });
       if (oreLocations.length === 0) {
-        ctx.log("error", `Target ore "${targetOre}" not found on map — mining locally`);
+        ctx.log("error", `Target ore "${targetOre}" not found at any ore belt — mining locally`);
       } else {
         const inCurrentSystem = oreLocations.find(loc => loc.systemId === bot.system);
         if (inCurrentSystem) {
@@ -372,10 +378,14 @@ export const minerRoutine: Routine = async function* (ctx: RoutineContext) {
     const station = findStation(pois);
     if (station) stationPoi = { id: station.id, name: station.name };
 
-    // If targeting a specific belt, prefer it
+    // If targeting a specific belt, prefer it — but only if it's an ore belt
     if (targetBeltId) {
       const match = pois.find(p => p.id === targetBeltId);
-      if (match) beltPoi = { id: match.id, name: match.name };
+      if (match && isOreBeltPoi(match.type)) {
+        beltPoi = { id: match.id, name: match.name };
+      } else if (match) {
+        ctx.log("mining", `Target POI ${match.name} is not an ore belt (${match.type}) — finding ore belt instead`);
+      }
     }
 
     // Fallback: find belt with target ore
