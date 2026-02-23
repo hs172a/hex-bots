@@ -2645,12 +2645,12 @@ function renderProfileTopbar() {
       </label>`;
   }
 
-  // Per-bot home system for salvager
-  const isSalvager = (bot.state === 'running' && bot.routine === 'salvager')
-    || (bot.state !== 'running' && bot.state !== 'stopping' && getProfileSelectedRoutine() === 'salvager');
-  if (isSalvager) {
+  // Per-bot home system for salvager, ice_harvester, gas_harvester
+  const needsHomeSystem = ['salvager', 'ice_harvester', 'gas_harvester'];
+  const currentRoutine = bot.state === 'running' ? bot.routine : (bot.state !== 'stopping' ? getProfileSelectedRoutine() : '');
+  if (needsHomeSystem.includes(currentRoutine)) {
     const botSettings = settings[bot.username] || {};
-    const globalHome = (settings.salvager || {}).homeSystem || '';
+    const globalHome = (settings[currentRoutine] || {}).homeSystem || '';
     const botHome = botSettings.homeSystem || '';
     const sysOpts = [`<option value=""${!botHome ? ' selected' : ''}>(global: ${globalHome ? esc(globalHome) : 'start system'})</option>`];
     for (const sys of knownSystems) {

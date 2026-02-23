@@ -30,6 +30,7 @@ function getIceSettings(username?: string): {
   cargoThreshold: number;
   refuelThreshold: number;
   repairThreshold: number;
+  homeSystem: string;
   system: string;
   depositBot: string;
   targetIce: string;
@@ -53,6 +54,7 @@ function getIceSettings(username?: string): {
     cargoThreshold: (m.cargoThreshold as number) || 80,
     refuelThreshold: (m.refuelThreshold as number) || 50,
     repairThreshold: (m.repairThreshold as number) || 40,
+    homeSystem: (botOverrides.homeSystem as string) || (m.homeSystem as string) || "",
     system: (m.system as string) || "",
     depositBot: (botOverrides.depositBot as string) || (m.depositBot as string) || "",
     targetIce: (botOverrides.targetIce as string) || (m.targetIce as string) || "",
@@ -65,7 +67,37 @@ export const iceHarvesterRoutine: Routine = async function* (ctx: RoutineContext
   const { bot } = ctx;
 
   await bot.refreshStatus();
-  const homeSystem = bot.system;
+  const settings0 = getIceSettings(bot.username);
+  const homeSystem = settings0.homeSystem || bot.system;
+
+  // ── Startup: return home and dump non-fuel cargo to storage ──
+  await bot.refreshCargo();
+  const nonFuelCargo = bot.inventory.filter(i => {
+    const lower = i.itemId.toLowerCase();
+    return !lower.includes("fuel") && !lower.includes("energy_cell") && i.quantity > 0;
+  });
+  if (nonFuelCargo.length > 0) {
+    if (bot.system !== homeSystem) {
+      ctx.log("harvesting", `Startup: returning to home system ${homeSystem} to deposit cargo...`);
+      const fueled = await ensureFueled(ctx, 50);
+      if (fueled) {
+        await navigateToSystem(ctx, homeSystem, { fuelThresholdPct: 50, hullThresholdPct: 30 });
+      }
+    }
+    await ensureDocked(ctx);
+    for (const item of nonFuelCargo) {
+      if (settings0.depositMode === "faction") {
+        const fResp = await bot.exec("faction_deposit_items", { item_id: item.itemId, quantity: item.quantity });
+        if (fResp.error) {
+          await bot.exec("deposit_items", { item_id: item.itemId, quantity: item.quantity });
+        }
+      } else {
+        await bot.exec("deposit_items", { item_id: item.itemId, quantity: item.quantity });
+      }
+    }
+    const names = nonFuelCargo.map(i => `${i.quantity}x ${i.name}`).join(", ");
+    ctx.log("harvesting", `Startup: deposited ${names} — cargo clear for harvesting`);
+  }
 
   while (bot.state === "running") {
     // ── Death recovery ──

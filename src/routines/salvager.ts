@@ -80,6 +80,42 @@ export const salvagerRoutine: Routine = async function* (ctx: RoutineContext) {
 
   await bot.refreshStatus();
   const startSystem = bot.system;
+  const settings0 = getSalvagerSettings(bot.username);
+  const homeSystem0 = settings0.homeSystem || startSystem;
+
+  // ── Startup: return home and dump non-fuel cargo to storage ──
+  await bot.refreshCargo();
+  const nonFuelCargo = bot.inventory.filter(i => {
+    const lower = i.itemId.toLowerCase();
+    return !lower.includes("fuel") && !lower.includes("energy_cell") && i.quantity > 0;
+  });
+  if (nonFuelCargo.length > 0) {
+    if (bot.system !== homeSystem0) {
+      ctx.log("salvage", `Startup: returning to home system ${homeSystem0} to deposit cargo...`);
+      const fueled = await ensureFueled(ctx, 50);
+      if (fueled) {
+        await navigateToSystem(ctx, homeSystem0, { fuelThresholdPct: 50, hullThresholdPct: 30 });
+      }
+    }
+    await ensureDocked(ctx);
+    for (const item of nonFuelCargo) {
+      if (settings0.depositMode === "sell") {
+        const sResp = await bot.exec("sell", { item_id: item.itemId, quantity: item.quantity });
+        if (sResp.error) {
+          await bot.exec("deposit_items", { item_id: item.itemId, quantity: item.quantity });
+        }
+      } else if (settings0.depositMode === "faction") {
+        const fResp = await bot.exec("faction_deposit_items", { item_id: item.itemId, quantity: item.quantity });
+        if (fResp.error) {
+          await bot.exec("deposit_items", { item_id: item.itemId, quantity: item.quantity });
+        }
+      } else {
+        await bot.exec("deposit_items", { item_id: item.itemId, quantity: item.quantity });
+      }
+    }
+    const names = nonFuelCargo.map(i => `${i.quantity}x ${i.name}`).join(", ");
+    ctx.log("salvage", `Startup: deposited ${names} — cargo clear for salvaging`);
+  }
 
   while (bot.state === "running") {
     // ── Death recovery ──
