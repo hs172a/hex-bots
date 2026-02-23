@@ -5,6 +5,7 @@
  * ore parsing, and safety checks.
  */
 import type { RoutineContext } from "../bot.js";
+import { catalogStore } from "../catalogstore.js";
 import { mapStore } from "../mapstore.js";
 
 // ── Types ────────────────────────────────────────────────────
@@ -70,6 +71,21 @@ export function isIceFieldPoi(type: string): boolean {
 export function isScenicPoi(type: string): boolean {
   const t = type.toLowerCase();
   return t === "sun" || t === "star" || t === "wormhole" || t === "jump_gate";
+}
+
+// ── Item size helpers ────────────────────────────────────────
+
+/** Get the cargo size (weight per unit) of an item from the catalog. Defaults to 1 if unknown. */
+export function getItemSize(itemId: string): number {
+  const item = catalogStore.getItem(itemId);
+  const size = item?.size as number | undefined;
+  return (size && size > 0) ? size : 1;
+}
+
+/** How many units of an item fit in the given free cargo weight. */
+export function maxItemsForCargo(freeWeight: number, itemId: string): number {
+  if (freeWeight <= 0) return 0;
+  return Math.floor(freeWeight / getItemSize(itemId));
 }
 
 /** Check if a POI represents a station. */
@@ -356,7 +372,8 @@ export async function transferStationToFaction(ctx: RoutineContext): Promise<voi
     const freeSpace = bot.cargoMax > 0 ? bot.cargoMax - bot.cargo : 0;
     if (freeSpace <= 0) break; // cargo full, can't transfer any more
 
-    const qty = Math.min(item.quantity, freeSpace);
+    const qty = Math.min(item.quantity, maxItemsForCargo(freeSpace, item.itemId));
+    if (qty <= 0) continue;
 
     // Withdraw from station storage into cargo
     const wResp = await bot.exec("withdraw_items", { item_id: item.itemId, quantity: qty });

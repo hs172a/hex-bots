@@ -12,17 +12,15 @@ import {
   getSystemInfo,
   findStation,
   factionDonateProfit,
+  maxItemsForCargo,
   readSettings,
   sleep,
 } from "./common.js";
 
-/** Free cargo space as min(weight-based, item-count-based).
- *  The game may enforce item count limits separately from cargo weight. */
+/** Free cargo weight (not item count — callers must divide by item size). */
 function getFreeSpace(bot: Bot): number {
   if (bot.cargoMax <= 0) return 999;
-  const byWeight = bot.cargoMax - bot.cargo;
-  const byCount = bot.cargoMax - bot.inventory.reduce((s, i) => s + i.quantity, 0);
-  return Math.max(0, Math.min(byWeight, byCount));
+  return Math.max(0, bot.cargoMax - bot.cargo);
 }
 
 // ── Settings ─────────────────────────────────────────────────
@@ -107,7 +105,7 @@ function findTradeOpportunities(settings: ReturnType<typeof getTraderSettings>, 
     const profitPerUnit = sp.spread - (totalJumps > 0 ? totalFuelCost / Math.min(sp.buyQty, sp.sellQty) : 0);
     if (profitPerUnit < settings.minProfitPerUnit) continue;
 
-    const tradeQty = Math.min(sp.buyQty, sp.sellQty, cargoCapacity);
+    const tradeQty = Math.min(sp.buyQty, sp.sellQty, maxItemsForCargo(cargoCapacity, sp.itemId));
     const totalProfit = profitPerUnit * tradeQty;
 
     // Cap by max cargo value
@@ -201,7 +199,7 @@ function findFactionStorageRoutes(
       const { jumps, cost: fuelCost } = estimateFuelCost(currentSystem, buy.systemId, settings.fuelCostPerJump);
       if (jumps >= 999) continue;
 
-      const sellQty = Math.min(item.quantity, buy.quantity, cargoCapacity);
+      const sellQty = Math.min(item.quantity, buy.quantity, maxItemsForCargo(cargoCapacity, item.itemId));
       const profitPerUnit = buy.price - itemCost - (jumps > 0 ? fuelCost / sellQty : 0);
       if (profitPerUnit < settings.minProfitPerUnit) continue;
 
@@ -417,7 +415,7 @@ async function sellFactionStorageItems(ctx: RoutineContext): Promise<number> {
     const freeSpace = getFreeSpace(bot);
     if (freeSpace <= 0) break;
 
-    const qty = Math.min(item.qty, freeSpace);
+    const qty = Math.min(item.qty, maxItemsForCargo(freeSpace, item.itemId));
     if (qty <= 0) continue;
 
     // Withdraw from faction storage
@@ -588,7 +586,8 @@ export const traderRoutine: Routine = async function* (ctx: RoutineContext) {
             await bot.refreshStatus();
             const freeSpace = getFreeSpace(bot);
             if (freeSpace <= 0) break;
-            const qty = Math.min(item.quantity, freeSpace);
+            const qty = Math.min(item.quantity, maxItemsForCargo(freeSpace, item.itemId));
+            if (qty <= 0) continue;
             const wResp = await bot.exec("withdraw_items", { item_id: item.itemId, quantity: qty });
             if (wResp.error) continue;
             const sResp = await bot.exec("sell", { item_id: item.itemId, quantity: qty });
@@ -705,7 +704,8 @@ export const traderRoutine: Routine = async function* (ctx: RoutineContext) {
             }
 
             // Try to withdraw — if cargo_full, halve and retry
-            let wQty = Math.min(remaining, freeSpace);
+            let wQty = Math.min(remaining, maxItemsForCargo(freeSpace, candidate.itemId));
+            if (wQty <= 0) break;
             let wResp = await bot.exec("faction_withdraw_items", { item_id: candidate.itemId, quantity: wQty });
             if (wResp.error && wResp.error.message.includes("cargo_full")) {
               // Parse available space from error or just halve
@@ -752,7 +752,7 @@ export const traderRoutine: Routine = async function* (ctx: RoutineContext) {
 
         // ── Cross-system faction route: withdraw what fits, travel to sell ──
         const freeSpaceF = getFreeSpace(bot);
-        let qty = Math.min(candidate.buyQty, availQty, freeSpaceF);
+        let qty = Math.min(candidate.buyQty, availQty, maxItemsForCargo(freeSpaceF, candidate.itemId));
         if (qty <= 0) {
           ctx.log("trade", "No cargo space for faction withdrawal — trying next route");
           continue;
@@ -886,7 +886,7 @@ export const traderRoutine: Routine = async function* (ctx: RoutineContext) {
       }
       if (fuelInCargo < RESERVE_FUEL_CELLS) {
         const freeSpace = getFreeSpace(bot);
-        const needed = Math.min(RESERVE_FUEL_CELLS - fuelInCargo, freeSpace);
+        const needed = Math.min(RESERVE_FUEL_CELLS - fuelInCargo, maxItemsForCargo(freeSpace, "fuel_cell"));
         if (needed > 0) {
           ctx.log("trade", `Buying ${needed} fuel cells for ${candidate.jumps}-jump route...`);
           await bot.exec("buy", { item_id: "fuel_cell", quantity: needed });
@@ -901,7 +901,7 @@ export const traderRoutine: Routine = async function* (ctx: RoutineContext) {
       // Determine buy quantity
       await bot.refreshStatus();
       const freeSpace = getFreeSpace(bot);
-      let qty = Math.min(candidate.buyQty - alreadyHave, freeSpace);
+      let qty = Math.min(candidate.buyQty - alreadyHave, maxItemsForCargo(freeSpace, candidate.itemId));
       if (settings.maxCargoValue > 0) {
         qty = Math.min(qty, Math.floor(settings.maxCargoValue / candidate.buyPrice));
       }
@@ -979,7 +979,7 @@ export const traderRoutine: Routine = async function* (ctx: RoutineContext) {
             await bot.refreshStatus();
             const freeSpace = getFreeSpace(bot);
             if (freeSpace <= 0) break;
-            const wQty = Math.min(si.qty, freeSpace);
+            const wQty = Math.min(si.qty, maxItemsForCargo(freeSpace, si.itemId));
             if (wQty <= 0) continue;
             const wResp = await bot.exec("withdraw_items", { item_id: si.itemId, quantity: wQty });
             if (!wResp.error) {
