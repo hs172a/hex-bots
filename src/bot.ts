@@ -522,14 +522,15 @@ export class Bot {
             `UNDER ATTACK! ${pirateName}${pirateT ? ` (${pirateT})` : ""} dealt ${damage} ${damageType} dmg${hullStr}${shieldStr}`
           );
 
-          const now = Date.now();
-          if (now - this.lastCombatAlertMs > Bot.COMBAT_ALERT_COOLDOWN_MS) {
-            this.lastCombatAlertMs = now;
-            await this.sendCombatFactionAlert(
-              pirateName, pirateT, damage, damageType,
-              yourHull ?? this.hull, maxHull ?? this.maxHull, yourShield,
-            );
-          }
+          // Combat chat alerts disabled — was spamming faction chat
+          // const now = Date.now();
+          // if (now - this.lastCombatAlertMs > Bot.COMBAT_ALERT_COOLDOWN_MS) {
+          //   this.lastCombatAlertMs = now;
+          //   await this.sendCombatFactionAlert(
+          //     pirateName, pirateT, damage, damageType,
+          //     yourHull ?? this.hull, maxHull ?? this.maxHull, yourShield,
+          //   );
+          // }
 
           if (yourHull !== undefined) this.hull = yourHull;
           if (yourShield !== undefined) this.shield = yourShield;
@@ -548,13 +549,14 @@ export class Bot {
               msgLower.includes("detected you") ||
               msgLower.includes("hostile");
             this.log(isCombatWarning ? "combat" : "info", `[SYSTEM] ${message}`);
-            if (isCombatWarning) {
-              const now = Date.now();
-              if (now - this.lastWarningAlertMs > Bot.WARNING_ALERT_COOLDOWN_MS) {
-                this.lastWarningAlertMs = now;
-                await this.sendWarningFactionAlert(message);
-              }
-            }
+            // Combat warning chat alerts disabled — was spamming faction chat
+            // if (isCombatWarning) {
+            //   const now = Date.now();
+            //   if (now - this.lastWarningAlertMs > Bot.WARNING_ALERT_COOLDOWN_MS) {
+            //     this.lastWarningAlertMs = now;
+            //     await this.sendWarningFactionAlert(message);
+            //   }
+            // }
           }
         }
 
