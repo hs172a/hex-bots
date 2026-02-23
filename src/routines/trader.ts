@@ -546,7 +546,11 @@ export const traderRoutine: Routine = async function* (ctx: RoutineContext) {
         }
       }
       if (soldHere.length > 0) {
-        ctx.log("trade", `Sold cargo: ${soldHere.join(", ")}`);
+        await bot.refreshCargo();
+        await bot.refreshStatus();
+        const cargoSellRevenue = Math.max(0, bot.credits - cargoSellCreditsBefore);
+        ctx.log("trade", `Sold cargo: ${soldHere.join(", ")} — earned ${cargoSellRevenue}cr`);
+        extraRevenue += cargoSellRevenue;
         await recordMarketData(ctx);
       }
 
@@ -555,9 +559,9 @@ export const traderRoutine: Routine = async function* (ctx: RoutineContext) {
         const unsoldSummary = unsold.map(i => `${i.quantity}x ${i.name}`).join(", ");
         ctx.log("trade", `${unsoldSummary} unsellable here — will find buyer via trade routes`);
       }
+    } else {
+      await bot.refreshStatus();
     }
-    await bot.refreshStatus();
-    extraRevenue += bot.credits - cargoSellCreditsBefore;
 
     // ── Priority 2: Sell station storage items at current market ──
     if (bot.docked) {
