@@ -31,10 +31,14 @@ function getFactionTraderSettings(username?: string): {
   tradeItems: string[];
 } {
   const all = readSettings();
+  const general = all.general || {};
   const t = all.faction_trader || {};
   const botOverrides = username ? (all[username] || {}) : {};
   return {
-    homeSystem: (botOverrides.homeSystem as string) || (t.homeSystem as string) || "",
+    // Use faction storage station from general settings as home, fallback to faction_trader-specific
+    homeSystem: (botOverrides.homeSystem as string)
+      || (t.homeSystem as string)
+      || (general.factionStorageSystem as string) || "",
     refuelThreshold: (t.refuelThreshold as number) || 50,
     repairThreshold: (t.repairThreshold as number) || 40,
     minSellPrice: (t.minSellPrice as number) || 0,

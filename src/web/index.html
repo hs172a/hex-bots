@@ -4574,10 +4574,33 @@ function renderSettingsPanel() {
 function renderGeneralSettings(panel) {
   const general = settings.general || {};
   const factionDonatePct = general.factionDonatePct ?? 10;
+  const factionStorageSystem = general.factionStorageSystem || '';
+  const factionStorageStation = general.factionStorageStation || '';
+
+  // Build station options from mapData
+  let stationOpts = '<option value="">(not set)</option>';
+  for (const [sysId, sys] of Object.entries(mapData)) {
+    const sysName = sys.name || sysId;
+    for (const poi of (sys.pois || [])) {
+      if (!poi.has_base) continue;
+      const val = sysId + '|' + poi.id;
+      const sel = (sysId === factionStorageSystem && poi.id === factionStorageStation) ? ' selected' : '';
+      const label = poi.base_name || poi.name || poi.id;
+      stationOpts += `<option value="${val}"${sel}>${label} (${sysName})</option>`;
+    }
+  }
 
   panel.innerHTML = `
     <h3>General Settings</h3>
     <div class="settings-desc">Fleet-wide settings that apply to all bot routines.</div>
+
+    <div class="setting-row">
+      <div>
+        <div class="setting-label">Faction Storage Station</div>
+        <div class="setting-hint">Home station where the cleanup agent deposits all collected items into faction storage. Used by cleanup, faction trader, and other routines.</div>
+      </div>
+      <select id="set-general-factionStation">${stationOpts}</select>
+    </div>
 
     <div class="setting-row">
       <div>
@@ -4598,8 +4621,12 @@ function renderGeneralSettings(panel) {
 }
 
 function saveGeneralSettings() {
+  const stationVal = document.getElementById('set-general-factionStation').value;
+  const [factionStorageSystem, factionStorageStation] = stationVal ? stationVal.split('|') : ['', ''];
   const s = {
     factionDonatePct: parseInt(document.getElementById('set-general-donatePct').value) || 0,
+    factionStorageSystem,
+    factionStorageStation,
   };
   send({ type: 'saveSettings', routine: 'general', settings: s });
 }

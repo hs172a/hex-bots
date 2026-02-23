@@ -307,10 +307,29 @@ export class Bot {
     this.inventory = this.parseItemList(resp.result);
   }
 
-  /** Fetch station storage contents and cache them. */
-  async refreshStorage(): Promise<void> {
-    const resp = await this.exec("view_storage");
+  /** Fetch station storage contents and cache them. Pass station_id to check remotely. */
+  async refreshStorage(stationId?: string): Promise<void> {
+    const resp = await this.exec("view_storage", stationId ? { station_id: stationId } : undefined);
     this.storage = this.parseItemList(resp.result);
+  }
+
+  /**
+   * Call view_storage and return the full response (including hint field).
+   * Pass station_id to query a specific station remotely.
+   */
+  async viewStorage(stationId?: string): Promise<Record<string, unknown>> {
+    const resp = await this.exec("view_storage", stationId ? { station_id: stationId } : undefined);
+    if (resp.error || !resp.result || typeof resp.result !== "object") return {};
+    return resp.result as Record<string, unknown>;
+  }
+
+  /**
+   * Call view_orders with optional station_id for remote order checking.
+   */
+  async viewOrders(stationId?: string): Promise<Record<string, unknown>> {
+    const resp = await this.exec("view_orders", stationId ? { station_id: stationId } : undefined);
+    if (resp.error || !resp.result || typeof resp.result !== "object") return {};
+    return resp.result as Record<string, unknown>;
   }
 
   /** Fetch faction storage contents and cache them. Silently returns empty on error. */
