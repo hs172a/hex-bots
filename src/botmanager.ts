@@ -2,7 +2,7 @@ import { existsSync, readdirSync, appendFileSync, mkdirSync, rmSync } from "fs";
 import { join } from "path";
 import { Bot, type Routine } from "./bot.js";
 import { SessionManager } from "./session.js";
-import { minerRoutine } from "./routines/miner.js";
+import { minerRoutineV2 } from "./routines/miner-v2.js";
 import { explorerRoutine } from "./routines/explorer.js";
 import { crafterRoutine } from "./routines/crafter.js";
 import { rescueRoutine } from "./routines/rescue.js";
@@ -30,7 +30,7 @@ const bots: Map<string, Bot> = new Map();
 let server: WebServer;
 
 const ROUTINES: Record<string, { name: string; fn: Routine }> = {
-  miner: { name: "Miner", fn: minerRoutine },
+  miner: { name: "Miner", fn: minerRoutineV2 },
   explorer: { name: "Explorer", fn: explorerRoutine },
   crafter: { name: "Crafter", fn: crafterRoutine },
   rescue: { name: "FuelRescue", fn: rescueRoutine },

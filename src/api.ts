@@ -30,6 +30,13 @@ const V2_DIRECT_COMMANDS = new Set([
 ]);
 const MAX_RECONNECT_ATTEMPTS = 6;
 const RECONNECT_BASE_DELAY = 5_000; // 5s, 10s, 20s, 40s, 80s, 160s
+const REQUEST_THROTTLE_MS = 1000; // Minimum delay between requests to avoid 429
+
+// Global rate limiting across all API instances
+let globalLastRequestTime = 0;
+let globalRequestCount = 0;
+let globalRequestWindowStart = Date.now();
+const REQUESTS_PER_MINUTE = 30; // Conservative limit to avoid 429s
 
 export class SpaceMoltAPI {
   readonly baseUrl: string;
@@ -37,6 +44,11 @@ export class SpaceMoltAPI {
   private v2Session: ApiSession | null = null;
   private credentials: { username: string; password: string } | null = null;
   private _rateLimitRetries = 0;
+
+  // Request queue and throttling
+  private _requestQueue: Array<() => Promise<void>> = [];
+  private _isProcessingQueue = false;
+  private _lastRequestTime = 0;
 
   constructor(baseUrl?: string) {
     this.baseUrl = baseUrl || process.env.SPACEMOLT_URL || DEFAULT_BASE_URL;
@@ -57,6 +69,21 @@ export class SpaceMoltAPI {
   }
 
   async execute(command: string, payload?: Record<string, unknown>): Promise<ApiResponse> {
+    return new Promise<ApiResponse>((resolve) => {
+      // Queue the request for throttled execution
+      this._requestQueue.push(async () => {
+        try {
+          const result = await this._executeInternal(command, payload);
+          resolve(result);
+        } catch (error) {
+          resolve({ error: { code: "internal_error", message: String(error) } });
+        }
+      });
+      this._processQueue();
+    });
+  }
+
+  private async _executeInternal(command: string, payload?: Record<string, unknown>): Promise<ApiResponse> {
     const needsV2 = this.isV2Command(command, payload);
     try {
       await this.ensureSession();
@@ -96,7 +123,7 @@ export class SpaceMoltAPI {
         }
         log("wait", `Rate limited — sleeping ${secs}s... (retry ${this._rateLimitRetries}/5)`);
         await sleep(Math.ceil(secs * 1000));
-        return this.execute(command, payload);
+        return this._executeInternal(command, payload);
       }
 
       if (code === "session_invalid" || code === "session_expired" || code === "not_authenticated") {
@@ -127,6 +154,59 @@ export class SpaceMoltAPI {
     return resp;
   }
 
+  private async _processQueue(): Promise<void> {
+    if (this._isProcessingQueue || this._requestQueue.length === 0) {
+      return;
+    }
+
+    this._isProcessingQueue = true;
+
+    while (this._requestQueue.length > 0) {
+      const request = this._requestQueue.shift();
+      if (!request) break;
+
+      // Apply both local and global throttling
+      const now = Date.now();
+      const timeSinceLastRequest = now - this._lastRequestTime;
+      const timeSinceGlobalLastRequest = now - globalLastRequestTime;
+      
+      // Reset global counter every minute
+      if (now - globalRequestWindowStart > 60000) {
+        globalRequestCount = 0;
+        globalRequestWindowStart = now;
+      }
+      
+      // Check global rate limit
+      if (globalRequestCount >= REQUESTS_PER_MINUTE) {
+        const waitTime = 60000 - (now - globalRequestWindowStart);
+        log("wait", `Global rate limit reached, waiting ${Math.ceil(waitTime/1000)}s...`);
+        await sleep(waitTime);
+        globalRequestCount = 0;
+        globalRequestWindowStart = Date.now();
+      }
+      
+      // Apply minimum delay between requests
+      const minDelay = Math.max(REQUEST_THROTTLE_MS, 60000 / REQUESTS_PER_MINUTE);
+      const actualDelay = Math.max(
+        minDelay - timeSinceLastRequest,
+        minDelay - timeSinceGlobalLastRequest,
+        0
+      );
+      
+      if (actualDelay > 0) {
+        await sleep(actualDelay);
+      }
+
+      this._lastRequestTime = Date.now();
+      globalLastRequestTime = Date.now();
+      globalRequestCount++;
+      
+      await request();
+    }
+
+    this._isProcessingQueue = false;
+  }
+
   private async ensureSession(): Promise<void> {
     if (this.session && !this.isSessionExpiring()) return;
 
@@ -153,7 +233,23 @@ export class SpaceMoltAPI {
           throw new Error("No session in response");
         }
 
-        // Don't auto-login here - let caller (bot.login()) handle explicit login
+        // Re-authenticate if we have credentials
+        if (this.credentials) {
+          log("system", `Logging in as ${this.credentials.username}...`);
+          const loginResp = await this.doRequest("login", {
+            username: this.credentials.username,
+            password: this.credentials.password,
+          });
+          if (loginResp.error) {
+            logError(`Login failed: ${loginResp.error.message}`);
+          } else {
+            log("system", "Logged in successfully");
+          }
+          // Login may return a new session — capture it
+          if (loginResp.session) {
+            this.session = loginResp.session;
+          }
+        }
         return;
       } catch (err) {
         lastError = err instanceof Error ? err : new Error(String(err));
@@ -201,7 +297,7 @@ export class SpaceMoltAPI {
         const data = (await resp.json()) as ApiResponse;
         if (data.session) {
           // Normalize v2 snake_case fields
-          const s = data.session as Record<string, unknown>;
+          const s = data.session as unknown as Record<string, unknown>;
           if (s.created_at && !s.createdAt) {
             s.createdAt = s.created_at;
             s.expiresAt = s.expires_at;
@@ -213,7 +309,40 @@ export class SpaceMoltAPI {
           throw new Error("No session in v2 response");
         }
 
-        // Don't auto-login here - let caller handle explicit v2 login
+        // Authenticate on v2
+        if (this.credentials) {
+          const loginResp = await fetch(`${v2Base}/spacemolt_auth/login`, {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+              "X-Session-Id": this.v2Session.id,
+            },
+            body: JSON.stringify({
+              username: this.credentials.username,
+              password: this.credentials.password,
+            }),
+          });
+
+          const loginData = (await loginResp.json()) as ApiResponse & { structuredContent?: unknown };
+          if (loginData.structuredContent !== undefined) {
+            loginData.result = loginData.structuredContent;
+          }
+          if (loginData.error) {
+            logError(`v2 login failed: ${loginData.error.message}`);
+          } else {
+            log("system", "v2 session authenticated");
+          }
+          // Capture updated session from login response
+          if (loginData.session) {
+            const ls = loginData.session as unknown as Record<string, unknown>;
+            if (ls.created_at && !ls.createdAt) {
+              ls.createdAt = ls.created_at;
+              ls.expiresAt = ls.expires_at;
+              ls.playerId = ls.player_id;
+            }
+            this.v2Session = loginData.session;
+          }
+        }
         return;
       } catch (err) {
         lastError = err instanceof Error ? err : new Error(String(err));
@@ -276,47 +405,13 @@ export class SpaceMoltAPI {
       body: body ? JSON.stringify(body) : undefined,
     });
     const duration = Date.now() - startTime;
-
     // Log HTTP response
     console.log(`[${timestamp}] ← HTTP ${resp.status} ${resp.statusText} (${duration}ms)`);
 
-    // 401 = session gone (server restarted, etc.) — try to re-authenticate
+    // 401 = session gone (server restarted, etc.) — return as session error
     if (resp.status === 401) {
-      // Avoid infinite loop - only retry login once (don't re-auth during login itself)
-      if (this.credentials && command !== "login") {
-        log("system", `Session lost - re-authenticating as ${this.credentials.username}...`);
-        const loginResp = await this.doRequest("login", {
-          username: this.credentials.username,
-          password: this.credentials.password,
-        });
-        
-        if (loginResp.error) {
-          logError(`Re-authentication failed: ${loginResp.error.message}`);
-          return {
-            error: { code: "session_invalid", message: "Unauthorized — session lost and re-auth failed" },
-          };
-        }
-        
-        // Capture new session
-        if (loginResp.session) {
-          this.session = loginResp.session;
-          log("system", "Re-authenticated successfully - retrying original request");
-          
-          // Retry the original request with new session (only once)
-          return this.doRequest(command, payload);
-        }
-      }
-      
-      // No credentials available or re-auth session missing, or this IS the login command
       return {
         error: { code: "session_invalid", message: "Unauthorized — session lost" },
-      };
-    }
-
-    // 429 = rate limit — return as rate limit error (caller should handle retry)
-    if (resp.status === 429) {
-      return {
-        error: { code: "rate_limit", message: "Too many requests — rate limited by server" },
       };
     }
 
@@ -331,7 +426,7 @@ export class SpaceMoltAPI {
       }
       // Normalize v2 session fields (snake_case → camelCase)
       if (data.session) {
-        const s = data.session as Record<string, unknown>;
+        const s = data.session as unknown as Record<string, unknown>;
         if (s.created_at && !s.createdAt) {
           s.createdAt = s.created_at;
           s.expiresAt = s.expires_at;
