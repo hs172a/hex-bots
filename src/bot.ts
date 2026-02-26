@@ -187,6 +187,19 @@ export class Bot {
         await sleep(10_000);
         resp = await this.api.execute(command, payload);
       }
+
+      // Rate limit — exponential backoff retry (max 3 attempts)
+      if (resp.error && resp.error.code === "rate_limit") {
+        const MAX_RETRIES = 3;
+        for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
+          const delay = 5000 * Math.pow(2, attempt - 1); // 5s, 10s, 20s
+          debugLog("bot:exec", `${this.username} > ${command}: rate limited, retry ${attempt}/${MAX_RETRIES} after ${delay}ms`);
+          this.log("system", `Rate limited, retrying in ${delay/1000}s... (${attempt}/${MAX_RETRIES})`);
+          await sleep(delay);
+          resp = await this.api.execute(command, payload);
+          if (!resp.error || resp.error.code !== "rate_limit") break;
+        }
+      }
     }
 
     if (resp.notifications && Array.isArray(resp.notifications) && resp.notifications.length > 0) {
@@ -226,6 +239,7 @@ export class Bot {
     }
 
     this.api.setCredentials(creds.username, creds.password);
+    // Always do fresh login - don't check existing session as that triggers session refresh
     this.log("system", `Logging in as ${creds.username}...`);
     const resp = await this.exec("login", {
       username: creds.username,

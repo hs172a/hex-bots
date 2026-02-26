@@ -153,23 +153,7 @@ export class SpaceMoltAPI {
           throw new Error("No session in response");
         }
 
-        // Re-authenticate if we have credentials
-        if (this.credentials) {
-          log("system", `Logging in as ${this.credentials.username}...`);
-          const loginResp = await this.doRequest("login", {
-            username: this.credentials.username,
-            password: this.credentials.password,
-          });
-          if (loginResp.error) {
-            logError(`Login failed: ${loginResp.error.message}`);
-          } else {
-            log("system", "Logged in successfully");
-          }
-          // Login may return a new session — capture it
-          if (loginResp.session) {
-            this.session = loginResp.session;
-          }
-        }
+        // Don't auto-login here - let caller (bot.login()) handle explicit login
         return;
       } catch (err) {
         lastError = err instanceof Error ? err : new Error(String(err));
@@ -229,40 +213,7 @@ export class SpaceMoltAPI {
           throw new Error("No session in v2 response");
         }
 
-        // Authenticate on v2
-        if (this.credentials) {
-          const loginResp = await fetch(`${v2Base}/spacemolt_auth/login`, {
-            method: "POST",
-            headers: {
-              "Content-Type": "application/json",
-              "X-Session-Id": this.v2Session.id,
-            },
-            body: JSON.stringify({
-              username: this.credentials.username,
-              password: this.credentials.password,
-            }),
-          });
-
-          const loginData = (await loginResp.json()) as ApiResponse & { structuredContent?: unknown };
-          if (loginData.structuredContent !== undefined) {
-            loginData.result = loginData.structuredContent;
-          }
-          if (loginData.error) {
-            logError(`v2 login failed: ${loginData.error.message}`);
-          } else {
-            log("system", "v2 session authenticated");
-          }
-          // Capture updated session from login response
-          if (loginData.session) {
-            const ls = loginData.session as Record<string, unknown>;
-            if (ls.created_at && !ls.createdAt) {
-              ls.createdAt = ls.created_at;
-              ls.expiresAt = ls.expires_at;
-              ls.playerId = ls.player_id;
-            }
-            this.v2Session = loginData.session;
-          }
-        }
+        // Don't auto-login here - let caller handle explicit v2 login
         return;
       } catch (err) {
         lastError = err instanceof Error ? err : new Error(String(err));
@@ -309,18 +260,63 @@ export class SpaceMoltAPI {
       headers["X-Session-Id"] = activeSession.id;
     }
 
+    // Log HTTP request to console
+    const timestamp = new Date().toISOString();
+    console.log(`\n[${timestamp}] → HTTP POST ${url}`);
+    if (body) {
+      console.log(`  Payload: ${JSON.stringify(body)}`);
+    }
+
     // fetch() only throws on network errors (DNS, connection refused, etc.)
     // Any HTTP response — even 4xx/5xx — means the server is reachable.
+    const startTime = Date.now();
     const resp = await fetch(url, {
       method: "POST",
       headers,
       body: body ? JSON.stringify(body) : undefined,
     });
+    const duration = Date.now() - startTime;
 
-    // 401 = session gone (server restarted, etc.) — return as session error
+    // Log HTTP response
+    console.log(`[${timestamp}] ← HTTP ${resp.status} ${resp.statusText} (${duration}ms)`);
+
+    // 401 = session gone (server restarted, etc.) — try to re-authenticate
     if (resp.status === 401) {
+      // Avoid infinite loop - only retry login once (don't re-auth during login itself)
+      if (this.credentials && command !== "login") {
+        log("system", `Session lost - re-authenticating as ${this.credentials.username}...`);
+        const loginResp = await this.doRequest("login", {
+          username: this.credentials.username,
+          password: this.credentials.password,
+        });
+        
+        if (loginResp.error) {
+          logError(`Re-authentication failed: ${loginResp.error.message}`);
+          return {
+            error: { code: "session_invalid", message: "Unauthorized — session lost and re-auth failed" },
+          };
+        }
+        
+        // Capture new session
+        if (loginResp.session) {
+          this.session = loginResp.session;
+          log("system", "Re-authenticated successfully - retrying original request");
+          
+          // Retry the original request with new session (only once)
+          return this.doRequest(command, payload);
+        }
+      }
+      
+      // No credentials available or re-auth session missing, or this IS the login command
       return {
         error: { code: "session_invalid", message: "Unauthorized — session lost" },
+      };
+    }
+
+    // 429 = rate limit — return as rate limit error (caller should handle retry)
+    if (resp.status === 429) {
+      return {
+        error: { code: "rate_limit", message: "Too many requests — rate limited by server" },
       };
     }
 

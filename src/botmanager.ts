@@ -23,6 +23,9 @@ import { debugLog } from "./debug.js";
 const BASE_DIR = process.cwd();
 const SESSIONS_DIR = join(BASE_DIR, "sessions");
 
+const STATUS_REFRESH_INTERVAL = 60000; // 60s, periodic live refresh
+const STATUS_CHECK_INTERVAL = 5000; // 5s, periodic status check
+
 const bots: Map<string, Bot> = new Map();
 let server: WebServer;
 
@@ -320,7 +323,7 @@ async function handleExec(action: WebAction): Promise<WebActionResult> {
   // Refresh cached state after mutating commands
   const refreshCommands = new Set([
     "mine", "sell", "buy", "dock", "undock", "travel", "jump",
-    "refuel", "repair", "deposit_items", "withdraw_items", "jettison",
+    "refuel", "repair", /*"deposit_items", "withdraw_items",*/ "jettison",
     "attack", "loot_wreck", "salvage_wreck", "send_gift", "craft",
     "accept_mission", "complete_mission", "abandon_mission",
     "buy_ship", "sell_ship", "switch_ship", "install_mod", "uninstall_mod", "set_colors",
@@ -487,22 +490,23 @@ async function main(): Promise<void> {
   // Periodic UI push (cached data → websocket clients)
   intervals.push(setInterval(() => {
     refreshStatusTable();
-  }, 2000));
+  }, STATUS_CHECK_INTERVAL));  // Changed from 2s to 5s
 
-  // Periodic live refresh (hit API for all logged-in bots)
+  // Periodic live refresh (hit API ONLY for running bots, skip idle)
   intervals.push(setInterval(async () => {
     for (const [, bot] of bots) {
-      if (bot.api.getSession()) {
+      // Only refresh running bots to avoid API spam
+      if (bot.state === "running" && bot.api.getSession()) {
         await bot.refreshStatus().catch(() => {});
       }
     }
     refreshStatusTable();
-  }, 30000));
+  }, STATUS_REFRESH_INTERVAL));  // Changed from 30s to 1min (60s) - only for active bots
 
-  // Periodic map data push (every 15s so dashboard stays current)
+  // Periodic map data push (every 30s so dashboard stays current)
   intervals.push(setInterval(() => {
     server.updateMapData();
-  }, 15000));
+  }, 30000));
 
   // Periodic stats flush (every 60s)
   intervals.push(setInterval(() => {
