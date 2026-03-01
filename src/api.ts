@@ -1,4 +1,5 @@
 import { log, logError } from "./ui.js";
+import { logApiRequest, logApiResponse, logApiSession } from "./apilogger.js";
 
 export interface ApiSession {
   id: string;
@@ -23,32 +24,25 @@ const V2_ROUTED_COMMANDS = new Set(["facility"]);
 
 // Commands that always route directly to v2 (no sub-action needed).
 // v2: POST /api/v2/spacemolt_{command} { ...params }
-// These return enriched data (e.g. v2_get_ship returns full module objects).
 const V2_DIRECT_COMMANDS = new Set([
-  "v2_get_ship", "v2_get_cargo", "v2_get_player",
+  "v2_get_cargo", "v2_get_player",
   "v2_get_queue", "v2_get_skills", "v2_get_missions",
 ]);
 const MAX_RECONNECT_ATTEMPTS = 6;
 const RECONNECT_BASE_DELAY = 5_000; // 5s, 10s, 20s, 40s, 80s, 160s
-const REQUEST_THROTTLE_MS = 1000; // Minimum delay between requests to avoid 429
-
-// Global rate limiting across all API instances
-let globalLastRequestTime = 0;
-let globalRequestCount = 0;
-let globalRequestWindowStart = Date.now();
-const REQUESTS_PER_MINUTE = 30; // Conservative limit to avoid 429s
+const USER_AGENT = "HexBots/1.1.2";
 
 export class SpaceMoltAPI {
   readonly baseUrl: string;
+  /** Set to bot username to enable per-bot API logging. */
+  label = "";
   private session: ApiSession | null = null;
   private v2Session: ApiSession | null = null;
   private credentials: { username: string; password: string } | null = null;
   private _rateLimitRetries = 0;
-
-  // Request queue and throttling
-  private _requestQueue: Array<() => Promise<void>> = [];
-  private _isProcessingQueue = false;
-  private _lastRequestTime = 0;
+  /** Mutex: prevents concurrent ensureSession() calls from each creating a session. */
+  private _sessionLock: Promise<void> | null = null;
+  private _v2SessionLock: Promise<void> | null = null;
 
   constructor(baseUrl?: string) {
     this.baseUrl = baseUrl || process.env.SPACEMOLT_URL || DEFAULT_BASE_URL;
@@ -62,6 +56,12 @@ export class SpaceMoltAPI {
     return this.session;
   }
 
+  /** Clear both sessions — next execute() will create fresh ones and re-authenticate. */
+  resetSession(): void {
+    this.session = null;
+    this.v2Session = null;
+  }
+
   /** Check if a command will route to a v2 endpoint. */
   private isV2Command(command: string, payload?: Record<string, unknown>): boolean {
     return V2_DIRECT_COMMANDS.has(command)
@@ -69,21 +69,6 @@ export class SpaceMoltAPI {
   }
 
   async execute(command: string, payload?: Record<string, unknown>): Promise<ApiResponse> {
-    return new Promise<ApiResponse>((resolve) => {
-      // Queue the request for throttled execution
-      this._requestQueue.push(async () => {
-        try {
-          const result = await this._executeInternal(command, payload);
-          resolve(result);
-        } catch (error) {
-          resolve({ error: { code: "internal_error", message: String(error) } });
-        }
-      });
-      this._processQueue();
-    });
-  }
-
-  private async _executeInternal(command: string, payload?: Record<string, unknown>): Promise<ApiResponse> {
     const needsV2 = this.isV2Command(command, payload);
     try {
       await this.ensureSession();
@@ -113,7 +98,7 @@ export class SpaceMoltAPI {
     if (resp.error) {
       const code = resp.error.code;
 
-      if (code === "rate_limited") {
+      if (code === "rate_limited" || code === "rate_limit") {
         const secs = resp.error.wait_seconds || 10;
         this._rateLimitRetries++;
         if (this._rateLimitRetries >= 5) {
@@ -123,11 +108,12 @@ export class SpaceMoltAPI {
         }
         log("wait", `Rate limited — sleeping ${secs}s... (retry ${this._rateLimitRetries}/5)`);
         await sleep(Math.ceil(secs * 1000));
-        return this._executeInternal(command, payload);
+        return this.execute(command, payload);
       }
 
       if (code === "session_invalid" || code === "session_expired" || code === "not_authenticated") {
-        log("system", `Session expired (${needsV2 ? "v2" : "v1"}), refreshing...`);
+        log("system", `Session invalid for '${command}' (${needsV2 ? "v2" : "v1"}), refreshing... [code=${code}]`);
+        logApiSession(this.label, "SESSION_INVALIDATED", `command=${command} code=${code}`);
         if (needsV2) {
           this.v2Session = null;
           await this.ensureV2Session();
@@ -154,81 +140,56 @@ export class SpaceMoltAPI {
     return resp;
   }
 
-  private async _processQueue(): Promise<void> {
-    if (this._isProcessingQueue || this._requestQueue.length === 0) {
-      return;
-    }
-
-    this._isProcessingQueue = true;
-
-    while (this._requestQueue.length > 0) {
-      const request = this._requestQueue.shift();
-      if (!request) break;
-
-      // Apply both local and global throttling
-      const now = Date.now();
-      const timeSinceLastRequest = now - this._lastRequestTime;
-      const timeSinceGlobalLastRequest = now - globalLastRequestTime;
-      
-      // Reset global counter every minute
-      if (now - globalRequestWindowStart > 60000) {
-        globalRequestCount = 0;
-        globalRequestWindowStart = now;
-      }
-      
-      // Check global rate limit
-      if (globalRequestCount >= REQUESTS_PER_MINUTE) {
-        const waitTime = 60000 - (now - globalRequestWindowStart);
-        log("wait", `Global rate limit reached, waiting ${Math.ceil(waitTime/1000)}s...`);
-        await sleep(waitTime);
-        globalRequestCount = 0;
-        globalRequestWindowStart = Date.now();
-      }
-      
-      // Apply minimum delay between requests
-      const minDelay = Math.max(REQUEST_THROTTLE_MS, 60000 / REQUESTS_PER_MINUTE);
-      const actualDelay = Math.max(
-        minDelay - timeSinceLastRequest,
-        minDelay - timeSinceGlobalLastRequest,
-        0
-      );
-      
-      if (actualDelay > 0) {
-        await sleep(actualDelay);
-      }
-
-      this._lastRequestTime = Date.now();
-      globalLastRequestTime = Date.now();
-      globalRequestCount++;
-      
-      await request();
-    }
-
-    this._isProcessingQueue = false;
-  }
-
   private async ensureSession(): Promise<void> {
     if (this.session && !this.isSessionExpiring()) return;
 
+    // Serialize concurrent calls: if another call is already creating a session, wait
+    if (this._sessionLock) {
+      log("system", "[SESSION] Another creation in progress, waiting for lock...");
+      await this._sessionLock;
+      log("system", "[SESSION] Lock released, reusing session");
+      return; // session is now set by the call that held the lock
+    }
+
+    // We're first — take the lock and create the session
+    let unlock!: () => void;
+    this._sessionLock = new Promise<void>(r => { unlock = r; });
+    try {
+      await this._doCreateSession();
+    } finally {
+      this._sessionLock = null;
+      unlock();
+    }
+  }
+
+  private async _doCreateSession(): Promise<void> {
+    const callerTrace = new Error().stack?.split("\n").slice(3, 6).map(l => l.trim()).join(" | ") ?? "unknown";
     log("system", this.session ? "Renewing session..." : "Creating new session...");
+    logApiSession(this.label, "LOCK_ACQUIRED", `caller: ${callerTrace}`);
 
     // Retry with backoff — server may be restarting
     let lastError: Error | null = null;
     for (let attempt = 0; attempt < MAX_RECONNECT_ATTEMPTS; attempt++) {
       try {
-        const resp = await fetch(`${this.baseUrl}/session`, {
+        const sessionUrl = `${this.baseUrl}/session`;
+        const sessionStart = Date.now();
+        logApiSession(this.label, "CREATE", sessionUrl);
+        const resp = await fetch(sessionUrl, {
           method: "POST",
-          headers: { "Content-Type": "application/json" },
+          headers: { "Content-Type": "application/json", "User-Agent": USER_AGENT },
         });
+        const sessionDuration = Date.now() - sessionStart;
 
         if (!resp.ok) {
           throw new Error(`Failed to create session: ${resp.status} ${resp.statusText}`);
         }
 
         const data = (await resp.json()) as ApiResponse;
+        logApiResponse(this.label, sessionUrl, resp.status, sessionDuration, data);
         if (data.session) {
           this.session = data.session;
           log("system", `Session created: ${this.session.id.slice(0, 8)}...`);
+          logApiSession(this.label, "CREATED", `id=${this.session.id.slice(0, 8)}...`);
         } else {
           throw new Error("No session in response");
         }
@@ -242,12 +203,16 @@ export class SpaceMoltAPI {
           });
           if (loginResp.error) {
             logError(`Login failed: ${loginResp.error.message}`);
+            logApiSession(this.label, "LOGIN_FAILED", loginResp.error.message);
           } else {
             log("system", "Logged in successfully");
           }
           // Login may return a new session — capture it
           if (loginResp.session) {
             this.session = loginResp.session;
+            logApiSession(this.label, "SESSION_UPDATED", `new id=${this.session.id.slice(0, 8)}...`);
+          } else {
+            logApiSession(this.label, "SESSION_KEPT", `kept id=${this.session.id.slice(0, 8)}... (login did not return new session)`);
           }
         }
         return;
@@ -279,15 +244,33 @@ export class SpaceMoltAPI {
   private async ensureV2Session(): Promise<void> {
     if (this.v2Session && !this.isV2SessionExpiring()) return;
 
+    if (this._v2SessionLock) {
+      await this._v2SessionLock;
+      return;
+    }
+
+    let unlock!: () => void;
+    this._v2SessionLock = new Promise<void>(r => { unlock = r; });
+    try {
+      await this._doCreateV2Session();
+    } finally {
+      this._v2SessionLock = null;
+      unlock();
+    }
+  }
+
+  private async _doCreateV2Session(): Promise<void> {
     const v2Base = this.baseUrl.replace("/api/v1", "/api/v2");
     log("system", this.v2Session ? "Renewing v2 session..." : "Creating v2 session...");
 
     let lastError: Error | null = null;
     for (let attempt = 0; attempt < MAX_RECONNECT_ATTEMPTS; attempt++) {
       try {
-        const resp = await fetch(`${v2Base}/session`, {
+        const v2SessionUrl = `${v2Base}/session`;
+        logApiSession(this.label, "CREATE_V2", v2SessionUrl);
+        const resp = await fetch(v2SessionUrl, {
           method: "POST",
-          headers: { "Content-Type": "application/json" },
+          headers: { "Content-Type": "application/json", "User-Agent": USER_AGENT },
         });
 
         if (!resp.ok) {
@@ -305,6 +288,7 @@ export class SpaceMoltAPI {
           }
           this.v2Session = data.session;
           log("system", `v2 session created: ${this.v2Session.id.slice(0, 8)}...`);
+          logApiSession(this.label, "CREATED_V2", `id=${this.v2Session.id.slice(0, 8)}...`);
         } else {
           throw new Error("No session in v2 response");
         }
@@ -315,6 +299,7 @@ export class SpaceMoltAPI {
             method: "POST",
             headers: {
               "Content-Type": "application/json",
+              "User-Agent": USER_AGENT,
               "X-Session-Id": this.v2Session.id,
             },
             body: JSON.stringify({
@@ -389,12 +374,15 @@ export class SpaceMoltAPI {
       headers["X-Session-Id"] = activeSession.id;
     }
 
-    // Log HTTP request to console
+    headers["User-Agent"] = USER_AGENT;
+
+    // Log request to console and per-bot file
     const timestamp = new Date().toISOString();
     console.log(`\n[${timestamp}] → HTTP POST ${url}`);
     if (body) {
       console.log(`  Payload: ${JSON.stringify(body)}`);
     }
+    logApiRequest(this.label, url, activeSession?.id, body);
 
     // fetch() only throws on network errors (DNS, connection refused, etc.)
     // Any HTTP response — even 4xx/5xx — means the server is reachable.
@@ -410,9 +398,9 @@ export class SpaceMoltAPI {
 
     // 401 = session gone (server restarted, etc.) — return as session error
     if (resp.status === 401) {
-      return {
-        error: { code: "session_invalid", message: "Unauthorized — session lost" },
-      };
+      const errResp = { error: { code: "session_invalid", message: "Unauthorized — session lost" } };
+      logApiResponse(this.label, url, resp.status, duration, errResp);
+      return errResp;
     }
 
     // Try to parse JSON for any status code. If the server returned an HTTP
@@ -433,12 +421,13 @@ export class SpaceMoltAPI {
           s.playerId = s.player_id;
         }
       }
+      logApiResponse(this.label, url, resp.status, duration, data);
       return data as ApiResponse;
     } catch {
       // Non-JSON response (e.g. HTML error page, empty body)
-      return {
-        error: { code: "http_error", message: `HTTP ${resp.status}: ${resp.statusText}` },
-      };
+      const errResp = { error: { code: "http_error", message: `HTTP ${resp.status}: ${resp.statusText}` } };
+      logApiResponse(this.label, url, resp.status, duration, errResp);
+      return errResp;
     }
   }
 }

@@ -3,6 +3,7 @@ import { join } from "path";
 import type { BotStatus } from "../bot.js";
 import { mapStore } from "../mapstore.js";
 import { catalogStore } from "../catalogstore.js";
+import { publicCatalog } from "../publicCatalog.js";
 import type { ServerWebSocket } from "bun";
 
 // ── Types ──────────────────────────────────────────────────
@@ -219,6 +220,9 @@ export class WebServer {
         if (url.pathname === "/api/catalog") {
           return Response.json(catalogStore.getAll());
         }
+        if (url.pathname === "/api/public-catalog") {
+          return Response.json(publicCatalog.getAll());
+        }
 
         // Per-bot persistent log files
         if (url.pathname.startsWith("/api/logs/")) {
@@ -276,6 +280,7 @@ export class WebServer {
             knownSystems,
             knownOres,
             catalog: catalogStore.getAll(),
+            publicCatalog: publicCatalog.getAll(),
             mapData: mapStore.getAllSystems(),
             statsDaily: this.statsData.daily,
             logs: {
@@ -357,7 +362,19 @@ export class WebServer {
     }
     const buf = this.botLogs.get(username)!;
     this.pushLog(buf, line);
+
+    // Parse line format: "HH:MM:SS [category] message"
+    // Extract category and message for Vue client
+    const categoryMatch = line.match(/\[([^\]]+)\]\s*(.+)/);
+    const category = categoryMatch ? categoryMatch[1] : 'info';
+    const message = categoryMatch ? categoryMatch[2] : line;
     this.broadcast({ type: "botLog", username, line });
+    this.broadcast({ 
+      type: "log", 
+      bot: username, 
+      level: category === 'error' ? 'error' : category === 'combat' ? 'warn' : 'info',
+      message: message
+    });
   }
 
   updateMapData(): void {

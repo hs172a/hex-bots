@@ -1,6 +1,6 @@
 import { SpaceMoltAPI, type ApiResponse } from "./api.js";
-import { SessionManager, type Credentials } from "./session.js";
-import { log, logError, logNotifications } from "./ui.js";
+import { SessionManager } from "./session.js";
+import { logNotifications } from "./ui.js";
 import { debugLog } from "./debug.js";
 import { mapStore } from "./mapstore.js";
 
@@ -10,6 +10,16 @@ export interface CargoItem {
   itemId: string;
   name: string;
   quantity: number;
+  size?: number;
+}
+
+export interface ShipModule {
+  id: string;
+  type_id: string;
+  name?: string;
+  slot_type?: string;
+  cpu_cost?: number;
+  power_cost?: number;
 }
 
 export interface BotStats {
@@ -18,6 +28,29 @@ export interface BotStats {
   totalTrades: number;
   totalProfit: number;
   totalSystems: number;
+}
+
+export interface PlayerStats {
+  creditsEarned: number;
+  creditsSpent: number;
+  shipsDestroyed: number;
+  shipsLost: number;
+  piratesDestroyed: number;
+  basesDestroyed: number;
+  oreMined: number;
+  itemsCrafted: number;
+  tradesCompleted: number;
+  systemsExplored: number;
+  distanceTraveled: number;
+  timePlayed: number;
+}
+
+export interface SkillEntry {
+  skill_id: string;
+  level: number;
+  xp?: number;
+  xp_to_next?: number;
+  next_level_xp?: number;
 }
 
 export interface BotStatus {
@@ -36,14 +69,35 @@ export interface BotStatus {
   lastAction: string;
   error: string | null;
   shipName: string;
+  shipId: string;
+  shipClassId: string;
   hull: number;
   maxHull: number;
   shield: number;
   maxShield: number;
+  shieldRecharge: number;
+  armor: number;
+  speed: number;
   ammo: number;
+  cpuUsed: number;
+  cpuCapacity: number;
+  powerUsed: number;
+  powerCapacity: number;
+  weaponSlots: number;
+  defenseSlots: number;
+  utilitySlots: number;
+  installedMods: string[];
+  shipModules: ShipModule[];
+  empire: string;
+  homeBase: string;
+  factionId: string;
+  factionRank: string;
+  isCloaked: boolean;
   inventory: CargoItem[];
   storage: CargoItem[];
   stats: BotStats;
+  playerStats: PlayerStats;
+  skills: SkillEntry[];
 }
 
 export interface RoutineContext {
@@ -80,6 +134,10 @@ export class Bot {
   private _error: string | null = null;
   private _abortController: AbortController | null = null;
 
+  _modules: Record<string, unknown> | undefined = undefined;
+  _player: Record<string, unknown> | undefined = undefined;
+  _ship: Record<string, unknown> | undefined = undefined;
+
   // Cached game state from last get_status
   credits = 0;
   fuel = 0;
@@ -91,11 +149,30 @@ export class Bot {
   poi = "";
   docked = false;
   shipName = "";
+  shipId = "";
+  shipClassId = "";
   hull = 0;
   maxHull = 0;
   shield = 0;
   maxShield = 0;
+  shieldRecharge = 0;
+  armor = 0;
+  speed = 0;
   ammo = 0;
+  cpuUsed = 0;
+  cpuCapacity = 0;
+  powerUsed = 0;
+  powerCapacity = 0;
+  weaponSlots = 0;
+  defenseSlots = 0;
+  utilitySlots = 0;
+  empire = "";
+  homeBase = "";
+  factionId = "";
+  factionRank = "";
+
+  /** Full module objects from last get_status. */
+  shipModules: ShipModule[] = [];
 
   /** Cached inventory items from last get_cargo. */
   inventory: CargoItem[] = [];
@@ -115,8 +192,18 @@ export class Bot {
   /** Cached installed mod IDs from last refreshShipMods(). */
   installedMods: string[] = [];
 
-  /** Accumulated stats for this bot. */
+  /** Accumulated session stats for this bot (runtime tracking). */
   stats: BotStats = { totalMined: 0, totalCrafted: 0, totalTrades: 0, totalProfit: 0, totalSystems: 0 };
+
+  /** Server-side player stats from last get_status. */
+  playerStats: PlayerStats = {
+    creditsEarned: 0, creditsSpent: 0, shipsDestroyed: 0, shipsLost: 0,
+    piratesDestroyed: 0, basesDestroyed: 0, oreMined: 0, itemsCrafted: 0,
+    tradesCompleted: 0, systemsExplored: 0, distanceTraveled: 0, timePlayed: 0,
+  };
+
+  /** Player skills from last get_status. */
+  skills: SkillEntry[] = [];
 
   // Action log (last N entries)
   readonly actionLog: string[] = [];
@@ -139,9 +226,14 @@ export class Bot {
   private lastWarningAlertMs = 0;
   private static readonly WARNING_ALERT_COOLDOWN_MS = 60_000;
 
+  /** Timestamp of the last rate limit log message (ms). Rate-limits log spam. */
+  private lastRateLimitLogMs = 0;
+  private static readonly RATE_LIMIT_LOG_COOLDOWN_MS = 15_000;
+
   constructor(username: string, baseDir: string) {
     this.username = username;
     this.api = new SpaceMoltAPI();
+    this.api.label = username;
     this.session = new SessionManager(username, baseDir);
     this.color = BOT_COLORS[colorIndex % BOT_COLORS.length];
     colorIndex++;
@@ -191,10 +283,19 @@ export class Bot {
       // Rate limit — exponential backoff retry (max 3 attempts)
       if (resp.error && resp.error.code === "rate_limit") {
         const MAX_RETRIES = 3;
+        const now = Date.now();
+        const shouldLog = now - this.lastRateLimitLogMs > Bot.RATE_LIMIT_LOG_COOLDOWN_MS;
+
         for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
           const delay = 5000 * Math.pow(2, attempt - 1); // 5s, 10s, 20s
           debugLog("bot:exec", `${this.username} > ${command}: rate limited, retry ${attempt}/${MAX_RETRIES} after ${delay}ms`);
-          this.log("system", `Rate limited, retrying in ${delay/1000}s... (${attempt}/${MAX_RETRIES})`);
+
+          // Only log first retry or if cooldown expired
+          if (attempt === 1 && shouldLog) {
+            // this.log("system", `Rate limited, retrying in ${delay/1000}s... (${attempt}/${MAX_RETRIES})`);
+            this.lastRateLimitLogMs = now;
+          }
+
           await sleep(delay);
           resp = await this.api.execute(command, payload);
           if (!resp.error || resp.error.code !== "rate_limit") break;
@@ -239,12 +340,13 @@ export class Bot {
     }
 
     this.api.setCredentials(creds.username, creds.password);
-    // Always do fresh login - don't check existing session as that triggers session refresh
+    // Clear any stale session so ensureSession() creates a fresh one and
+    // re-authenticates internally via doRequest("login") with stored credentials.
+    // This avoids a double-login: one inside ensureSession() + one from exec("login").
+    this.api.resetSession();
     this.log("system", `Logging in as ${creds.username}...`);
-    const resp = await this.exec("login", {
-      username: creds.username,
-      password: creds.password,
-    });
+
+    const resp = await this.refreshStatus();
 
     if (resp.error) {
       this._error = `Login failed: ${resp.error.message}`;
@@ -253,7 +355,6 @@ export class Bot {
     }
 
     this.log("system", "Login successful");
-    await this.refreshStatus();
     return true;
   }
 
@@ -265,9 +366,46 @@ export class Bot {
       const r = resp.result as Record<string, unknown>;
       debugLog("bot:refreshStatus", `${this.username} top-level keys`, Object.keys(r));
 
+      this._modules = r.modules as Record<string, unknown> | undefined;
+      this._player = r.player as Record<string, unknown> | undefined;
+      this._ship = r.ship as Record<string, unknown> | undefined;
+
       // Player data may be nested under r.player or flat at top level
       const player = r.player as Record<string, unknown> | undefined;
       const p = player || r;
+
+      // Parse server-side player stats
+      const apiStats = (p.stats || r.stats) as Record<string, number> | undefined;
+      if (apiStats && typeof apiStats === "object") {
+        this.playerStats = {
+          creditsEarned: apiStats.credits_earned ?? 0,
+          creditsSpent: apiStats.credits_spent ?? 0,
+          shipsDestroyed: apiStats.ships_destroyed ?? 0,
+          shipsLost: apiStats.ships_lost ?? 0,
+          piratesDestroyed: apiStats.pirates_destroyed ?? 0,
+          basesDestroyed: apiStats.bases_destroyed ?? 0,
+          oreMined: apiStats.ore_mined ?? 0,
+          itemsCrafted: apiStats.items_crafted ?? 0,
+          tradesCompleted: apiStats.trades_completed ?? 0,
+          systemsExplored: apiStats.systems_explored ?? 0,
+          distanceTraveled: apiStats.distance_traveled ?? 0,
+          timePlayed: apiStats.time_played ?? 0,
+        };
+      }
+
+      // Parse player skills (Record<string, number> → SkillEntry[])
+      const apiSkills = (p.skills || r.skills) as Record<string, unknown> | unknown[] | undefined;
+      if (apiSkills && typeof apiSkills === "object" && !Array.isArray(apiSkills)) {
+        this.skills = Object.entries(apiSkills as Record<string, unknown>).map(([skill_id, val]) => ({
+          skill_id,
+          level: typeof val === "number" ? val : (typeof val === "object" && val !== null ? (val as any).level ?? 0 : 0),
+        }));
+      } else if (Array.isArray(apiSkills)) {
+        this.skills = (apiSkills as any[]).map((s: any) => ({
+          skill_id: s.skill_id || s.id || s.name || "",
+          level: s.level ?? 0,
+        }));
+      }
 
       this.credits = (p.credits as number) ?? this.credits;
       debugLog("bot:credits", `${this.username} credits=${this.credits} raw=${p.credits}`);
@@ -281,6 +419,12 @@ export class Bot {
         (p.location as string) ||
         this.location;
 
+      // Player identity fields
+      if (typeof p.empire === "string") this.empire = p.empire;
+      if (typeof p.home_base === "string") this.homeBase = p.home_base;
+      if (typeof p.faction_id === "string") this.factionId = p.faction_id;
+      if (typeof p.faction_rank === "string") this.factionRank = p.faction_rank;
+
       // Ship fields
       const ship = r.ship as Record<string, unknown> | undefined;
       debugLog("bot:ship", `${this.username} ship object`, ship);
@@ -288,6 +432,8 @@ export class Bot {
         const rawName = (ship.name as string) || "";
         const shipType = (ship.ship_type as string) || (ship.type as string) || "";
         this.shipName = (rawName && rawName.toLowerCase() !== "unnamed" ? rawName : shipType) || this.shipName;
+        if (typeof ship.id === "string") this.shipId = ship.id;
+        if (typeof ship.class_id === "string") this.shipClassId = ship.class_id;
         this.fuel = (ship.fuel as number) ?? this.fuel;
         this.maxFuel = (ship.max_fuel as number) ?? this.maxFuel;
         this.cargo = (ship.cargo_used as number) ?? this.cargo;
@@ -296,7 +442,35 @@ export class Bot {
         this.maxHull = (ship.max_hull as number) ?? (ship.max_hp as number) ?? this.maxHull;
         this.shield = (ship.shield as number) ?? (ship.shields as number) ?? this.shield;
         this.maxShield = (ship.max_shield as number) ?? (ship.max_shields as number) ?? this.maxShield;
+        if (typeof ship.shield_recharge === "number") this.shieldRecharge = ship.shield_recharge;
+        if (typeof ship.armor === "number") this.armor = ship.armor;
+        if (typeof ship.speed === "number") this.speed = ship.speed;
         this.ammo = (ship.ammo as number) ?? this.ammo;
+        if (typeof ship.cpu_used === "number") this.cpuUsed = ship.cpu_used;
+        if (typeof ship.cpu_capacity === "number") this.cpuCapacity = ship.cpu_capacity;
+        if (typeof ship.power_used === "number") this.powerUsed = ship.power_used;
+        if (typeof ship.power_capacity === "number") this.powerCapacity = ship.power_capacity;
+        if (typeof ship.weapon_slots === "number") this.weaponSlots = ship.weapon_slots;
+        if (typeof ship.defense_slots === "number") this.defenseSlots = ship.defense_slots;
+        if (typeof ship.utility_slots === "number") this.utilitySlots = ship.utility_slots;
+        // Populate installedMods directly from get_status (avoids a separate get_ship call)
+        if (Array.isArray(ship.modules)) {
+          this.installedMods = (ship.modules as Array<string | Record<string, unknown>>)
+            .map(m => (typeof m === "string" ? m : (m.id as string) || ""))
+            .filter(Boolean);
+        }
+      }
+
+      // Full module details (id, type_id, name, slot_type, cpu_cost, power_cost)
+      if (Array.isArray(r.modules)) {
+        this.shipModules = (r.modules as Array<Record<string, unknown>>).map(m => ({
+          id: (m.id as string) || "",
+          type_id: (m.type_id as string) || "",
+          name: m.name as string | undefined,
+          slot_type: m.slot_type as string | undefined,
+          cpu_cost: m.cpu_cost as number | undefined,
+          power_cost: m.power_cost as number | undefined,
+        }));
       }
 
       // Cloak detection
@@ -340,6 +514,7 @@ export class Bot {
         itemId: (item.item_id as string) || (item.resource_id as string) || (item.id as string) || "",
         name: (item.name as string) || (item.item_name as string) || (item.resource_name as string) || (item.item_id as string) || "",
         quantity: (item.quantity as number) || (item.count as number) || 0,
+        size: typeof item.size === "number" ? item.size : undefined,
       }))
       .filter((i) => i.itemId && i.quantity > 0);
   }
@@ -667,14 +842,35 @@ export class Bot {
       lastAction: this._lastAction,
       error: this._error,
       shipName: this.shipName,
+      shipId: this.shipId,
+      shipClassId: this.shipClassId,
       hull: this.hull,
       maxHull: this.maxHull,
       shield: this.shield,
       maxShield: this.maxShield,
+      shieldRecharge: this.shieldRecharge,
+      armor: this.armor,
+      speed: this.speed,
       ammo: this.ammo,
+      cpuUsed: this.cpuUsed,
+      cpuCapacity: this.cpuCapacity,
+      powerUsed: this.powerUsed,
+      powerCapacity: this.powerCapacity,
+      weaponSlots: this.weaponSlots,
+      defenseSlots: this.defenseSlots,
+      utilitySlots: this.utilitySlots,
+      installedMods: [...this.installedMods],
+      shipModules: [...this.shipModules],
+      empire: this.empire,
+      homeBase: this.homeBase,
+      factionId: this.factionId,
+      factionRank: this.factionRank,
+      isCloaked: this.isCloaked,
       inventory: this.inventory,
       storage: this.storage,
       stats: { ...this.stats },
+      playerStats: { ...this.playerStats },
+      skills: [...this.skills],
     };
   }
 }

@@ -333,15 +333,39 @@ async function tryMissions(ctx: RoutineContext): Promise<void> {
     for (const mission of active) {
       const missionId = (mission.mission_id as string) || (mission.id as string) || "";
       if (!missionId) continue;
-      // Only try to complete missions marked as ready/completable
-      const status = ((mission.status as string) || "").toLowerCase();
-      if (status === "incomplete" || status === "in_progress") continue;
+
+      // Primary gate: is_complete flag (set by the server when all objectives are met)
+      const isComplete = mission.is_complete as boolean | undefined;
+      if (isComplete === false) continue;  // explicitly not done
+      if (isComplete !== true) {
+        // Flag absent — fall back to status string
+        const status = ((mission.status as string) || "").toLowerCase();
+        if (status !== "complete" && status !== "ready" && status !== "completed") continue;
+      }
+
+      // Secondary gate: verify each objective individually
+      const objectives = ((mission.objectives as any[]) || []);
+      if (objectives.length > 0) {
+        const allDone = objectives.every((obj: any) => {
+          if (obj.complete === true) return true;
+          const current = typeof obj.current === "number" ? obj.current : 0;
+          const required = obj.required ?? obj.quantity ?? obj.target_amount ?? 0;
+          return typeof required === "number" && required > 0 && current >= required;
+        });
+        if (!allDone) {
+          ctx.log("trade", `Skipping mission ${missionId} — objectives not yet complete`);
+          continue;
+        }
+      }
+
       const completeResp = await bot.exec("complete_mission", { mission_id: missionId });
       if (completeResp.error) {
-        // Silently skip mission_incomplete — expected for in-progress missions
-        if (completeResp.error.code === "mission_incomplete") continue;
+        if (completeResp.error.code === "mission_incomplete") {
+          ctx.log("trade", `Mission ${missionId} still incomplete (server says so) — skipping`);
+        }
+        continue;
       }
-      if (!completeResp.error && completeResp.result) {
+      if (completeResp.result) {
         const cr = completeResp.result as Record<string, unknown>;
         const earned = (cr.credits_earned as number) ?? 0;
         ctx.log("trade", `Mission complete! +${earned}cr`);
@@ -371,13 +395,34 @@ async function tryMissions(ctx: RoutineContext): Promise<void> {
     const missionId = (mission.mission_id as string) || (mission.id as string) || "";
     const type = ((mission.type as string) || "").toLowerCase();
     const title = ((mission.title as string) || "").toLowerCase();
+    const description = ((mission.description as string) || "").toLowerCase();
 
-    const isTradeRelated =
+    // Whitelist: only accept mission types/titles a trader can execute
+    const isTradeType =
       type === "market_participation" || type === "trade" || type === "delivery" ||
+      type === "hauling" || type === "contract";
+    const hasTradeTitleKeyword =
       title.includes("market") || title.includes("trade") ||
-      title.includes("sell") || title.includes("buy") || title.includes("deliver");
+      title.includes("buy") || title.includes("deliver") || title.includes("haul") ||
+      title.includes("transport") || title.includes("supply");
+    // "sell" only if it doesn't involve wrecks/salvage
+    const isSellMission =
+      title.includes("sell") &&
+      !title.includes("wreck") && !title.includes("salvage") &&
+      !description.includes("salvage yard") && !description.includes("salvage_yard");
 
-    if (!isTradeRelated || !missionId) continue;
+    const isTradeRelated = isTradeType || hasTradeTitleKeyword || isSellMission;
+
+    // Blacklist: exclude missions that require actions a trader cannot do
+    const isExcluded =
+      title.includes("mine") || title.includes("mining") || title.includes("ore") ||
+      title.includes("salvage") || title.includes("wreck") || title.includes("scrap") ||
+      title.includes("kill") || title.includes("destroy") || title.includes("combat") ||
+      title.includes("defeat") || title.includes("pirate") ||
+      title.includes("explore") || title.includes("scan") || title.includes("survey") ||
+      title.includes("craft") || title.includes("build") || title.includes("manufacture");
+
+    if (!isTradeRelated || isExcluded || !missionId) continue;
 
     const acceptResp = await bot.exec("accept_mission", { mission_id: missionId });
     if (!acceptResp.error) {

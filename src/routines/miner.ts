@@ -499,12 +499,6 @@ export const minerRoutine: Routine = async function* (ctx: RoutineContext) {
       const midFuel = bot.maxFuel > 0 ? Math.round((bot.fuel / bot.maxFuel) * 100) : 100;
       if (midFuel < safetyOpts.fuelThresholdPct) { stopReason = `fuel low (${midFuel}%)`; break; }
 
-      // Check cargo before mining
-      const fillRatio = bot.cargoMax > 0 ? bot.cargo / bot.cargoMax : 0;
-      if (fillRatio >= cargoThresholdRatio) {
-        stopReason = `cargo at ${Math.round(fillRatio * 100)}%`; break;
-      }
-
       const mineResp = await bot.exec("mine");
 
       if (mineResp.error) {
@@ -528,12 +522,10 @@ export const minerRoutine: Routine = async function* (ctx: RoutineContext) {
         bot.stats.totalMined++;
       }
 
-      // Update cargo from mine result (no need for refreshStatus)
-      if (mineResp.result && typeof mineResp.result === 'object') {
-        const ship = (mineResp.result as any).ship;
-        if (ship?.cargo_used !== undefined) {
-          bot.cargo = ship.cargo_used;
-        }
+      await bot.refreshStatus();
+      const fillRatio = bot.cargoMax > 0 ? bot.cargo / bot.cargoMax : 0;
+      if (fillRatio >= cargoThresholdRatio) {
+        stopReason = `cargo at ${Math.round(fillRatio * 100)}%`; break;
       }
 
       yield "mining";

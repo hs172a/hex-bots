@@ -16,15 +16,18 @@ import { factionTraderRoutine } from "./routines/faction_trader.js";
 import { cleanupRoutine } from "./routines/cleanup.js";
 import { mapStore } from "./mapstore.js";
 import { catalogStore } from "./catalogstore.js";
+import { publicCatalog } from "./publicCatalog.js";
 import { WebServer, type WebAction, type WebActionResult } from "./web/server.js";
 import { setLogSink } from "./ui.js";
 import { debugLog } from "./debug.js";
+import { logApiRunStart, setApiLoggingEnabled } from "./apilogger.js";
 
 const BASE_DIR = process.cwd();
 const SESSIONS_DIR = join(BASE_DIR, "sessions");
 
-const STATUS_REFRESH_INTERVAL = 60000; // 60s, periodic live refresh
-const STATUS_CHECK_INTERVAL = 5000; // 5s, periodic status check
+const TABLE_STATUS_REFRESH_INTERVAL = 5000; // 5s, periodic live refresh of tables
+const BOT_STATUS_REFRESH_INTERVAL = 30000; // 30s, periodic bots status check
+const MAP_STATUS_REFRESH_INTERVAL = 30000; // 30s, periodic map status check
 
 const bots: Map<string, Bot> = new Map();
 let server: WebServer;
@@ -76,6 +79,7 @@ function appendBotLog(username: string, line: string): void {
 }
 
 function setupBotLogging(bot: Bot): void {
+  logApiRunStart(bot.api.label);
   bot.onLog = (username, category, message) => {
     const timestamp = new Date().toLocaleTimeString("en-US", { hour12: false });
     const datestamp = new Date().toISOString().slice(0, 10);
@@ -133,6 +137,10 @@ async function handleSaveSettings(action: WebAction): Promise<WebActionResult> {
 
   server.saveRoutineSettings(routine, s);
   server.logSystem(`Settings saved for ${routine}`);
+  // Apply API logging toggle immediately when general settings are updated
+  if (routine === "general" && typeof s.enableApiLogging === "boolean") {
+    setApiLoggingEnabled(s.enableApiLogging);
+  }
   return { ok: true, message: `${routine} settings saved`, settings: server.settings };
 }
 
@@ -323,7 +331,7 @@ async function handleExec(action: WebAction): Promise<WebActionResult> {
   // Refresh cached state after mutating commands
   const refreshCommands = new Set([
     "mine", "sell", "buy", "dock", "undock", "travel", "jump",
-    "refuel", "repair", /*"deposit_items", "withdraw_items",*/ "jettison",
+    "refuel", "repair", "deposit_items", "withdraw_items", "jettison",
     "attack", "loot_wreck", "salvage_wreck", "send_gift", "craft",
     "accept_mission", "complete_mission", "abandon_mission",
     "buy_ship", "sell_ship", "switch_ship", "install_mod", "uninstall_mod", "set_colors",
@@ -398,6 +406,12 @@ async function main(): Promise<void> {
   server.routines = Object.keys(ROUTINES);
   server.onAction = handleAction;
 
+  // Apply persisted API logging setting immediately at startup
+  const startupApiLogging = server.settings?.general?.enableApiLogging;
+  if (typeof startupApiLogging === "boolean") {
+    setApiLoggingEnabled(startupApiLogging);
+  }
+
   // Route global ui.log() calls through the web server
   setLogSink((category, message) => {
     const timestamp = new Date().toLocaleTimeString("en-US", { hour12: false });
@@ -428,6 +442,17 @@ async function main(): Promise<void> {
   server.logSystem("Loading saved sessions...");
 
   discoverBots();
+
+  // Seed public catalog (ships + stations) from public API
+  publicCatalog.refreshIfStale().then(({ ships, stations }) => {
+    const parts = [];
+    if (ships) parts.push("ships");
+    if (stations) parts.push("stations");
+    if (parts.length > 0) server.logSystem(`Public catalog refreshed: ${parts.join(", ")} (${publicCatalog.getSummary()})`);
+    else server.logSystem(`Public catalog loaded from cache (${publicCatalog.getSummary()})`);
+  }).catch(err => {
+    server.logSystem(`Public catalog refresh failed: ${err}`);
+  });
 
   // Seed galaxy map from public API so pathfinding works from first run
   server.logSystem("Seeding galaxy map from /api/map...");
@@ -490,7 +515,7 @@ async function main(): Promise<void> {
   // Periodic UI push (cached data → websocket clients)
   intervals.push(setInterval(() => {
     refreshStatusTable();
-  }, STATUS_CHECK_INTERVAL));  // Changed from 2s to 5s
+  }, TABLE_STATUS_REFRESH_INTERVAL));  // Changed from 2s to 5s
 
   // Periodic live refresh (hit API ONLY for running bots, skip idle)
   intervals.push(setInterval(async () => {
@@ -501,12 +526,12 @@ async function main(): Promise<void> {
       }
     }
     refreshStatusTable();
-  }, STATUS_REFRESH_INTERVAL));  // Changed from 30s to 1min (60s) - only for active bots
+  }, BOT_STATUS_REFRESH_INTERVAL));  // Only for active bots
 
   // Periodic map data push (every 30s so dashboard stays current)
   intervals.push(setInterval(() => {
     server.updateMapData();
-  }, 30000));
+  }, MAP_STATUS_REFRESH_INTERVAL));
 
   // Periodic stats flush (every 60s)
   intervals.push(setInterval(() => {
@@ -514,7 +539,17 @@ async function main(): Promise<void> {
     server.flushBotStats(statuses);
   }, 60000));
 
-  // Daily catalog refresh (24h)
+  // Daily public catalog refresh (24h)
+  intervals.push(setInterval(async () => {
+    try {
+      const { ships, stations } = await publicCatalog.refreshIfStale();
+      if (ships || stations) server.logSystem(`Public catalog refreshed (${publicCatalog.getSummary()})`);
+    } catch (err) {
+      server.logSystem(`Public catalog refresh failed: ${err}`);
+    }
+  }, 24 * 60 * 60 * 1000));
+
+  // Daily game catalog refresh (24h)
   intervals.push(setInterval(async () => {
     if (!catalogStore.isStale()) return;
     // Find first bot with an active session

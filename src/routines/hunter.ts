@@ -464,6 +464,43 @@ function findNextHuntSystem(fromSystemId: string): string | null {
 // ── Ammo management ──────────────────────────────────────────
 
 /**
+ * Buy ammo for all fitted weapon modules when docked.
+ * Targets 5 magazines worth of stock per weapon.
+ */
+async function buyAmmoIfNeeded(ctx: RoutineContext): Promise<void> {
+  const { bot } = ctx;
+
+  const shipResp = await bot.exec("get_ship");
+  const rawModules: any[] = (shipResp.result as any)?.modules ?? [];
+  const weaponMods = rawModules.filter((m: any) => m.ammo_type && m.id);
+
+  if (weaponMods.length === 0) {
+    ctx.log("combat", "⚠️  No weapon modules found — fit a weapon before hunting");
+    return;
+  }
+
+  await bot.refreshCargo();
+
+  for (const wep of weaponMods) {
+    const magazineSize = (wep.magazine_size as number) ?? 100;
+    const target = magazineSize * 5;
+    const inCargo = bot.inventory.find((i) => i.itemId === wep.ammo_type)?.quantity ?? 0;
+    if (inCargo >= magazineSize) continue;
+
+    const toBuy = target - inCargo;
+    ctx.log("combat", `Buying ${toBuy}x ${wep.ammo_type} for ${wep.name || wep.id}...`);
+    const resp = await bot.exec("buy", { item_id: wep.ammo_type, quantity: toBuy });
+    if (resp.error) {
+      ctx.log("combat", `Could not buy ${wep.ammo_type}: ${resp.error.message}`);
+    } else {
+      ctx.log("combat", `Bought ammo ${wep.ammo_type} (cargo: ${inCargo} → ~${inCargo + toBuy})`);
+    }
+  }
+
+  await bot.refreshCargo();
+}
+
+/**
  * Ensure the hunter has ammo loaded. Attempts reload up to maxAttempts times.
  * Returns false if out of ammo and needs to dock for resupply.
  */
@@ -480,20 +517,55 @@ async function ensureAmmoLoaded(
 
   ctx.log("combat", `Ammo low (${bot.ammo}) — reloading...`);
 
+  // Fetch weapon modules with ammo_type from get_ship (get_status modules lack ammo_type)
+  const shipResp = await bot.exec("get_ship");
+  const rawModules: any[] = (shipResp.result as any)?.modules ?? [];
+  const weaponModules = rawModules.filter(
+    (m: any) => m.ammo_type && m.id && (m.slot_type === "weapon" || m.damage != null),
+  );
+
+  if (weaponModules.length === 0) {
+    ctx.log("combat", "No weapon modules with ammo_type found — skipping reload");
+    return bot.ammo > 0;
+  }
+
+  // Refresh cargo to get current ammo items
+  await bot.refreshCargo();
+
+  // Build reload pairs: weapon → matching cargo ammo item
+  const reloadPairs: { weapon_instance_id: string; ammo_item_id: string }[] = [];
+  for (const wep of weaponModules) {
+    const ammoItem = bot.inventory.find((item) => item.itemId === wep.ammo_type);
+    if (ammoItem) {
+      reloadPairs.push({ weapon_instance_id: wep.id, ammo_item_id: ammoItem.itemId });
+    } else {
+      ctx.log("combat", `No cargo ammo for weapon ${wep.id} (needs ${wep.ammo_type})`);
+    }
+  }
+
+  if (reloadPairs.length === 0) {
+    ctx.log("combat", "No ammo available in cargo — need to resupply at station");
+    return false;
+  }
+
   for (let i = 0; i < maxAttempts; i++) {
-    const resp = await bot.exec("reload");
-    if (resp.error) {
-      const msg = resp.error.message.toLowerCase();
-      if (msg.includes("full") || msg.includes("already")) {
-        await bot.refreshStatus();
-        return true;
+    let anySuccess = false;
+    for (const pair of reloadPairs) {
+      const resp = await bot.exec("reload", pair);
+      if (resp.error) {
+        const msg = resp.error.message.toLowerCase();
+        if (msg.includes("full") || msg.includes("already")) {
+          anySuccess = true;
+          continue;
+        }
+        if (msg.includes("no ammo") || msg.includes("no_ammo") || msg.includes("empty")) {
+          ctx.log("combat", "No ammo available — need to resupply at station");
+          return false;
+        }
+        ctx.log("combat", `Reload attempt ${i + 1} failed: ${resp.error.message}`);
+      } else {
+        anySuccess = true;
       }
-      if (msg.includes("no ammo") || msg.includes("no_ammo") || msg.includes("empty")) {
-        ctx.log("combat", "No ammo available — need to resupply at station");
-        return false;
-      }
-      ctx.log("combat", `Reload attempt ${i + 1} failed: ${resp.error.message}`);
-      continue;
     }
 
     await bot.refreshStatus();
@@ -501,6 +573,7 @@ async function ensureAmmoLoaded(
       ctx.log("combat", `Reloaded — ammo: ${bot.ammo}`);
       return true;
     }
+    if (!anySuccess) continue;
   }
 
   ctx.log("combat", `Could not reload after ${maxAttempts} attempts — ammo: ${bot.ammo}`);
@@ -532,6 +605,18 @@ export const hunterRoutine: Routine = async function* (ctx: RoutineContext) {
     yield "get_status";
     await bot.refreshStatus();
     logStatus(ctx);
+
+    // ── Weapon + ammo check ──
+    if (bot.ammo === 0 && !bot.docked) {
+      ctx.log("combat", "⚠️  Ammo is 0 — docking to buy ammo before patrol...");
+      yield "dock_for_ammo";
+      const docked = await navigateToSafeStation(ctx, safetyOpts);
+      if (docked) {
+        await buyAmmoIfNeeded(ctx);
+        await ensureAmmoLoaded(ctx, settings.ammoThreshold, settings.maxReloadAttempts);
+        await ensureUndocked(ctx);
+      }
+    }
 
     // ── Fuel check ──
     yield "fuel_check";
@@ -779,6 +864,9 @@ export const hunterRoutine: Routine = async function* (ctx: RoutineContext) {
 
       yield "repair";
       await repairShip(ctx);
+
+      yield "buy_ammo";
+      await buyAmmoIfNeeded(ctx);
 
       yield "reload";
       await ensureAmmoLoaded(ctx, settings.ammoThreshold, settings.maxReloadAttempts);

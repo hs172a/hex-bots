@@ -26,6 +26,77 @@ import {
 
 /** Number of mine attempts per resource POI to sample ores. */
 const SAMPLE_MINES = 5;
+
+// ── Build Goal helpers ────────────────────────────────────────
+
+interface GoalMaterial {
+  item_id: string;
+  item_name: string;
+  quantity_needed: number;
+  quantity_have: number;
+}
+
+interface BuildGoalSettings {
+  type: string;
+  target_id: string;
+  target_name: string;
+  assigned_bot: string;
+  status: string;
+  materials: GoalMaterial[];
+}
+
+/**
+ * When docked at a station, buy any goal materials available on the market.
+ * Only runs if `settings.buildGoal.assigned_bot` matches this bot.
+ */
+async function checkAndBuyGoalMaterials(
+  ctx: RoutineContext,
+  marketItems: Array<Record<string, unknown>>,
+  poiName: string,
+): Promise<void> {
+  const { bot } = ctx;
+  const settings = readSettings() as Record<string, unknown>;
+  const goal = settings.buildGoal as BuildGoalSettings | undefined;
+  if (!goal?.materials?.length) return;
+  if (goal.assigned_bot && goal.assigned_bot !== bot.username) return;
+  if (goal.status === "paused" || goal.status === "done") return;
+
+  // Build sell-market lookup: item_id → cheapest entry with stock
+  const marketMap: Record<string, { sell_price: number; sell_quantity: number }> = {};
+  for (const item of marketItems) {
+    const id = (item.item_id as string) || "";
+    const sellQty = Number(item.sell_quantity ?? item.quantity ?? 0);
+    const sellPrice = Number(item.sell_price ?? item.price ?? 0);
+    if (id && sellQty > 0 && (!marketMap[id] || sellPrice < marketMap[id].sell_price)) {
+      marketMap[id] = { sell_price: sellPrice, sell_quantity: sellQty };
+    }
+  }
+
+  for (const task of goal.materials) {
+    const needed = task.quantity_needed - (task.quantity_have ?? 0);
+    if (needed <= 0) continue;
+    const mkt = marketMap[task.item_id];
+    if (!mkt) continue;
+
+    await bot.refreshStatus();
+    const cargoFree = bot.cargoMax > 0 ? bot.cargoMax - bot.cargo : 0;
+    if (cargoFree <= 0) {
+      ctx.log("info", `[Build Goal] Cargo full — pausing buys at ${poiName}`);
+      break;
+    }
+
+    const toBuy = Math.min(needed, mkt.sell_quantity, cargoFree);
+    if (toBuy <= 0) continue;
+
+    const buyResp = await bot.exec("buy", { item_id: task.item_id, quantity: toBuy });
+    if (!buyResp.error) {
+      ctx.log("trade", `[Build Goal] Bought ${toBuy}x ${task.item_name} at ${poiName} (${mkt.sell_price.toLocaleString()} cr/ea)`);
+    } else {
+      ctx.log("info", `[Build Goal] Buy ${task.item_name} failed: ${buyResp.error.message}`);
+    }
+  }
+}
+
 /** Minimum fuel % before heading back to refuel. */
 const FUEL_SAFETY_PCT = 40;
 /** Minimum fuel % required before attempting a system jump. */
@@ -548,17 +619,22 @@ async function* scanStation(
   let missionCount = 0;
 
   const marketResp = await bot.exec("view_market");
+  let marketItemsList: Array<Record<string, unknown>> = [];
   if (marketResp.result && typeof marketResp.result === "object") {
     mapStore.updateMarket(systemId, poi.id, marketResp.result as Record<string, unknown>);
     const result = marketResp.result as Record<string, unknown>;
-    const items = (
+    marketItemsList = (
       Array.isArray(result) ? result :
       Array.isArray(result.items) ? result.items :
       Array.isArray(result.market) ? result.market :
       []
-    ) as unknown[];
-    marketCount = items.length;
+    ) as Array<Record<string, unknown>>;
+    marketCount = marketItemsList.length;
   }
+
+  // Buy build goal materials if this bot is assigned and they're on the market
+  yield `goal_buy_${poi.id}`;
+  await checkAndBuyGoalMaterials(ctx, marketItemsList, poi.name);
 
   const missionsResp = await bot.exec("get_missions");
   if (missionsResp.result && typeof missionsResp.result === "object") {
@@ -603,12 +679,25 @@ async function* scanStation(
       []
     ) as Array<Record<string, unknown>>;
 
+    // Build set of item_ids needed by active build goal — don't deposit those
+    const goalSettings = readSettings() as Record<string, unknown>;
+    const activeGoal = goalSettings.buildGoal as BuildGoalSettings | undefined;
+    const goalItemIds = new Set<string>(
+      (activeGoal?.assigned_bot === bot.username &&
+       activeGoal?.status !== "done" &&
+       activeGoal?.status !== "paused")
+        ? (activeGoal.materials ?? []).map((m: GoalMaterial) => m.item_id)
+        : [],
+    );
+
     for (const item of cargoItems) {
       const itemId = (item.item_id as string) || "";
       const quantity = (item.quantity as number) || 0;
       if (!itemId || quantity <= 0) continue;
       const lower = itemId.toLowerCase();
       if (lower.includes("fuel") || lower.includes("energy_cell")) continue;
+      // Keep goal materials in cargo — don't deposit them
+      if (goalItemIds.has(itemId)) continue;
 
       const displayName = (item.name as string) || itemId;
       await bot.exec("deposit_items", { item_id: itemId, quantity });

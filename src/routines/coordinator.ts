@@ -190,29 +190,27 @@ function parseRecipes(data: unknown): Recipe[] {
   }).filter(r => r.recipe_id);
 }
 
-/** Fetch all recipes from the catalog API, handling pagination. */
+/** Return recipes from the catalogStore cache; fetch from API only when cache is empty. */
 async function fetchAllRecipes(ctx: RoutineContext): Promise<Recipe[]> {
-  const { bot } = ctx;
-  const all: Recipe[] = [];
-  let page = 1;
-
-  while (true) {
-    const resp = await bot.exec("catalog", { type: "recipes", page, page_size: 50 });
-    if (resp.error) {
-      ctx.log("error", `Catalog fetch failed (page ${page}): ${resp.error.message}`);
-      break;
-    }
-
-    const r = resp.result as Record<string, unknown> | undefined;
-    const totalPages = (r?.total_pages as number) || 1;
-    const parsed = parseRecipes(resp.result);
-    all.push(...parsed);
-
-    if (page >= totalPages || parsed.length === 0) break;
-    page++;
+  const cached = Object.values(catalogStore.getAll().recipes);
+  if (cached.length > 0) {
+    const recipes = parseRecipes(cached);
+    ctx.log("info", `${recipes.length} recipes loaded from cache`);
+    return recipes;
   }
 
-  return all;
+  // Cache empty — populate catalogStore (handles all 4 types + disk persistence)
+  ctx.log("info", "Recipe cache empty, fetching from API...");
+  try {
+    await catalogStore.fetchAll(ctx.api);
+  } catch (err) {
+    ctx.log("error", `Catalog fetch failed: ${err}`);
+    return [];
+  }
+  const fresh = Object.values(catalogStore.getAll().recipes);
+  const recipes = parseRecipes(fresh);
+  ctx.log("info", `${recipes.length} recipes fetched and cached`);
+  return recipes;
 }
 
 // ── Demand analysis helpers ──────────────────────────────────
