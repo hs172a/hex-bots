@@ -12,6 +12,7 @@ import { gasHarvesterRoutine } from "./routines/gas_harvester.js";
 import { iceHarvesterRoutine } from "./routines/ice_harvester.js";
 import { salvagerRoutine } from "./routines/salvager.js";
 import { hunterRoutine } from "./routines/hunter.js";
+import { aiRoutine } from "./routines/ai.js";
 import { factionTraderRoutine } from "./routines/faction_trader.js";
 import { cleanupRoutine } from "./routines/cleanup.js";
 import { gathererRoutine } from "./routines/gatherer.js";
@@ -36,6 +37,7 @@ const bots: Map<string, Bot> = new Map();
 let server: WebServer;
 
 const ROUTINES: Record<string, { name: string; fn: Routine }> = {
+  ai: { name: "AI", fn: aiRoutine },
   cleanup: { name: "Cleanup", fn: cleanupRoutine },
   coordinator: { name: "Coordinator", fn: coordinatorRoutine },
   crafter: { name: "Crafter", fn: crafterRoutine },
@@ -184,8 +186,9 @@ async function handleStart(action: WebAction): Promise<WebActionResult> {
   bot.start(routineKey, routine.fn, startOpts).then(() => {
     server.logSystem(`Bot ${bot.username} routine finished.`);
     server.clearBotAssignment(botName);
-  }).catch((err) => {
-    server.logSystem(`Bot ${bot.username} crashed: ${err}`);
+  }).catch((err: unknown) => {
+    const msg = err instanceof Error ? err.message : String(err);
+    server.logSystem(`Bot ${bot.username} stopped with error: ${msg}`);
     server.clearBotAssignment(botName);
   });
 
@@ -286,8 +289,7 @@ async function handleRegister(action: WebAction): Promise<WebActionResult> {
     return { ok: false, error: "No password returned" };
   }
 
-  server.logSystem(`Registration successful! PASSWORD: ${password}`);
-  server.logSystem("SAVE THIS PASSWORD! It cannot be recovered.");
+  server.logSystem(`Registration successful for ${username} — password returned to dashboard only.`);
 
   const session = new SessionManager(username, BASE_DIR);
   session.saveCredentials({ username, password, empire: selectedEmpire, playerId });

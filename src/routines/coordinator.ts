@@ -1,6 +1,7 @@
 import type { Routine, RoutineContext } from "../bot.js";
 import { mapStore } from "../mapstore.js";
 import { catalogStore } from "../catalogstore.js";
+import { cachedFetch } from "../httpcache.js";
 import {
   ensureDocked,
   tryRefuel,
@@ -91,16 +92,16 @@ const GLOBAL_MARKET_URL = "https://game.spacemolt.com/api/market";
 async function fetchGlobalMarket(
   log: (tag: string, msg: string) => void,
 ): Promise<GlobalMarketData | null> {
+  let raw: unknown;
   try {
-    const resp = await fetch(GLOBAL_MARKET_URL, {
+    raw = await cachedFetch(GLOBAL_MARKET_URL, 5 * 60_000, { // 5min fallback TTL
       signal: AbortSignal.timeout(10_000),
     });
-    if (!resp.ok) {
-      log("error", `Global market fetch failed: HTTP ${resp.status}`);
-      return null;
-    }
-
-    const raw = await resp.json() as unknown;
+  } catch (err) {
+    log("error", `Global market fetch failed: ${err instanceof Error ? err.message : err}`);
+    return null;
+  }
+  try {
     const entries: GlobalMarketEntry[] = Array.isArray(raw)
       ? (raw as GlobalMarketEntry[])
       : Array.isArray((raw as Record<string, unknown>).items)

@@ -580,7 +580,11 @@ export class Bot {
     // Only login if we don't already have an active session
     if (!this.api.getSession()) {
       const loggedIn = await this.login();
-      if (!loggedIn) return;
+      if (!loggedIn) {
+        // login() already set _state = "error" and _error; throw so the caller's
+        // .catch() handler fires instead of .then() (which would log "routine finished").
+        throw new Error(this._error || "Login failed");
+      }
     }
 
     this.log("system", `Starting routine: ${routineName}`);
@@ -606,7 +610,9 @@ export class Bot {
       this._error = msg;
       this.log("error", `Routine error: ${msg}`);
       this._state = "error";
-      return;
+      // Re-throw so the caller's .catch() handler fires, ensuring the bot
+      // assignment is cleared and "stopped with error" is logged rather than "finished".
+      throw err;
     }
 
     this._state = "idle";
@@ -646,19 +652,38 @@ export class Bot {
     if (!resp.result || typeof resp.result !== "object") return;
 
     const r = resp.result as Record<string, unknown>;
-    // Skills may be at top level or nested under .skills
-    const skills = (
-      Array.isArray(r) ? r :
-      Array.isArray(r.skills) ? r.skills :
-      []
-    ) as Array<Record<string, unknown>>;
 
-    for (const skill of skills) {
-      const id = (skill.skill_id as string) || (skill.id as string) || (skill.name as string) || "";
-      const name = (skill.name as string) || id;
-      const level = (skill.level as number) ?? 0;
-      if (!id) continue;
+    // Build a unified list from various API shapes:
+    //   1. Array at top level: [{ skill_id, name, level }, ...]
+    //   2. Array nested under .skills: { skills: [...] }
+    //   3. Dict keyed by skill_id: { crafting_basic: { level: 7, name: "..." }, ... }
+    //   4. Dict keyed by skill_id with numeric values: { crafting_basic: 7, ... }
+    const entries: Array<{ id: string; name: string; level: number }> = [];
 
+    const rawArray: unknown[] = Array.isArray(r) ? r : Array.isArray(r.skills) ? r.skills as unknown[] : [];
+
+    if (rawArray.length > 0) {
+      for (const skill of rawArray as Array<Record<string, unknown>>) {
+        const id = (skill.skill_id as string) || (skill.id as string) || (skill.name as string) || "";
+        const name = (skill.name as string) || id;
+        const level = (skill.level as number) ?? 0;
+        if (id) entries.push({ id, name, level });
+      }
+    } else {
+      // Dict format
+      for (const [key, val] of Object.entries(r)) {
+        if (typeof val === "number") {
+          entries.push({ id: key, name: key, level: val });
+        } else if (val && typeof val === "object") {
+          const s = val as Record<string, unknown>;
+          const level = (s.level as number) ?? (s.current_level as number) ?? 0;
+          const name = (s.name as string) || key;
+          entries.push({ id: key, name, level });
+        }
+      }
+    }
+
+    for (const { id, name, level } of entries) {
       const prev = this.skillLevels.get(id);
       if (prev !== undefined && level > prev) {
         this.log("skill", `LEVEL UP! ${name}: ${prev} -> ${level}`);

@@ -382,6 +382,8 @@ async function grindCraftingXP(
       });
       if (!isAllowed && !isPrereq) continue;
     }
+    // Skip recipes with no ingredients — they grant no skill XP
+    if (recipe.components.length === 0) continue;
     if (!hasMaterialsAnywhere(ctx, recipe)) continue;
     // Only grind recipes we have the skill for
     if (!canCraftSkillwise(ctx, recipe).ok) continue;
@@ -566,7 +568,11 @@ export const crafterRoutine: Routine = async function* (ctx: RoutineContext) {
       if (!skillCheck.ok) {
         // Skill too low — grind XP on simpler recipes instead of pulling materials
         const allowedIds = new Set(settings.craftLimits.map(cl => cl.recipeId));
-        const xpCrafted = await grindCraftingXP(ctx, recipes, recipeIndex, allowedIds);
+        let xpCrafted = await grindCraftingXP(ctx, recipes, recipeIndex, allowedIds);
+        if (xpCrafted.length === 0) {
+          // Fallback: search all recipes for anything we have ingredients for right now
+          xpCrafted = await grindCraftingXP(ctx, recipes, recipeIndex);
+        }
         if (xpCrafted.length > 0) {
           skillSummary.push(`${recipe.name} (${skillCheck.reason}, ground ${xpCrafted.join(", ")} for XP)`);
         } else {
@@ -662,7 +668,11 @@ export const crafterRoutine: Routine = async function* (ctx: RoutineContext) {
       // ── Skill too low: try grinding XP on configured recipes only ──
       if (hitSkillBlock && bot.state === "running") {
         const allowedIds = new Set(settings.craftLimits.map(cl => cl.recipeId));
-        const xpCrafted = await grindCraftingXP(ctx, recipes, recipeIndex, allowedIds);
+        let xpCrafted = await grindCraftingXP(ctx, recipes, recipeIndex, allowedIds);
+        if (xpCrafted.length === 0) {
+          // Fallback: search all recipes for anything we have ingredients for right now
+          xpCrafted = await grindCraftingXP(ctx, recipes, recipeIndex);
+        }
         if (xpCrafted.length > 0) {
           skillSummary.push(`${recipe.name} (skill too low, ground ${xpCrafted.join(", ")} for XP)`);
         } else {

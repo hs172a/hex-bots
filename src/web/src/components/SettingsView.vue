@@ -540,6 +540,85 @@
         </div>
         <div class="save-bar"><button @click="saveSalvager" class="btn btn-primary">Save Settings</button></div>
       </div>
+
+      <!-- Hunter Settings -->
+      <div v-else-if="activeTab === 'hunter'">
+        <h3 class="text-[15px] font-semibold text-space-text-bright mb-1">Hunter Settings</h3>
+        <p class="text-xs text-space-text-dim mb-5">Configure PvP/PvE hunter bots. They patrol lawless systems, engage targets, and respond to faction combat alerts.</p>
+
+        <div class="setting-row">
+          <div><div class="text-sm text-space-text">Patrol System</div><div class="text-xs text-space-text-dim mt-0.5">Fixed system to patrol. Leave empty to use current system.</div></div>
+          <select v-model="hunterForm.system" class="input text-sm min-w-[200px]">
+            <option value="">(current system)</option>
+            <option v-for="sys in botStore.knownSystems" :key="sys.id" :value="sys.id">{{ sys.name || sys.id }}</option>
+          </select>
+        </div>
+        <div class="setting-row">
+          <div><div class="text-sm text-space-text">Refuel Threshold (%)</div><div class="text-xs text-space-text-dim mt-0.5">Return to dock when fuel drops below this %.</div></div>
+          <input type="number" v-model.number="hunterForm.refuelThreshold" min="10" max="80" class="input text-sm w-24" />
+        </div>
+        <div class="setting-row">
+          <div><div class="text-sm text-space-text">Repair Threshold (%)</div><div class="text-xs text-space-text-dim mt-0.5">Return to dock when hull drops below this %.</div></div>
+          <input type="number" v-model.number="hunterForm.repairThreshold" min="10" max="80" class="input text-sm w-24" />
+        </div>
+        <div class="setting-row">
+          <div><div class="text-sm text-space-text">Flee Threshold (%)</div><div class="text-xs text-space-text-dim mt-0.5">Flee combat when hull drops below this %.</div></div>
+          <input type="number" v-model.number="hunterForm.fleeThreshold" min="5" max="60" class="input text-sm w-24" />
+        </div>
+        <div class="setting-row">
+          <div><div class="text-sm text-space-text">Ammo Threshold (%)</div><div class="text-xs text-space-text-dim mt-0.5">Resupply when ammo drops below this %.</div></div>
+          <input type="number" v-model.number="hunterForm.ammoThreshold" min="0" max="80" class="input text-sm w-24" />
+        </div>
+        <div class="setting-row">
+          <div><div class="text-sm text-space-text">Max Reload Attempts</div><div class="text-xs text-space-text-dim mt-0.5">Give up reloading ammo after this many failed attempts.</div></div>
+          <input type="number" v-model.number="hunterForm.maxReloadAttempts" min="1" max="10" class="input text-sm w-24" />
+        </div>
+        <div class="setting-row">
+          <div><div class="text-sm text-space-text">Faction Alert Response Range</div><div class="text-xs text-space-text-dim mt-0.5">Max jumps to respond to a faction combat alert. Set 0 to disable.</div></div>
+          <input type="number" v-model.number="hunterForm.responseRange" min="0" max="10" class="input text-sm w-24" />
+        </div>
+        <div class="setting-row">
+          <div><div class="text-sm text-space-text">NPCs Only</div><div class="text-xs text-space-text-dim mt-0.5">Only engage NPC ships, never players.</div></div>
+          <input type="checkbox" v-model="hunterForm.onlyNPCs" class="w-4 h-4" />
+        </div>
+        <div class="setting-row">
+          <div><div class="text-sm text-space-text">Auto Cloak</div><div class="text-xs text-space-text-dim mt-0.5">Activate cloak while patrolling (if ship has cloak module).</div></div>
+          <input type="checkbox" v-model="hunterForm.autoCloak" class="w-4 h-4" />
+        </div>
+        <div class="save-bar"><button @click="saveHunter" class="btn btn-primary">Save Settings</button></div>
+      </div>
+
+      <!-- AI Settings -->
+      <div v-else-if="activeTab === 'ai'">
+        <h3 class="text-[15px] font-semibold text-space-text-bright mb-1">AI Settings</h3>
+        <p class="text-xs text-space-text-dim mb-5">Configure the LLM used by the AI routine. Leave fields empty to use environment variables (OPENAI_COMPAT_BASE_URL, OPENAI_COMPAT_API_KEY, AI_MODEL) or Ollama defaults.</p>
+
+        <div class="setting-row">
+          <div><div class="text-sm text-space-text">Base URL</div><div class="text-xs text-space-text-dim mt-0.5">OpenAI-compatible endpoint, e.g. https://api.openai.com/v1 or http://localhost:11434/v1</div></div>
+          <input type="text" v-model="aiForm.baseUrl" placeholder="http://localhost:11434/v1" class="input text-sm min-w-[260px]" />
+        </div>
+        <div class="setting-row">
+          <div><div class="text-sm text-space-text">API Key</div><div class="text-xs text-space-text-dim mt-0.5">Bearer token. Use "ollama" for local Ollama.</div></div>
+          <input type="password" v-model="aiForm.apiKey" placeholder="ollama" class="input text-sm min-w-[200px]" />
+        </div>
+        <div class="setting-row">
+          <div><div class="text-sm text-space-text">Model</div><div class="text-xs text-space-text-dim mt-0.5">Model name, e.g. llama3.2, gpt-4o-mini</div></div>
+          <input type="text" v-model="aiForm.model" placeholder="llama3.2" class="input text-sm min-w-[200px]" />
+        </div>
+        <div class="setting-row">
+          <div><div class="text-sm text-space-text">Cycle Interval (seconds)</div><div class="text-xs text-space-text-dim mt-0.5">Sleep between AI decision cycles.</div></div>
+          <input type="number" v-model.number="aiForm.cycleIntervalSec" min="5" max="300" class="input text-sm w-24" />
+        </div>
+        <div class="setting-row">
+          <div><div class="text-sm text-space-text">Max Tool Calls Per Cycle</div><div class="text-xs text-space-text-dim mt-0.5">Safety cap on tool calls per cycle.</div></div>
+          <input type="number" v-model.number="aiForm.maxToolCallsPerCycle" min="5" max="100" class="input text-sm w-24" />
+        </div>
+        <div class="setting-row">
+          <div><div class="text-sm text-space-text">Captain's Log Every N Cycles</div><div class="text-xs text-space-text-dim mt-0.5">How often the AI writes a captain's log entry.</div></div>
+          <input type="number" v-model.number="aiForm.captainsLogEveryN" min="1" max="20" class="input text-sm w-24" />
+        </div>
+        <div class="save-bar"><button @click="saveAi" class="btn btn-primary">Save Settings</button></div>
+      </div>
     </div>
   </div>
 </template>
@@ -562,6 +641,8 @@ const settingsTabs = [
   { id: 'gas_harvester', name: 'GasHarvester' },
   { id: 'ice_harvester', name: 'IceHarvester' },
   { id: 'salvager', name: 'Salvager' },
+  { id: 'hunter', name: 'Hunter' },
+  { id: 'ai', name: 'AI' },
   { id: 'cleanup', name: 'Cleanup' },
   { id: 'gatherer', name: 'Gatherer' },
 ];
@@ -757,6 +838,29 @@ const iceForm = ref({
   repairThreshold: 40,
 });
 
+// ── Hunter form ─────────────────────────────────────────────
+const hunterForm = ref({
+  system: '',
+  refuelThreshold: 40,
+  repairThreshold: 30,
+  fleeThreshold: 20,
+  ammoThreshold: 20,
+  maxReloadAttempts: 3,
+  responseRange: 3,
+  onlyNPCs: true,
+  autoCloak: false,
+});
+
+// ── AI form ───────────────────────────────────────────────────
+const aiForm = ref({
+  baseUrl: '',
+  apiKey: '',
+  model: '',
+  cycleIntervalSec: 10,
+  maxToolCallsPerCycle: 40,
+  captainsLogEveryN: 5,
+});
+
 // ── Salvager form ───────────────────────────────────────────
 const salvagerForm = ref({
   system: '',
@@ -882,6 +986,27 @@ watch(() => botStore.settings, (s) => {
     salvagerForm.value.refuelThreshold = sv.refuelThreshold ?? 50;
     salvagerForm.value.repairThreshold = sv.repairThreshold ?? 40;
   }
+  if (s.hunter) {
+    const h = s.hunter;
+    hunterForm.value.system = h.system || '';
+    hunterForm.value.refuelThreshold = h.refuelThreshold ?? 40;
+    hunterForm.value.repairThreshold = h.repairThreshold ?? 30;
+    hunterForm.value.fleeThreshold = h.fleeThreshold ?? 20;
+    hunterForm.value.ammoThreshold = h.ammoThreshold ?? 20;
+    hunterForm.value.maxReloadAttempts = h.maxReloadAttempts ?? 3;
+    hunterForm.value.responseRange = h.responseRange ?? 3;
+    hunterForm.value.onlyNPCs = h.onlyNPCs !== false;
+    hunterForm.value.autoCloak = h.autoCloak === true;
+  }
+  if (s.ai) {
+    const a = s.ai;
+    aiForm.value.baseUrl = a.baseUrl || '';
+    aiForm.value.apiKey = a.apiKey || '';
+    aiForm.value.model = a.model || '';
+    aiForm.value.cycleIntervalSec = a.cycleIntervalSec ?? 10;
+    aiForm.value.maxToolCallsPerCycle = a.maxToolCallsPerCycle ?? 40;
+    aiForm.value.captainsLogEveryN = a.captainsLogEveryN ?? 5;
+  }
   // Per-bot ore overrides
   for (const bot of botStore.bots) {
     if (s[bot.username]?.targetOre !== undefined) {
@@ -998,6 +1123,14 @@ function saveSalvager() {
     refuelThreshold: salvagerForm.value.refuelThreshold,
     repairThreshold: salvagerForm.value.repairThreshold,
   });
+}
+
+function saveHunter() {
+  botStore.saveSettings('hunter', { ...hunterForm.value });
+}
+
+function saveAi() {
+  botStore.saveSettings('ai', { ...aiForm.value });
 }
 </script>
 

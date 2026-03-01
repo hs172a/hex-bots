@@ -1857,6 +1857,8 @@
         <div class="sidebar-item" onclick="switchSettingsTab('gas_harvester')">GasHarvester</div>
         <div class="sidebar-item" onclick="switchSettingsTab('ice_harvester')">IceHarvester</div>
         <div class="sidebar-item" onclick="switchSettingsTab('salvager')">Salvager</div>
+        <div class="sidebar-item" onclick="switchSettingsTab('hunter')">Hunter</div>
+        <div class="sidebar-item" onclick="switchSettingsTab('ai')">AI</div>
         <div class="sidebar-item" onclick="switchSettingsTab('cleanup')">Cleanup</div>
       </div>
       <div class="settings-panel" id="settingsContent">
@@ -3160,6 +3162,7 @@ let autoRouteInProgress = false;
 
 function mcAutoRoute() {
   if (!profileBot) return;
+  const routeBot = profileBot; // capture now — bot switches must not redirect jumps
   const target = val('mc-jump-sys');
   if (!target) return;
   if (autoRouteInProgress) {
@@ -3174,7 +3177,7 @@ function mcAutoRoute() {
   const ts = new Date().toLocaleTimeString('en-US', { hour12: false });
   logResponse(`<span class="resp-cmd">${ts} > find_route to ${esc(target)}</span>`);
 
-  sendExec(profileBot, 'find_route', { target_system: target }, async (result) => {
+  sendExec(routeBot, 'find_route', { target_system: target }, async (result) => {
     if (!result.ok || !result.data) {
       logResponse(`<span class="resp-err">Route failed: ${esc(result.error || 'no route data')}</span>`);
       autoRouteInProgress = false;
@@ -3193,7 +3196,7 @@ function mcAutoRoute() {
 
     // Route is an array of system IDs — first entry is current system, skip it
     const allHops = route.map(h => typeof h === 'string' ? h : (h.system_id || h.id || h));
-    const bot = getProfileBot();
+    const bot = bots.find(b => b.username === routeBot);
     const currentSys = bot ? (bot.system || '') : '';
     const hops = allHops[0] === currentSys ? allHops.slice(1) : allHops;
     logResponse(`<span class="resp-ok">Route: ${allHops.map(h => esc(resolveLocation(String(h)) || String(h))).join(' → ')} (${hops.length} jump${hops.length !== 1 ? 's' : ''})</span>`);
@@ -3207,7 +3210,7 @@ function mcAutoRoute() {
       logResponse(`<span class="resp-cmd">${hopTs} > jump ${esc(hop)} (${i + 1}/${hops.length})</span>`);
 
       const jumpOk = await new Promise(resolve => {
-        sendExec(profileBot, 'jump', { target_system: hop }, (jr) => {
+        sendExec(routeBot, 'jump', { target_system: hop }, (jr) => {
           if (jr.ok) {
             logResponse(`<span class="resp-ok">Arrived in ${esc(hop)}</span>`);
             resolve(true);
@@ -3232,8 +3235,8 @@ function mcAutoRoute() {
 
     // Refresh system data for new location
     setTimeout(() => {
-      if (profileBot) {
-        fetchSystemData(profileBot);
+      fetchSystemData(routeBot);
+      if (profileBot === routeBot) {
         renderProfileSidebar();
         renderManualControls();
       }
@@ -4650,6 +4653,10 @@ function renderSettingsPanel() {
     renderIceHarvesterSettings(panel);
   } else if (activeSettingsTab === 'salvager') {
     renderSalvagerSettings(panel);
+  } else if (activeSettingsTab === 'hunter') {
+    renderHunterSettings(panel);
+  } else if (activeSettingsTab === 'ai') {
+    renderAiSettings(panel);
   } else if (activeSettingsTab === 'cleanup') {
     renderCleanupSettings(panel);
   }
@@ -7661,6 +7668,183 @@ function renderSalvagerSettings(panel) {
       <button class="primary" onclick="saveSalvagerSettings()">Save Settings</button>
     </div>
   `;
+}
+
+// ── AI ──────────────────────────────────────────────────────
+function renderAiSettings(panel) {
+  const a = settings.ai || {};
+  const baseUrl = a.baseUrl || '';
+  const apiKey = a.apiKey || '';
+  const model = a.model || '';
+  const cycleIntervalSec = a.cycleIntervalSec ?? 10;
+  const maxToolCallsPerCycle = a.maxToolCallsPerCycle ?? 40;
+  const captainsLogEveryN = a.captainsLogEveryN ?? 5;
+
+  const inputStyle = `style="background:var(--bg-input);color:var(--text);border:1px solid var(--border);border-radius:4px;padding:5px 8px;width:100%;box-sizing:border-box"`;
+
+  panel.innerHTML = `
+    <h3>AI Settings</h3>
+    <div class="settings-desc">Configure the LLM used by the AI routine. Values here override environment variables. Leave blank to use env vars (OPENAI_COMPAT_BASE_URL, OPENAI_COMPAT_API_KEY, AI_MODEL) or Ollama defaults.</div>
+
+    <div class="setting-row">
+      <div>
+        <div class="setting-label">Base URL</div>
+        <div class="setting-hint">OpenAI-compatible endpoint base URL, e.g. https://api.openai.com/v1 or http://localhost:11434/v1</div>
+      </div>
+      <input type="text" id="set-ai-baseUrl" value="${esc(baseUrl)}" placeholder="http://localhost:11434/v1" ${inputStyle}>
+    </div>
+
+    <div class="setting-row">
+      <div>
+        <div class="setting-label">API Key</div>
+        <div class="setting-hint">Bearer token for the LLM endpoint. Use "ollama" for local Ollama.</div>
+      </div>
+      <input type="password" id="set-ai-apiKey" value="${esc(apiKey)}" placeholder="ollama" ${inputStyle}>
+    </div>
+
+    <div class="setting-row">
+      <div>
+        <div class="setting-label">Model</div>
+        <div class="setting-hint">Model name to use, e.g. llama3.2, gpt-4o-mini</div>
+      </div>
+      <input type="text" id="set-ai-model" value="${esc(model)}" placeholder="llama3.2" ${inputStyle}>
+    </div>
+
+    <div class="setting-row">
+      <div>
+        <div class="setting-label">Cycle Interval (seconds)</div>
+        <div class="setting-hint">How long to sleep between AI decision cycles.</div>
+      </div>
+      <input type="number" id="set-ai-cycleIntervalSec" min="5" max="300" value="${cycleIntervalSec}">
+    </div>
+
+    <div class="setting-row">
+      <div>
+        <div class="setting-label">Max Tool Calls Per Cycle</div>
+        <div class="setting-hint">Safety cap on tool calls per cycle to prevent runaway loops.</div>
+      </div>
+      <input type="number" id="set-ai-maxToolCallsPerCycle" min="5" max="100" value="${maxToolCallsPerCycle}">
+    </div>
+
+    <div class="setting-row">
+      <div>
+        <div class="setting-label">Captain's Log Every N Cycles</div>
+        <div class="setting-hint">How often the AI writes a captain's log entry.</div>
+      </div>
+      <input type="number" id="set-ai-captainsLogEveryN" min="1" max="20" value="${captainsLogEveryN}">
+    </div>
+
+    <div class="settings-save-bar">
+      <button class="primary" onclick="saveAiSettings()">Save Settings</button>
+    </div>
+  `;
+}
+
+function saveAiSettings() {
+  const s = {
+    baseUrl: document.getElementById('set-ai-baseUrl').value.trim(),
+    apiKey: document.getElementById('set-ai-apiKey').value.trim(),
+    model: document.getElementById('set-ai-model').value.trim(),
+    cycleIntervalSec: parseInt(document.getElementById('set-ai-cycleIntervalSec').value) || 10,
+    maxToolCallsPerCycle: parseInt(document.getElementById('set-ai-maxToolCallsPerCycle').value) || 40,
+    captainsLogEveryN: parseInt(document.getElementById('set-ai-captainsLogEveryN').value) || 5,
+  };
+  send({ type: 'saveSettings', routine: 'ai', settings: s });
+  settings.ai = s;
+}
+
+// ── Hunter ──────────────────────────────────────────────────
+function renderHunterSettings(panel) {
+  const h = settings.hunter || {};
+  const currentSystem = h.system || '';
+  const refuelThreshold = h.refuelThreshold ?? 40;
+  const repairThreshold = h.repairThreshold ?? 30;
+  const fleeThreshold = h.fleeThreshold ?? 20;
+  const onlyNPCs = h.onlyNPCs !== false;
+  const responseRange = h.responseRange ?? 3;
+
+  const systemOpts = ['<option value="">(auto — nearest low-sec)</option>'];
+  for (const sys of knownSystems) {
+    const sel = sys.id === currentSystem ? ' selected' : '';
+    const label = sys.name ? `${sys.name} (${sys.id})` : sys.id;
+    systemOpts.push(`<option value="${esc(sys.id)}"${sel}>${esc(label)}</option>`);
+  }
+  if (currentSystem && !knownSystems.find(s => s.id === currentSystem)) {
+    systemOpts.push(`<option value="${esc(currentSystem)}" selected>${esc(currentSystem)}</option>`);
+  }
+
+  panel.innerHTML = `
+    <h3>Hunter Settings</h3>
+    <div class="settings-desc">Pirate hunter bots patrol low-security systems, engage NPC pirates for bounties and loot, and respond to faction combat alerts from allied bots.</div>
+
+    <div class="setting-row">
+      <div>
+        <div class="setting-label">Patrol System</div>
+        <div class="setting-hint">Fixed system to patrol. Leave empty to auto-find the nearest huntable (low/null-sec) system.</div>
+      </div>
+      <select id="set-hunter-system">${systemOpts.join('')}</select>
+    </div>
+
+    <div class="setting-row">
+      <div>
+        <div class="setting-label">Refuel Threshold (%)</div>
+        <div class="setting-hint">Return to station to refuel when fuel drops below this percentage.</div>
+      </div>
+      <input type="number" id="set-hunter-refuelThreshold" min="20" max="80" value="${refuelThreshold}">
+    </div>
+
+    <div class="setting-row">
+      <div>
+        <div class="setting-label">Repair Threshold (%)</div>
+        <div class="setting-hint">Abort patrol and retreat when hull drops below this percentage.</div>
+      </div>
+      <input type="number" id="set-hunter-repairThreshold" min="10" max="80" value="${repairThreshold}">
+    </div>
+
+    <div class="setting-row">
+      <div>
+        <div class="setting-label">Flee Threshold (%)</div>
+        <div class="setting-hint">Emergency flee from an active fight when hull drops below this percentage.</div>
+      </div>
+      <input type="number" id="set-hunter-fleeThreshold" min="5" max="50" value="${fleeThreshold}">
+    </div>
+
+    <div class="setting-row">
+      <div>
+        <div class="setting-label">Attack Mode</div>
+        <div class="setting-hint">Target NPCs only (safe), or all players in unregulated systems.</div>
+      </div>
+      <select id="set-hunter-onlyNPCs">
+        <option value="true" ${onlyNPCs ? 'selected' : ''}>NPCs only</option>
+        <option value="false" ${!onlyNPCs ? 'selected' : ''}>All targets (PvP)</option>
+      </select>
+    </div>
+
+    <div class="setting-row">
+      <div>
+        <div class="setting-label">Faction Response Range</div>
+        <div class="setting-hint">Max jumps away to respond to allied faction combat alerts. Set 0 to disable.</div>
+      </div>
+      <input type="number" id="set-hunter-responseRange" min="0" max="10" value="${responseRange}">
+    </div>
+
+    <div class="settings-save-bar">
+      <button class="primary" onclick="saveHunterSettings()">Save Settings</button>
+    </div>
+  `;
+}
+
+function saveHunterSettings() {
+  const s = {
+    system: document.getElementById('set-hunter-system').value,
+    refuelThreshold: parseInt(document.getElementById('set-hunter-refuelThreshold').value) || 40,
+    repairThreshold: parseInt(document.getElementById('set-hunter-repairThreshold').value) || 30,
+    fleeThreshold: parseInt(document.getElementById('set-hunter-fleeThreshold').value) || 20,
+    onlyNPCs: document.getElementById('set-hunter-onlyNPCs').value !== 'false',
+    responseRange: parseInt(document.getElementById('set-hunter-responseRange').value) ?? 3,
+  };
+  send({ type: 'saveSettings', routine: 'hunter', settings: s });
+  settings.hunter = s;
 }
 
 function saveSalvagerSettings() {
