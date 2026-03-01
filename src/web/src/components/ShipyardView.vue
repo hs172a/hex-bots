@@ -16,7 +16,10 @@
             ? 'bg-[rgba(88,166,255,0.1)] border-space-accent text-space-accent' 
             : 'border-transparent text-space-text hover:bg-space-row-hover'"
         >
-          {{ bot.username }}
+          <div class="flex items-center gap-1.5 min-w-0">
+            <span v-if="(bot as any).empire" :title="empireName((bot as any).empire)" class="shrink-0 leading-none">{{ empireIcon((bot as any).empire) }}</span>
+            <span class="truncate">{{ bot.username }}</span>
+          </div>
         </div>
         <div v-if="botStore.bots.length === 0" class="text-xs text-space-text-dim italic p-2">
           No bots available
@@ -47,94 +50,221 @@
       <!-- Overview Panel -->
       <div v-else-if="activePanel === 'overview'">
         <div v-if="!shipData" class="text-xs text-space-text-dim italic py-4">Loading ship data...</div>
-        <div v-else>
-          <!-- Ship Header -->
-          <div class="flex items-center gap-3 mb-4">
-            <div>
-              <div class="text-lg font-bold text-space-text-bright">{{ shipName }}</div>
-              <div class="text-xs text-space-text-dim">{{ shipClass }} {{ shipTier ? '• Tier ' + shipTier : '' }}</div>
-            </div>
-            <div class="ml-auto text-xs text-space-yellow font-semibold">{{ fmt(botCredits) }} cr</div>
-          </div>
+        <div v-else class="space-y-3">
 
-          <!-- Ship Stats -->
-          <div class="grid grid-cols-2 gap-3 mb-4">
-            <div>
-              <div class="flex justify-between text-xs text-space-text-dim mb-0.5">
-                <span>Hull</span>
-                <span>{{ ship.hull ?? '?' }}/{{ ship.max_hull ?? ship.hull_max ?? '?' }}</span>
+          <!-- ── Header ── -->
+          <div class="bg-space-bg border border-[#21262d] rounded-md p-3">
+            <div class="flex items-start justify-between gap-3">
+              <div class="min-w-0">
+                <div class="flex items-center gap-2 mb-0.5">
+                  <span v-if="currentBot?.empire" :title="empireName(currentBot.empire)" class="text-base leading-none shrink-0">{{ empireIcon(currentBot.empire) }}</span>
+                  <div class="text-base font-bold text-space-text-bright truncate">{{ shipName }}</div>
+                </div>
+                <div class="flex items-center gap-1.5 flex-wrap text-[10px] text-space-text-dim mt-0.5">
+                  <span v-if="shipClass">{{ shipClass }}</span>
+                  <span v-if="shipTier">• Tier {{ shipTier }}</span>
+                  <span v-if="ship.scale">• Scale {{ ship.scale }}</span>
+                  <span v-if="currentShipCatalog?.empire_name">• {{ currentShipCatalog.empire_name }}</span>
+                </div>
               </div>
-              <div class="h-1.5 bg-[#21262d] rounded-full overflow-hidden">
-                <div class="h-full rounded-full transition-all" :class="hullPct > 50 ? 'bg-space-green' : hullPct > 25 ? 'bg-space-yellow' : 'bg-space-red'" :style="{ width: hullPct + '%' }"></div>
+              <div class="text-right shrink-0 space-y-1">
+                <div class="text-space-yellow font-semibold">{{ fmt(botCredits) }} cr</div>
+                <div class="flex items-center justify-end gap-1.5 flex-wrap">
+                  <span v-if="currentBot?.routine" class="text-[9px] px-1.5 py-0.5 rounded bg-[#21262d] text-space-text-dim">{{ currentBot.routine }}</span>
+                  <span class="text-[9px] px-1.5 py-0.5 rounded font-medium"
+                    :class="currentBot?.state === 'running' ? 'bg-green-900/40 text-space-green'
+                      : currentBot?.state === 'error' ? 'bg-red-900/40 text-space-red'
+                      : currentBot?.state === 'paused' ? 'bg-yellow-900/30 text-space-yellow'
+                      : 'bg-[#21262d] text-space-text-dim'">
+                    {{ currentBot?.state || 'idle' }}
+                  </span>
+                </div>
               </div>
             </div>
-            <div>
-              <div class="flex justify-between text-xs text-space-text-dim mb-0.5">
-                <span>Shield</span>
-                <span>{{ ship.shield ?? '?' }}/{{ ship.max_shield ?? ship.shield_max ?? '?' }}</span>
-              </div>
-              <div class="h-1.5 bg-[#21262d] rounded-full overflow-hidden">
-                <div class="h-full bg-space-cyan rounded-full transition-all" :style="{ width: shieldPct + '%' }"></div>
-              </div>
-            </div>
-            <div>
-              <div class="flex justify-between text-xs text-space-text-dim mb-0.5">
-                <span>Fuel</span>
-                <span>{{ ship.fuel ?? '?' }}/{{ ship.max_fuel ?? ship.fuel_max ?? '?' }}</span>
-              </div>
-              <div class="h-1.5 bg-[#21262d] rounded-full overflow-hidden">
-                <div class="h-full rounded-full transition-all" :class="fuelPct > 30 ? 'bg-space-cyan' : 'bg-space-yellow'" :style="{ width: fuelPct + '%' }"></div>
-              </div>
-            </div>
-            <div>
-              <div class="flex justify-between text-xs text-space-text-dim mb-0.5">
-                <span>Cargo</span>
-                <span>{{ ship.cargo_used ?? ship.cargo ?? 0 }}/{{ ship.cargo_capacity ?? ship.max_cargo ?? ship.cargo_max ?? 0 }}</span>
-              </div>
-              <div class="h-1.5 bg-[#21262d] rounded-full overflow-hidden">
-                <div class="h-full bg-space-yellow rounded-full transition-all" :style="{ width: cargoPct + '%' }"></div>
-              </div>
+            <div class="flex items-center gap-3 mt-2 pt-2 border-t border-[#21262d] text-[10px] flex-wrap">
+              <span class="text-space-text-dim">📍 {{ currentBot?.system || ship.system || '—' }}</span>
+              <span v-if="currentBot?.poi" class="text-space-text-dim">→ {{ currentBot.poi }}</span>
+              <span class="ml-auto px-1.5 py-0.5 rounded text-[9px] font-medium"
+                :class="isDocked ? 'bg-green-900/30 text-space-green' : 'bg-[#21262d] text-space-text-dim'">
+                {{ isDocked ? '🔒 Docked' : '🚀 In Space' }}
+              </span>
             </div>
           </div>
 
-          <!-- Ship Details Grid -->
-          <div class="grid grid-cols-[auto_1fr] gap-x-3 gap-y-1 text-xs mb-4">
-            <span class="text-space-text-dim">Speed</span><span class="text-space-text">{{ ship.speed ?? '?' }}</span>
-            <span class="text-space-text-dim">Armor</span><span class="text-space-text">{{ ship.armor ?? '?' }}</span>
-            <span v-if="ship.cpu_capacity" class="text-space-text-dim">CPU</span>
-            <span v-if="ship.cpu_capacity" class="text-space-text">{{ ship.cpu_used ?? 0 }}/{{ ship.cpu_capacity }}</span>
-            <span v-if="ship.power_capacity" class="text-space-text-dim">Power</span>
-            <span v-if="ship.power_capacity" class="text-space-text">{{ ship.power_used ?? 0 }}/{{ ship.power_capacity }}</span>
+          <!-- ── Resource Bars ── -->
+          <div class="bg-space-bg border border-[#21262d] rounded-md p-3">
+            <div class="text-[10px] font-semibold text-space-text-dim uppercase tracking-wider mb-2">Ship Status</div>
+            <div class="grid grid-cols-2 gap-x-4 gap-y-2">
+              <div>
+                <div class="flex justify-between text-[10px] mb-0.5">
+                  <span class="text-space-text-dim">❤️ Hull</span>
+                  <span :class="hullPct > 50 ? 'text-space-green' : hullPct > 25 ? 'text-space-yellow' : 'text-space-red'">
+                    {{ ship.hull ?? '?' }}/{{ ship.max_hull ?? ship.hull_max ?? '?' }} <span class="opacity-60">({{ hullPct }}%)</span>
+                  </span>
+                </div>
+                <div class="h-1.5 bg-[#21262d] rounded-full overflow-hidden">
+                  <div class="h-full rounded-full transition-all" :class="hullPct > 50 ? 'bg-space-green' : hullPct > 25 ? 'bg-space-yellow' : 'bg-space-red'" :style="{ width: hullPct + '%' }"></div>
+                </div>
+              </div>
+              <div>
+                <div class="flex justify-between text-[10px] mb-0.5">
+                  <span class="text-space-text-dim">🔵 Shield</span>
+                  <span class="text-space-cyan">{{ ship.shield ?? '?' }}/{{ ship.max_shield ?? ship.shield_max ?? '?' }} <span class="opacity-60">({{ shieldPct }}%)</span></span>
+                </div>
+                <div class="h-1.5 bg-[#21262d] rounded-full overflow-hidden">
+                  <div class="h-full bg-space-cyan rounded-full transition-all" :style="{ width: shieldPct + '%' }"></div>
+                </div>
+              </div>
+              <div>
+                <div class="flex justify-between text-[10px] mb-0.5">
+                  <span class="text-space-text-dim">⛽ Fuel</span>
+                  <span :class="fuelPct > 30 ? 'text-space-cyan' : 'text-space-yellow'">
+                    {{ ship.fuel ?? '?' }}/{{ ship.max_fuel ?? ship.fuel_max ?? '?' }} <span class="opacity-60">({{ fuelPct }}%)</span>
+                  </span>
+                </div>
+                <div class="h-1.5 bg-[#21262d] rounded-full overflow-hidden">
+                  <div class="h-full rounded-full transition-all" :class="fuelPct > 30 ? 'bg-space-cyan' : 'bg-space-yellow'" :style="{ width: fuelPct + '%' }"></div>
+                </div>
+              </div>
+              <div>
+                <div class="flex justify-between text-[10px] mb-0.5">
+                  <span class="text-space-text-dim">📦 Cargo</span>
+                  <span class="text-space-yellow">
+                    {{ ship.cargo_used ?? ship.cargo ?? 0 }}/{{ ship.cargo_capacity ?? ship.max_cargo ?? ship.cargo_max ?? 0 }} <span class="opacity-60">({{ cargoPct }}%)</span>
+                  </span>
+                </div>
+                <div class="h-1.5 bg-[#21262d] rounded-full overflow-hidden">
+                  <div class="h-full bg-space-yellow rounded-full transition-all" :style="{ width: cargoPct + '%' }"></div>
+                </div>
+              </div>
+              <div v-if="ship.cpu_capacity">
+                <div class="flex justify-between text-[10px] mb-0.5">
+                  <span class="text-space-text-dim">🖥️ CPU</span>
+                  <span class="text-purple-300">{{ ship.cpu_used ?? 0 }}/{{ ship.cpu_capacity }}</span>
+                </div>
+                <div class="h-1.5 bg-[#21262d] rounded-full overflow-hidden">
+                  <div class="h-full bg-purple-500 rounded-full transition-all" :style="{ width: pct(ship.cpu_used ?? 0, ship.cpu_capacity) + '%' }"></div>
+                </div>
+              </div>
+              <div v-if="ship.power_capacity">
+                <div class="flex justify-between text-[10px] mb-0.5">
+                  <span class="text-space-text-dim">⚡ Power</span>
+                  <span class="text-amber-300">{{ ship.power_used ?? 0 }}/{{ ship.power_capacity }}</span>
+                </div>
+                <div class="h-1.5 bg-[#21262d] rounded-full overflow-hidden">
+                  <div class="h-full bg-amber-400 rounded-full transition-all" :style="{ width: pct(ship.power_used ?? 0, ship.power_capacity) + '%' }"></div>
+                </div>
+              </div>
+            </div>
           </div>
 
-          <!-- Ship catalog description -->
-          <div v-if="currentShipCatalog" class="mb-4 bg-space-bg border border-[#21262d] rounded-md p-3 text-xs">
-            <div class="text-space-text-dim leading-relaxed">{{ currentShipCatalog.description }}</div>
+          <!-- ── Characteristics ── -->
+          <div class="bg-space-bg border border-[#21262d] rounded-md p-3">
+            <div class="text-[10px] font-semibold text-space-text-dim uppercase tracking-wider mb-2">Characteristics</div>
+            <div class="grid grid-cols-3 gap-x-3 gap-y-1.5 text-[10px]">
+              <div v-if="ship.speed != null || currentShipCatalog?.base_speed" class="flex justify-between gap-1">
+                <span class="text-space-text-dim">💨 Speed</span>
+                <span class="text-space-text font-medium">{{ ship.speed ?? currentShipCatalog?.base_speed ?? '—' }}</span>
+              </div>
+              <div v-if="ship.armor != null" class="flex justify-between gap-1">
+                <span class="text-space-text-dim">🛡️ Armor</span>
+                <span class="text-space-text font-medium">{{ ship.armor }}</span>
+              </div>
+              <div v-if="(ship.weapon_slots ?? currentShipCatalog?.weapon_slots) != null" class="flex justify-between gap-1">
+                <span class="text-space-text-dim">⚔️ Wpn slots</span>
+                <span class="text-space-text font-medium">{{ ship.weapon_slots ?? currentShipCatalog?.weapon_slots }}</span>
+              </div>
+              <div v-if="(ship.defense_slots ?? currentShipCatalog?.defense_slots) != null" class="flex justify-between gap-1">
+                <span class="text-space-text-dim">🛡️ Def slots</span>
+                <span class="text-space-text font-medium">{{ ship.defense_slots ?? currentShipCatalog?.defense_slots }}</span>
+              </div>
+              <div v-if="(ship.utility_slots ?? currentShipCatalog?.utility_slots) != null" class="flex justify-between gap-1">
+                <span class="text-space-text-dim">🔧 Util slots</span>
+                <span class="text-space-text font-medium">{{ ship.utility_slots ?? currentShipCatalog?.utility_slots }}</span>
+              </div>
+              <div v-if="!ship.cpu_capacity && currentShipCatalog?.cpu_capacity" class="flex justify-between gap-1">
+                <span class="text-space-text-dim">🖥️ CPU cap</span>
+                <span class="text-space-text font-medium">{{ currentShipCatalog.cpu_capacity }}</span>
+              </div>
+              <div v-if="currentShipCatalog?.base_hull" class="flex justify-between gap-1">
+                <span class="text-space-text-dim">❤️ Base hull</span>
+                <span class="text-space-text font-medium">{{ currentShipCatalog.base_hull }}</span>
+              </div>
+              <div v-if="currentShipCatalog?.base_shield" class="flex justify-between gap-1">
+                <span class="text-space-text-dim">🔵 Base shield</span>
+                <span class="text-space-text font-medium">{{ currentShipCatalog.base_shield }}</span>
+              </div>
+              <div v-if="currentShipCatalog?.base_fuel" class="flex justify-between gap-1">
+                <span class="text-space-text-dim">⛽ Base fuel</span>
+                <span class="text-space-text font-medium">{{ currentShipCatalog.base_fuel }}</span>
+              </div>
+              <div v-if="currentShipCatalog?.cargo_capacity" class="flex justify-between gap-1">
+                <span class="text-space-text-dim">📦 Cargo cap</span>
+                <span class="text-space-text font-medium">{{ currentShipCatalog.cargo_capacity }}</span>
+              </div>
+            </div>
+          </div>
+
+          <!-- ── Description ── -->
+          <div v-if="currentShipCatalog?.description" class="bg-space-bg border border-[#21262d] rounded-md p-3">
+            <div class="text-[10px] font-semibold text-space-text-dim uppercase tracking-wider mb-1.5">Description</div>
+            <div class="text-xs text-space-text-dim leading-relaxed">{{ currentShipCatalog.description }}</div>
             <div class="flex flex-wrap gap-1 mt-2" v-if="currentShipCatalog.flavor_tags?.length">
               <span v-for="tag in currentShipCatalog.flavor_tags" :key="tag" class="px-1.5 py-0.5 rounded bg-[#21262d] text-space-text-dim text-[10px]">{{ tag }}</span>
             </div>
           </div>
 
-          <!-- Quick Actions -->
-          <div class="flex gap-2 mb-4" v-if="isDocked">
-            <button @click="execCmd('repair')" :disabled="loading" class="btn text-xs px-3 py-1">Repair</button>
-            <button @click="execCmd('refuel')" :disabled="loading" class="btn text-xs px-3 py-1">Refuel</button>
+          <!-- ── Quick Actions ── -->
+          <div class="bg-space-bg border border-[#21262d] rounded-md p-3">
+            <div class="text-[10px] font-semibold text-space-text-dim uppercase tracking-wider mb-2">Quick Actions</div>
+            <div class="flex gap-2 flex-wrap">
+              <button v-if="isDocked" @click="execCmd('repair')" :disabled="loading" class="btn text-xs px-3 py-1">🔧 Repair</button>
+              <button v-if="isDocked" @click="execCmd('refuel')" :disabled="loading" class="btn text-xs px-3 py-1">⛽ Refuel</button>
+              <button v-if="isDocked" @click="execCmd('undock')" :disabled="loading" class="btn text-xs px-3 py-1">🚀 Undock</button>
+              <button v-else @click="execCmd('dock')" :disabled="loading" class="btn text-xs px-3 py-1">🔒 Dock</button>
+              <button @click="fetchShipData(selectedBot!)" :disabled="loading" class="btn text-xs px-3 py-1">🔄 Refresh</button>
+            </div>
+            <div v-if="!isDocked" class="text-[10px] text-space-text-dim italic mt-1.5">Dock at a station to repair or refuel.</div>
           </div>
-          <div v-else class="text-xs text-space-text-dim italic mb-4">Dock at a station to repair/refuel.</div>
 
-          <!-- Modules -->
-          <div class="mb-2">
-            <h4 class="text-xs font-semibold text-space-text-dim uppercase mb-2">Installed Modules</h4>
+          <!-- ── Modules ── -->
+          <div class="bg-space-bg border border-[#21262d] rounded-md p-3">
+            <div class="flex items-center justify-between mb-2">
+              <div class="text-[10px] font-semibold text-space-text-dim uppercase tracking-wider">Installed Modules</div>
+              <span class="text-[10px] text-space-text-dim">{{ modules.length }} installed</span>
+            </div>
             <div v-if="modules.length === 0" class="text-xs text-space-text-dim italic">No modules found</div>
-            <div class="grid grid-cols-[repeat(auto-fill,minmax(200px,1fr))] gap-2">
-              <div v-for="m in modules" :key="m.module_id || m.id" class="bg-space-bg border border-[#21262d] rounded-md p-2">
-                <div class="text-[10px] uppercase text-space-text-dim tracking-wider">{{ m.type || m.slot_type || m.category || m.slot || '' }}</div>
-                <div class="text-xs font-medium text-space-text">{{ moduleName(m) }}</div>
-                <div v-if="m.wear != null" class="text-[10px] text-space-text-dim mt-0.5">Wear: {{ m.wear }}{{ typeof m.wear === 'number' ? '%' : '' }}</div>
-                <button v-if="isDocked" @click="uninstallMod(m.module_id || m.id)" class="text-[10px] mt-1 px-2 py-0.5 rounded border border-space-border text-space-text-dim hover:border-space-red hover:text-space-red transition-colors">Uninstall</button>
+            <div v-else class="grid grid-cols-[repeat(auto-fill,minmax(170px,1fr))] gap-2">
+              <div v-for="m in modules" :key="m.module_id || m.id" class="bg-[#0d1117] border border-[#21262d] rounded-md p-2">
+                <div class="text-[9px] uppercase text-space-text-dim tracking-wider mb-0.5">{{ m.type || m.slot_type || m.category || m.slot || '—' }}</div>
+                <div class="text-[11px] font-medium text-space-text leading-tight">{{ moduleName(m) }}</div>
+                <div v-if="m.wear != null" class="text-[9px] text-space-text-dim mt-0.5">Wear: {{ m.wear }}{{ typeof m.wear === 'number' ? '%' : '' }}</div>
+                <button v-if="isDocked" @click="uninstallMod(m.module_id || m.id)" class="text-[9px] mt-1.5 px-2 py-0.5 rounded border border-space-border text-space-text-dim hover:border-space-red hover:text-space-red transition-colors w-full">Uninstall</button>
+              </div>
+            </div>
+            <!-- Install from cargo -->
+            <div v-if="isDocked && installableModules.length > 0" class="mt-3 pt-3 border-t border-[#21262d]">
+              <div class="text-[10px] font-semibold text-space-text-dim uppercase tracking-wider mb-1.5">Install from Cargo</div>
+              <div class="space-y-1">
+                <div v-for="m in installableModules" :key="m.itemId" class="flex items-center justify-between py-1 px-2 bg-[#0d1117] rounded border border-[#21262d] text-xs">
+                  <span class="text-space-text text-[11px]">{{ m.name }}</span>
+                  <button @click="installMod(m.itemId)" :disabled="loading" class="text-[9px] px-2 py-0.5 rounded border border-space-border text-space-text-dim hover:border-space-green hover:text-space-green transition-colors">Install</button>
+                </div>
               </div>
             </div>
           </div>
+
+          <!-- ── Cargo hold ── -->
+          <div v-if="currentBot?.inventory?.length" class="bg-space-bg border border-[#21262d] rounded-md p-3">
+            <div class="text-[10px] font-semibold text-space-text-dim uppercase tracking-wider mb-2">Cargo Hold</div>
+            <div class="grid grid-cols-2 gap-x-4 gap-y-1">
+              <div v-for="item in currentBot.inventory" :key="item.itemId || item.item_id" class="flex items-center justify-between text-[10px]">
+                <span class="text-space-text-dim truncate">{{ item.name }}</span>
+                <span class="text-space-text font-medium shrink-0 ml-2">×{{ item.quantity }}</span>
+              </div>
+            </div>
+          </div>
+
         </div>
       </div>
 
@@ -262,7 +392,7 @@
           <div class="flex gap-2">
             <select
               v-model="commissionShipClass"
-              @change="commissionQuote = null"
+              @change="onShipClassChange"
               class="flex-1 bg-space-bg border border-space-border rounded-md px-2 py-1.5 text-xs text-space-text focus:border-space-accent outline-none"
             >
               <option value="">— Select a ship class —</option>
@@ -279,103 +409,172 @@
             >{{ commissionLoading ? '⏳' : '📊' }} Quote</button>
           </div>
 
-          <!-- Selected ship details from catalog -->
-          <div v-if="selectedShipCatalog" class="bg-space-bg border border-[#21262d] rounded-md p-3 text-xs space-y-2">
+          <!-- Commission result notification (persistent, styled) -->
+          <div v-if="commissionResult" class="rounded-md p-3 text-xs border"
+            :class="commissionResult.ok
+              ? 'bg-[#0d2818] border-space-green/40 text-space-green'
+              : 'bg-[#2d1010] border-space-red/40 text-space-red'">
             <div class="flex items-start justify-between gap-2">
-              <div>
-                <div class="text-space-text font-semibold">{{ selectedShipCatalog.name }}</div>
-                <div class="text-space-text-dim text-[10px]">{{ selectedShipCatalog.class }} · {{ selectedShipCatalog.empire_name }}</div>
-              </div>
-              <div class="text-right shrink-0">
-                <div class="text-space-yellow font-semibold">{{ selectedShipCatalog.price?.toLocaleString() }} cr</div>
-                <div class="text-space-text-dim text-[10px]">Tier {{ selectedShipCatalog.tier }} · Scale {{ selectedShipCatalog.scale }}</div>
-              </div>
-            </div>
-            <div class="text-space-text-dim leading-relaxed">{{ selectedShipCatalog.description }}</div>
-            <!-- Base stats grid -->
-            <div class="grid grid-cols-3 gap-x-4 gap-y-1 text-[10px] pt-1 border-t border-[#21262d]">
-              <div class="text-space-text-dim">❤️ Hull <span class="text-space-text">{{ selectedShipCatalog.base_hull }}</span></div>
-              <div class="text-space-text-dim">🔵 Shield <span class="text-space-text">{{ selectedShipCatalog.base_shield }}</span></div>
-              <div class="text-space-text-dim">💨 Speed <span class="text-space-text">{{ selectedShipCatalog.base_speed }}</span></div>
-              <div class="text-space-text-dim">⛽ Fuel <span class="text-space-text">{{ selectedShipCatalog.base_fuel }}</span></div>
-              <div class="text-space-text-dim">📦 Cargo <span class="text-space-text">{{ selectedShipCatalog.cargo_capacity }}</span></div>
-              <div class="text-space-text-dim">🖥️ CPU <span class="text-space-text">{{ selectedShipCatalog.cpu_capacity }}</span></div>
-              <div class="text-space-text-dim">⚔️ <span class="text-space-text">{{ selectedShipCatalog.weapon_slots }} wpn</span></div>
-              <div class="text-space-text-dim">🛡️ <span class="text-space-text">{{ selectedShipCatalog.defense_slots }} def</span></div>
-              <div class="text-space-text-dim">🔧 <span class="text-space-text">{{ selectedShipCatalog.utility_slots }} util</span></div>
-            </div>
-            <!-- Build materials -->
-            <div v-if="selectedShipCatalog.build_materials?.length > 0" class="pt-1 border-t border-[#21262d]">
-              <div class="text-[10px] uppercase tracking-wider text-space-text-dim mb-1">🔩 Build Materials</div>
-              <div class="grid grid-cols-2 gap-x-4 gap-y-0.5">
-                <div v-for="mat in selectedShipCatalog.build_materials" :key="mat.item_id" class="text-[10px] text-space-text-dim flex items-center gap-1">
-                  <span>{{ matIcon(mat.item_id) }}</span>
-                  <span>{{ mat.item_name }}: <span class="text-space-text">×{{ mat.quantity }}</span></span>
+              <div class="flex items-start gap-2 min-w-0">
+                <span class="text-base leading-none mt-0.5 shrink-0">{{ commissionResult.ok ? '✅' : '❌' }}</span>
+                <div class="min-w-0">
+                  <div class="font-semibold mb-0.5">{{ commissionResult.ok ? 'Commission Submitted' : 'Commission Failed' }}</div>
+                  <div class="text-[11px] leading-relaxed whitespace-pre-wrap break-words opacity-90">{{ commissionResult.message }}</div>
                 </div>
               </div>
-            </div>
-            <div v-if="selectedShipCatalog.flavor_tags?.length" class="flex flex-wrap gap-1 pt-1 border-t border-[#21262d]">
-              <span v-for="tag in selectedShipCatalog.flavor_tags" :key="tag" class="px-1.5 py-0.5 rounded bg-[#21262d] text-space-text-dim text-[10px]">{{ tag }}</span>
-            </div>
-
-            <!-- Gather goal panel -->
-            <div v-if="selectedShipCatalog.build_materials?.length" class="pt-2 border-t border-[#21262d]">
-              <div v-if="currentGatherGoal?.target_id === commissionShipClass"
-                class="flex items-center justify-between bg-[#0d2233] border border-[#1a3a5a] rounded-md p-2 text-xs">
-                <span class="text-space-cyan">⚙️ Gathering materials for build...</span>
-                <button @click="clearGatherGoal()" class="text-space-red hover:text-red-400 text-[10px]">✕ Cancel</button>
-              </div>
-              <button
-                v-else
-                @click="gatherShipMaterials()"
-                class="btn text-[10px] px-3 py-1 w-full"
-              >� Gather Materials for Build</button>
+              <button @click="commissionResult = null" class="shrink-0 opacity-50 hover:opacity-100 text-[13px] leading-none mt-0.5 transition-opacity">✕</button>
             </div>
           </div>
 
-          <!-- Quote result -->
-          <div v-if="commissionQuote" class="bg-space-bg border border-space-accent/30 rounded-md p-3 text-xs space-y-1.5">
-            <div class="text-space-text font-semibold">Quote: {{ commissionQuote.ship_class || commissionShipClass }}</div>
-            <div class="text-space-yellow">💰 Total cost: {{ fmt(commissionQuote.total_cost || commissionQuote.cost || 0) }} cr</div>
-            <div v-if="commissionQuote.build_time" class="text-space-text-dim">⏱️ Build time: {{ commissionQuote.build_time }}s</div>
-            <div v-if="commissionQuote.materials?.length > 0" class="space-y-0.5">
-              <div class="text-[10px] uppercase tracking-wider text-space-text-dim mb-1">Materials (sourced by shipyard)</div>
-              <div v-for="mat in commissionQuote.materials" :key="mat.item_id" class="text-space-text-dim pl-2">
-                {{ mat.item_name || mat.item_id }}: ×{{ mat.quantity }}
+          <!-- Two-column layout: Ship details (2/3) + Quote (1/3) -->
+          <div v-if="selectedShipCatalog || commissionQuote" class="flex gap-3 items-start">
+
+            <!-- Left: Selected ship details (2/3) -->
+            <div v-if="selectedShipCatalog" class="flex-[2] bg-space-bg border border-[#21262d] rounded-md p-3 text-xs space-y-2 min-w-0">
+              <div class="flex items-start justify-between gap-2">
+                <div>
+                  <div class="text-space-text font-semibold">{{ selectedShipCatalog.name }}</div>
+                  <div class="text-space-text-dim text-[10px]">{{ selectedShipCatalog.class }} · {{ selectedShipCatalog.empire_name }}</div>
+                </div>
+                <div class="text-right shrink-0">
+                  <div class="text-space-yellow font-semibold">{{ selectedShipCatalog.price?.toLocaleString() }} cr</div>
+                  <div class="text-space-text-dim text-[10px]">Tier {{ selectedShipCatalog.tier }} · Scale {{ selectedShipCatalog.scale }}</div>
+                </div>
+              </div>
+              <div class="text-space-text-dim leading-relaxed">{{ selectedShipCatalog.description }}</div>
+              <!-- Base stats grid -->
+              <div class="grid grid-cols-3 gap-x-4 gap-y-1 text-[10px] pt-1 border-t border-[#21262d]">
+                <div class="text-space-text-dim">❤️ Hull <span class="text-space-text">{{ selectedShipCatalog.base_hull }}</span></div>
+                <div class="text-space-text-dim">🔵 Shield <span class="text-space-text">{{ selectedShipCatalog.base_shield }}</span></div>
+                <div class="text-space-text-dim">💨 Speed <span class="text-space-text">{{ selectedShipCatalog.base_speed }}</span></div>
+                <div class="text-space-text-dim">⛽ Fuel <span class="text-space-text">{{ selectedShipCatalog.base_fuel }}</span></div>
+                <div class="text-space-text-dim">📦 Cargo <span class="text-space-text">{{ selectedShipCatalog.cargo_capacity }}</span></div>
+                <div class="text-space-text-dim">🖥️ CPU <span class="text-space-text">{{ selectedShipCatalog.cpu_capacity }}</span></div>
+                <div class="text-space-text-dim">⚔️ <span class="text-space-text">{{ selectedShipCatalog.weapon_slots }} wpn</span></div>
+                <div class="text-space-text-dim">🛡️ <span class="text-space-text">{{ selectedShipCatalog.defense_slots }} def</span></div>
+                <div class="text-space-text-dim">🔧 <span class="text-space-text">{{ selectedShipCatalog.utility_slots }} util</span></div>
+              </div>
+              <!-- Build materials with availability -->
+              <div v-if="selectedShipCatalog.build_materials?.length > 0" class="pt-1 border-t border-[#21262d]">
+                <div class="text-[10px] uppercase tracking-wider text-space-text-dim mb-1.5">🔩 Build Materials</div>
+                <div class="grid grid-cols-2 gap-x-3 gap-y-1">
+                  <div v-for="mat in selectedShipCatalog.build_materials" :key="mat.item_id" class="text-[10px] flex items-center gap-1 min-w-0">
+                    <span class="shrink-0">{{ matIcon(mat.item_id) }}</span>
+                    <span class="text-space-text-dim truncate">{{ mat.item_name }}:</span>
+                    <span class="text-space-text font-medium shrink-0">×{{ mat.quantity }}</span>
+                    <span class="ml-auto shrink-0 text-[9px] px-1 py-0.5 rounded font-medium"
+                      :class="(botBuildMats[mat.item_id] || 0) >= mat.quantity
+                        ? 'bg-green-900/40 text-space-green'
+                        : (botBuildMats[mat.item_id] || 0) > 0
+                          ? 'bg-yellow-900/40 text-space-yellow'
+                          : 'text-space-text-dim/50'">
+                      {{ botBuildMats[mat.item_id] ? `${botBuildMats[mat.item_id]}/${mat.quantity}` : `0/${mat.quantity}` }}
+                    </span>
+                  </div>
+                </div>
+              </div>
+              <div v-if="selectedShipCatalog.flavor_tags?.length" class="flex flex-wrap gap-1 pt-1 border-t border-[#21262d]">
+                <span v-for="tag in selectedShipCatalog.flavor_tags" :key="tag" class="px-1.5 py-0.5 rounded bg-[#21262d] text-space-text-dim text-[10px]">{{ tag }}</span>
+              </div>
+              <!-- Gather goal panel -->
+              <div v-if="selectedShipCatalog.build_materials?.length" class="pt-2 border-t border-[#21262d]">
+                <div v-if="currentGatherGoal?.target_id === commissionShipClass"
+                  class="flex items-center justify-between bg-[#0d2233] border border-[#1a3a5a] rounded-md p-2 text-xs">
+                  <span class="text-space-cyan">⚙️ Gathering materials for build...</span>
+                  <button @click="clearGatherGoal()" class="text-space-red hover:text-red-400 text-[10px]">✕ Cancel</button>
+                </div>
+                <button v-else @click="gatherShipMaterials()" class="btn text-[10px] px-3 py-1 w-full">🔩 Gather Materials for Build</button>
               </div>
             </div>
-            <div v-if="commissionQuote.message" class="text-space-text-dim italic">{{ commissionQuote.message }}</div>
-            <button @click="doCommissionShip" :disabled="loading" class="btn btn-primary text-xs px-3 py-1 mt-1">🔨 Commission Ship</button>
+
+            <!-- Right: Quote (1/3) -->
+            <div v-if="commissionQuote" class="flex-1 bg-space-bg border border-space-accent/30 rounded-md p-3 text-xs space-y-1.5 min-w-0">
+              <div class="text-space-text font-semibold">Quote: {{ commissionQuote.ship_class || commissionShipClass }}</div>
+              <div class="text-space-yellow">💰 Total cost: {{ fmt(commissionQuote.total_cost || commissionQuote.cost || 0) }} cr</div>
+              <div v-if="commissionQuote.build_time" class="text-space-text-dim">⏱️ Build time: {{ commissionQuote.build_time }}s</div>
+              <div v-if="commissionQuote.issues?.length" class="space-y-0.5">
+                <div class="text-[10px] text-space-red font-medium mt-1">Issues to resolve:</div>
+                <div v-for="(issue, i) in commissionQuote.issues" :key="i" class="text-[10px] text-space-red/80 pl-2">• {{ issue }}</div>
+              </div>
+              <div v-if="commissionQuote.materials?.length > 0" class="space-y-0.5 pt-1 border-t border-[#21262d]">
+                <div class="text-[10px] uppercase tracking-wider text-space-text-dim mb-1">Materials (sourced by shipyard)</div>
+                <div v-for="mat in commissionQuote.materials" :key="mat.item_id" class="text-space-text-dim pl-1 text-[10px]">
+                  {{ mat.item_name || mat.item_id }}: ×{{ mat.quantity }}
+                </div>
+              </div>
+              <div v-if="commissionQuote.message" class="text-space-text-dim italic text-[10px]">{{ commissionQuote.message }}</div>
+
+              <!-- provide_materials + commission button -->
+              <div class="mt-2 pt-2 border-t border-[#21262d] space-y-2">
+                <label class="flex items-start gap-2 cursor-pointer select-none">
+                  <input type="checkbox" v-model="provideMaterials" class="accent-space-accent mt-0.5 shrink-0" />
+                  <div>
+                    <div class="text-space-text">Provide materials myself</div>
+                    <div class="text-[10px] text-space-text-dim italic">{{ provideMaterials ? 'cheaper — you supply from cargo/storage' : 'default — shipyard sources at markup' }}</div>
+                  </div>
+                </label>
+
+                <!-- Inline confirmation panel -->
+                <div v-if="showCommissionConfirm" class="rounded-md border border-space-accent/40 bg-[#0d1a2d] p-2 space-y-2">
+                  <div class="text-[11px] text-space-text leading-snug">
+                    Commission <span class="text-space-accent font-semibold">{{ selectedShipCatalog?.name || commissionShipClass }}</span>?
+                  </div>
+                  <div class="text-[10px] text-space-text-dim">{{ provideMaterials ? '🔩 You supply build materials from cargo/storage.' : '🏪 Shipyard sources materials at markup.' }}</div>
+                  <div class="flex gap-2">
+                    <button @click="confirmAndCommission" :disabled="loading" class="btn btn-primary text-[10px] px-3 py-1 flex-1">
+                      {{ loading ? '⏳ Submitting...' : '✅ Confirm' }}
+                    </button>
+                    <button @click="showCommissionConfirm = false" class="text-[10px] px-3 py-1 rounded border border-space-border text-space-text-dim hover:border-space-red hover:text-space-red transition-colors">Cancel</button>
+                  </div>
+                </div>
+                <button v-else @click="showCommissionConfirm = true" :disabled="loading" class="btn btn-primary text-xs px-3 py-1 w-full">🔨 Commission Ship</button>
+              </div>
+            </div>
           </div>
 
-          <div v-if="!commissionQuote && commissionShipClass" class="text-xs text-space-text-dim italic">Click Quote to preview the cost from the shipyard.</div>
+          <div v-if="!commissionQuote && commissionShipClass && selectedShipCatalog" class="text-xs text-space-text-dim italic">Click Quote to preview the cost from the shipyard.</div>
           <div v-if="!commissionShipClass" class="text-xs text-space-text-dim italic">Select a ship class above to see details and get a quote.</div>
         </div>
       </div>
 
-      <!-- Modules Panel -->
-      <div v-else-if="activePanel === 'modules'">
-        <h3 class="text-sm font-semibold text-space-text-bright mb-3">Module Management</h3>
-        
-        <!-- Installed -->
-        <div class="mb-4">
-          <h4 class="text-xs font-semibold text-space-text-dim uppercase mb-2">Installed</h4>
-          <div v-if="modules.length === 0" class="text-xs text-space-text-dim italic">No modules installed.</div>
-          <div v-for="m in modules" :key="m.module_id || m.id" class="flex items-center justify-between py-1.5 px-2 border-b border-[#21262d] text-xs">
-            <div>
-              <span class="text-space-text font-medium">{{ moduleName(m) }}</span>
-              <span class="text-space-text-dim ml-2">{{ m.slot_type || m.type || '' }}</span>
-            </div>
-            <button v-if="isDocked" @click="uninstallMod(m.module_id || m.id)" :disabled="loading" class="text-[10px] px-2 py-0.5 rounded border border-space-border text-space-text-dim hover:border-space-red hover:text-space-red transition-colors">Uninstall</button>
-          </div>
+      <!-- Commission Status Panel -->
+      <div v-else-if="activePanel === 'commission-status'">
+        <div class="flex items-center justify-between mb-3">
+          <h3 class="text-sm font-semibold text-space-text-bright">📋 Build Commissions</h3>
+          <button @click="loadCommissionStatus" :disabled="statusLoading" class="btn text-xs px-2 py-0.5">{{ statusLoading ? '⏳' : '🔄' }} Refresh</button>
         </div>
-
-        <!-- Installable from cargo -->
-        <div v-if="isDocked && installableModules.length > 0">
-          <h4 class="text-xs font-semibold text-space-text-dim uppercase mb-2">Install from Cargo</h4>
-          <div v-for="m in installableModules" :key="m.itemId" class="flex items-center justify-between py-1.5 px-2 border-b border-[#21262d] text-xs">
-            <span class="text-space-text">{{ m.name }}</span>
-            <button @click="installMod(m.itemId)" :disabled="loading" class="text-[10px] px-2 py-0.5 rounded border border-space-border text-space-text-dim hover:border-space-green hover:text-space-green transition-colors">Install</button>
+        <div v-if="statusLoading" class="text-xs text-space-text-dim italic">Loading commissions...</div>
+        <div v-else-if="commissionStatuses.length === 0" class="text-xs text-space-text-dim italic py-4">No commissions found. Click Refresh to load.</div>
+        <div v-else class="space-y-3">
+          <div v-for="c in commissionStatuses" :key="c.commission_id || c.id" class="bg-space-bg border border-[#21262d] rounded-md p-3 text-xs">
+            <div class="flex items-center justify-between mb-1.5">
+              <span class="text-space-text font-semibold">{{ c.ship_class_name || c.ship_class || c.class_id || '?' }}</span>
+              <span class="px-2 py-0.5 rounded text-[10px] font-medium"
+                :class="c.status === 'ready' ? 'bg-green-900/40 text-space-green' : c.status === 'building' ? 'bg-blue-900/30 text-space-cyan' : 'bg-[#21262d] text-space-text-dim'">
+                {{ c.status || 'pending' }}
+              </span>
+            </div>
+            <div class="grid grid-cols-2 gap-x-4 gap-y-0.5 text-[10px] text-space-text-dim">
+              <div v-if="c.base_id || c.station">📍 {{ c.base_id || c.station }}</div>
+              <div v-if="c.cost != null">💰 {{ fmt(c.cost) }} cr</div>
+              <div v-if="c.build_time_remaining != null">⏱️ {{ c.build_time_remaining }}s left</div>
+              <div v-if="c.build_time != null && c.build_time_remaining == null">⏱️ {{ c.build_time }}s total</div>
+              <div v-if="c.provide_materials != null">🔩 {{ c.provide_materials ? 'Own materials' : 'Shipyard sourced' }}</div>
+              <div v-if="c.progress_pct != null">{{ c.progress_pct }}% done</div>
+              <div v-if="c.created_at">📅 {{ c.created_at }}</div>
+            </div>
+            <div v-if="c.status === 'ready'" class="mt-2 pt-2 border-t border-[#21262d]">
+              <span class="text-space-green text-[10px] font-semibold">✅ Your ship is ready for pickup!</span>
+            </div>
+            <div v-if="c.materials_needed?.length" class="mt-1.5 pt-1.5 border-t border-[#21262d]">
+              <div class="text-[10px] uppercase tracking-wider text-space-text-dim mb-1">Materials needed</div>
+              <div v-for="m in c.materials_needed" :key="m.item_id" class="text-[10px] text-space-text-dim pl-1">
+                {{ m.item_name || m.item_id }}: ×{{ m.quantity_needed ?? m.quantity }}
+                <span v-if="m.have != null" :class="m.have >= (m.quantity_needed ?? m.quantity) ? 'text-space-green' : 'text-space-red'">
+                  (have {{ m.have }})
+                </span>
+              </div>
+            </div>
           </div>
         </div>
       </div>
@@ -391,6 +590,7 @@
 <script setup lang="ts">
 import { ref, computed, watch } from 'vue';
 import { useBotStore } from '../stores/botStore';
+import { empireIcon, empireName } from '../utils/empires';
 
 const botStore = useBotStore();
 const selectedBot = ref<string | null>(null);
@@ -413,13 +613,18 @@ const commissionLoading = ref(false);
 const commissionSearch = ref('');
 const commissionEmpireFilter = ref('');
 const commissionTierFilter = ref<number | ''>('');
+const provideMaterials = ref(false);
+const commissionStatuses = ref<any[]>([]);
+const statusLoading = ref(false);
+const commissionResult = ref<{ ok: boolean; message: string } | null>(null);
+const showCommissionConfirm = ref(false);
 
 const panels = [
-  { id: 'overview', label: 'Overview' },
-  { id: 'fleet', label: 'Fleet' },
-  { id: 'showroom', label: 'Showroom' },
-  { id: 'commission', label: 'Commission' },
-  { id: 'modules', label: 'Modules' },
+  { id: 'overview', label: '📊 Overview' },
+  { id: 'fleet', label: '🚀 Fleet' },
+  { id: 'showroom', label: '🏪 Showroom' },
+  { id: 'commission', label: '🔨 Commission' },
+  { id: 'commission-status', label: '📋 Build Status' },
 ];
 
 function fmt(n: number): string { return new Intl.NumberFormat().format(n); }
@@ -456,6 +661,8 @@ const isDocked = computed(() => {
   const bot = botStore.bots.find(b => b.username === selectedBot.value);
   return !!bot?.docked;
 });
+
+const currentBot = computed(() => (botStore.bots.find(b => b.username === selectedBot.value) as any) || null);
 
 function pct(cur: any, max: any): number {
   const c = Number(cur) || 0;
@@ -568,6 +775,20 @@ const allTiers = computed(() => {
 const selectedShipCatalog = computed(() => {
   if (!commissionShipClass.value) return null;
   return botStore.publicShips.find((s: any) => s.id === commissionShipClass.value) || null;
+});
+
+const botBuildMats = computed(() => {
+  const bot = botStore.bots.find(b => b.username === selectedBot.value) as any;
+  const result: Record<string, number> = {};
+  for (const item of (bot?.inventory || [])) {
+    const id = item.itemId || item.item_id || '';
+    if (id) result[id] = (result[id] || 0) + (item.quantity || 0);
+  }
+  for (const item of (bot?.storage || [])) {
+    const id = item.itemId || item.item_id || '';
+    if (id) result[id] = (result[id] || 0) + (item.quantity || 0);
+  }
+  return result;
 });
 
 const currentStationCatalog = computed(() => {
@@ -701,20 +922,55 @@ function getCommissionQuote() {
   });
 }
 
+function onShipClassChange() {
+  commissionQuote.value = null;
+  commissionResult.value = null;
+  showCommissionConfirm.value = false;
+}
+
 function doCommissionShip() {
+  showCommissionConfirm.value = true;
+}
+
+function confirmAndCommission() {
   if (!selectedBot.value || !commissionShipClass.value) return;
-  if (!confirm(`Commission a ${commissionShipClass.value}? The shipyard will source materials at a markup.`)) return;
+  showCommissionConfirm.value = false;
   loading.value = true;
+  commissionResult.value = null;
   const username = selectedBot.value;
-  botStore.sendExec(username, 'commission_ship', { ship_class: commissionShipClass.value }, (result: any) => {
+  const params: any = { ship_class: commissionShipClass.value };
+  if (provideMaterials.value) params.provide_materials = true;
+  botStore.sendExec(username, 'commission_ship', params, (result: any) => {
     loading.value = false;
     if (selectedBot.value !== username) return;
     if (result.ok) {
-      const msg = result.data?.message || 'Ship commissioned!';
-      setStatus(msg, true);
+      const r = result.data?.result ?? result.data ?? {};
+      const msg = r.message || r.hint || `Ship commissioned! Commission ID: ${r.commission_id ?? '—'}`.trim();
+      commissionResult.value = { ok: true, message: msg };
       commissionQuote.value = null;
+      loadCommissionStatus();
     } else {
-      setStatus(result.error || 'Commission failed', false);
+      const errMsg = (result.error || 'Commission failed') as string;
+      commissionResult.value = { ok: false, message: errMsg };
+    }
+  });
+}
+
+function loadCommissionStatus() {
+  if (!selectedBot.value) return;
+  statusLoading.value = true;
+  const username = selectedBot.value;
+  const bot = botStore.bots.find(b => b.username === username) as any;
+  const params: any = {};
+  if (bot?.poi) params.base_id = bot.poi;
+  botStore.sendExec(username, 'commission_status', params, (result: any) => {
+    statusLoading.value = false;
+    if (selectedBot.value !== username) return;
+    if (result.ok && result.data) {
+      const r = result.data?.result ?? result.data;
+      commissionStatuses.value = r.commissions || r.orders || (Array.isArray(r) ? r : []);
+    } else {
+      setStatus(result.error || 'Could not load commission status', false);
     }
   });
 }
@@ -752,5 +1008,6 @@ function clearGatherGoal() {
 watch(activePanel, (panel) => {
   if (panel === 'fleet') loadFleet();
   if (panel === 'showroom' && showroom.value.length === 0 && isDocked.value) loadShowroom();
+  if (panel === 'commission-status') loadCommissionStatus();
 });
 </script>

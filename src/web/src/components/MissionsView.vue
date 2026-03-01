@@ -15,7 +15,10 @@
             ? 'bg-[rgba(88,166,255,0.1)] border-space-accent text-space-accent'
             : 'border-transparent text-space-text hover:bg-space-row-hover'"
         >
-          {{ bot.username }}
+          <div class="flex items-center gap-1.5 min-w-0">
+            <span v-if="(bot as any).empire" :title="empireName((bot as any).empire)" class="shrink-0 leading-none">{{ empireIcon((bot as any).empire) }}</span>
+            <span class="truncate">{{ bot.username }}</span>
+          </div>
         </div>
         <div v-if="botStore.bots.length === 0" class="text-xs text-space-text-dim italic p-2">No bots</div>
       </div>
@@ -320,6 +323,7 @@
 <script setup lang="ts">
 import { ref, computed, reactive } from 'vue';
 import { useBotStore } from '../stores/botStore';
+import { empireIcon, empireName } from '../utils/empires';
 
 const botStore = useBotStore();
 const selectedBot = ref<string | null>(null);

@@ -38,6 +38,7 @@ import {
   fetchSecurityLevel,
   scavengeWrecks,
   depositNonFuelCargo,
+  clearStartupCargo,
   ensureInsured,
   detectAndRecoverFromDeath,
   getModProfile,
@@ -586,6 +587,16 @@ export const hunterRoutine: Routine = async function* (ctx: RoutineContext) {
   const { bot } = ctx;
 
   await bot.refreshStatus();
+
+  // ── Startup: deposit any leftover loot from a previous run ──
+  const settings0 = getHunterSettings(bot.username);
+  await clearStartupCargo(ctx, {
+    depositMode: "faction",
+    homeSystem: settings0.system || bot.system,
+    fuelThresholdPct: settings0.refuelThreshold,
+    hullThresholdPct: settings0.repairThreshold,
+  });
+
   let totalKills = 0;
 
   while (bot.state === "running") {

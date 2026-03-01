@@ -21,10 +21,12 @@ import { publicCatalog } from "./publicCatalog.js";
 import { WebServer, type WebAction, type WebActionResult } from "./web/server.js";
 import { setLogSink } from "./ui.js";
 import { debugLog } from "./debug.js";
+import { version } from "../package.json";
 import { logApiRunStart, setApiLoggingEnabled } from "./apilogger.js";
 
 const BASE_DIR = process.cwd();
 const SESSIONS_DIR = join(BASE_DIR, "sessions");
+const VERSION = version;
 
 const TABLE_STATUS_REFRESH_INTERVAL = 5000; // 5s, periodic live refresh of tables
 const BOT_STATUS_REFRESH_INTERVAL = 30000; // 30s, periodic bots status check
@@ -34,19 +36,19 @@ const bots: Map<string, Bot> = new Map();
 let server: WebServer;
 
 const ROUTINES: Record<string, { name: string; fn: Routine }> = {
-  miner: { name: "Miner", fn: minerRoutineV2 },
-  explorer: { name: "Explorer", fn: explorerRoutine },
-  crafter: { name: "Crafter", fn: crafterRoutine },
-  rescue: { name: "FuelRescue", fn: rescueRoutine },
-  coordinator: { name: "Coordinator", fn: coordinatorRoutine },
-  trader: { name: "Trader", fn: traderRoutine },
-  gas_harvester: { name: "GasHarvester", fn: gasHarvesterRoutine },
-  ice_harvester: { name: "IceHarvester", fn: iceHarvesterRoutine },
-  salvager: { name: "Salvager", fn: salvagerRoutine },
-  hunter: { name: "Hunter", fn: hunterRoutine },
-  faction_trader: { name: "FactionTrader", fn: factionTraderRoutine },
   cleanup: { name: "Cleanup", fn: cleanupRoutine },
+  coordinator: { name: "Coordinator", fn: coordinatorRoutine },
+  crafter: { name: "Crafter", fn: crafterRoutine },
+  explorer: { name: "Explorer", fn: explorerRoutine },
+  faction_trader: { name: "FactionTrader", fn: factionTraderRoutine },
+  rescue: { name: "FuelRescue", fn: rescueRoutine },
   gatherer: { name: "Gatherer", fn: gathererRoutine },
+  gas_harvester: { name: "GasHarvester", fn: gasHarvesterRoutine },
+  hunter: { name: "Hunter", fn: hunterRoutine },
+  ice_harvester: { name: "IceHarvester", fn: iceHarvesterRoutine },
+  miner: { name: "Miner", fn: minerRoutineV2 },
+  trader: { name: "Trader", fn: traderRoutine },
+  salvager: { name: "Salvager", fn: salvagerRoutine },
 };
 
 // ── Auto-discover existing sessions ─────────────────────────
@@ -127,8 +129,23 @@ async function handleAction(action: WebAction): Promise<WebActionResult> {
       return handleExec(action);
     case "remove":
       return handleRemove(action);
+    case "refreshCatalog":
+      return handleRefreshCatalog();
     default:
       return { ok: false, error: `Unknown action: ${(action as any).type}` };
+  }
+}
+
+async function handleRefreshCatalog(): Promise<WebActionResult> {
+  try {
+    await publicCatalog.fetchShips();
+    await publicCatalog.fetchStations();
+    const summary = publicCatalog.getSummary();
+    server.logSystem(`Public catalog force-refreshed: ${summary}`);
+    return { ok: true, message: `Public catalog refreshed: ${summary}` };
+  } catch (err) {
+    server.logSystem(`Public catalog refresh failed: ${err}`);
+    return { ok: false, error: `Catalog refresh failed: ${err}` };
   }
 }
 
@@ -445,7 +462,7 @@ async function main(): Promise<void> {
     server.logActivity(line);
   });
 
-  server.logSystem("SpaceMolt Bot Manager v0.2");
+  server.logSystem(`Hex-Bots v${VERSION}`);
   server.logSystem("Loading saved sessions...");
 
   discoverBots();

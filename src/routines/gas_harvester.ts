@@ -84,19 +84,58 @@ export const gasHarvesterRoutine: Routine = async function* (ctx: RoutineContext
         await navigateToSystem(ctx, homeSystem, { fuelThresholdPct: 50, hullThresholdPct: 30 });
       }
     }
-    await ensureDocked(ctx);
-    for (const item of nonFuelCargo) {
-      if (settings0.depositMode === "faction") {
-        const fResp = await bot.exec("faction_deposit_items", { item_id: item.itemId, quantity: item.quantity });
-        if (fResp.error) {
-          await bot.exec("deposit_items", { item_id: item.itemId, quantity: item.quantity });
+    // Navigate to station POI in current system before docking
+    if (!bot.docked) {
+      const { pois: startupPois } = await getSystemInfo(ctx);
+      const startupStation = findStation(startupPois);
+      if (startupStation) {
+        const travelResp = await bot.exec("travel", { target_poi: startupStation.id });
+        if (travelResp.error && !travelResp.error.message.includes("already")) {
+          ctx.log("error", `Startup: travel to station failed: ${travelResp.error.message}`);
         }
-      } else {
-        await bot.exec("deposit_items", { item_id: item.itemId, quantity: item.quantity });
       }
     }
-    const names = nonFuelCargo.map(i => `${i.quantity}x ${i.name}`).join(", ");
-    ctx.log("harvesting", `Startup: deposited ${names} — cargo clear for harvesting`);
+    await ensureDocked(ctx);
+    const startupUnloaded: string[] = [];
+    for (const item of nonFuelCargo) {
+      let deposited = false;
+      if (settings0.depositMode === "faction") {
+        const fResp = await bot.exec("faction_deposit_items", { item_id: item.itemId, quantity: item.quantity });
+        if (!fResp.error) {
+          deposited = true;
+        } else {
+          const sResp = await bot.exec("deposit_items", { item_id: item.itemId, quantity: item.quantity });
+          if (!sResp.error) deposited = true;
+        }
+      } else if (settings0.depositMode === "sell") {
+        const sellResp = await bot.exec("sell", { item_id: item.itemId, quantity: item.quantity });
+        if (!sellResp.error) {
+          deposited = true;
+        } else {
+          const sResp = await bot.exec("deposit_items", { item_id: item.itemId, quantity: item.quantity });
+          if (!sResp.error) {
+            deposited = true;
+          } else {
+            const fResp = await bot.exec("faction_deposit_items", { item_id: item.itemId, quantity: item.quantity });
+            if (!fResp.error) deposited = true;
+          }
+        }
+      } else {
+        const sResp = await bot.exec("deposit_items", { item_id: item.itemId, quantity: item.quantity });
+        if (!sResp.error) {
+          deposited = true;
+        } else {
+          const fResp = await bot.exec("faction_deposit_items", { item_id: item.itemId, quantity: item.quantity });
+          if (!fResp.error) deposited = true;
+        }
+      }
+      if (deposited) startupUnloaded.push(`${item.quantity}x ${item.name}`);
+    }
+    if (startupUnloaded.length > 0) {
+      ctx.log("harvesting", `Startup: deposited ${startupUnloaded.join(", ")} — cargo clear for harvesting`);
+    } else {
+      ctx.log("error", `Startup: failed to deposit cargo — will retry in main loop`);
+    }
   }
 
   while (bot.state === "running") {
@@ -302,14 +341,20 @@ export const gasHarvesterRoutine: Routine = async function* (ctx: RoutineContext
 
     yield "unload_cargo";
     const cargoResp = await bot.exec("get_cargo");
+    let cargoItems: Array<Record<string, unknown>>;
     if (cargoResp.result && typeof cargoResp.result === "object") {
       const result = cargoResp.result as Record<string, unknown>;
-      const cargoItems = (
+      cargoItems = (
         Array.isArray(result) ? result :
         Array.isArray(result.items) ? result.items :
         Array.isArray(result.cargo) ? result.cargo : []
       ) as Array<Record<string, unknown>>;
+    } else {
+      if (cargoResp.error) ctx.log("error", `get_cargo failed: ${cargoResp.error.message} — using cached inventory`);
+      cargoItems = bot.inventory.map(i => ({ item_id: i.itemId, name: i.name, quantity: i.quantity } as Record<string, unknown>));
+    }
 
+    if (cargoItems.length > 0) {
       const modeLabel: Record<string, string> = {
         storage: "station storage", faction: "faction storage", sell: "market",
       };
@@ -324,25 +369,61 @@ export const gasHarvesterRoutine: Routine = async function* (ctx: RoutineContext
         if (!itemId || quantity <= 0) continue;
         const displayName = (item.name as string) || itemId;
 
+        let deposited = false;
         if (settings.depositMode === "sell") {
           const sellResp = await bot.exec("sell", { item_id: itemId, quantity });
-          if (sellResp.error) {
-            await bot.exec("deposit_items", { item_id: itemId, quantity });
+          if (!sellResp.error) {
+            deposited = true;
+          } else {
+            ctx.log("trade", `Sell failed for ${displayName}: ${sellResp.error.message} — trying storage`);
+            const storeResp = await bot.exec("deposit_items", { item_id: itemId, quantity });
+            if (!storeResp.error) {
+              deposited = true;
+            } else {
+              const fResp2 = await bot.exec("faction_deposit_items", { item_id: itemId, quantity });
+              if (!fResp2.error) deposited = true;
+              else ctx.log("error", `All deposit methods failed for ${displayName}: ${fResp2.error.message}`);
+            }
           }
         } else if (settings.depositMode === "faction") {
           const fResp = await bot.exec("faction_deposit_items", { item_id: itemId, quantity });
-          if (fResp.error) {
-            await bot.exec("deposit_items", { item_id: itemId, quantity });
+          if (!fResp.error) {
+            deposited = true;
+          } else {
+            ctx.log("trade", `Faction deposit failed for ${displayName}: ${fResp.error.message} — trying station storage`);
+            const storeResp = await bot.exec("deposit_items", { item_id: itemId, quantity });
+            if (!storeResp.error) deposited = true;
+            else ctx.log("error", `All deposit methods failed for ${displayName}: ${storeResp.error.message}`);
           }
         } else if (settings.depositBot) {
           const gResp = await bot.exec("send_gift", { recipient: settings.depositBot, item_id: itemId, quantity });
-          if (gResp.error) {
-            await bot.exec("deposit_items", { item_id: itemId, quantity });
+          if (!gResp.error) {
+            deposited = true;
+          } else {
+            ctx.log("trade", `Gift to ${settings.depositBot} failed for ${displayName}: ${gResp.error.message} — trying storage`);
+            const storeResp = await bot.exec("deposit_items", { item_id: itemId, quantity });
+            if (!storeResp.error) {
+              deposited = true;
+            } else {
+              const fResp2 = await bot.exec("faction_deposit_items", { item_id: itemId, quantity });
+              if (!fResp2.error) deposited = true;
+              else ctx.log("error", `All deposit methods failed for ${displayName}: ${fResp2.error.message}`);
+            }
           }
         } else {
-          await bot.exec("deposit_items", { item_id: itemId, quantity });
+          const storeResp = await bot.exec("deposit_items", { item_id: itemId, quantity });
+          if (!storeResp.error) {
+            deposited = true;
+          } else {
+            const fResp2 = await bot.exec("faction_deposit_items", { item_id: itemId, quantity });
+            if (!fResp2.error) deposited = true;
+            else ctx.log("error", `All deposit methods failed for ${displayName}: ${fResp2.error.message}`);
+          }
         }
-        unloadedItems.push(`${quantity}x ${displayName}`);
+
+        if (deposited) {
+          unloadedItems.push(`${quantity}x ${displayName}`);
+        }
         yield "unloading";
       }
 

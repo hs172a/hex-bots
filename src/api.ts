@@ -340,7 +340,8 @@ export class SpaceMoltAPI {
   }
 
   async getPlayerProfile(playerId: string): Promise<unknown> {
-    await this.ensureSession();
+    return null;
+    /* await this.ensureSession();
     const baseUrl = this.baseUrl.replace(/\/api\/v\d+$/, "");
     const url = `${baseUrl}/api/player/${playerId}`;
     const resp = await fetch(url, {
@@ -349,7 +350,7 @@ export class SpaceMoltAPI {
         "User-Agent": USER_AGENT,
       },
     });
-    return await resp.json();
+    return await resp.json(); */
   }
 
   private async doRequest(command: string, payload?: Record<string, unknown>): Promise<ApiResponse> {

@@ -301,7 +301,14 @@ async function handleCargoFromResponse(
     if (!ok) {
       const ok2 = await depositItem(itemId, quantity, displayName, settings.depositFallback, "");
       if (!ok2) {
-        await bot.exec("deposit_items", { item_id: itemId, quantity });
+        const storeResp = await bot.exec("deposit_items", { item_id: itemId, quantity });
+        if (storeResp.error) {
+          const factionResp = await bot.exec("faction_deposit_items", { item_id: itemId, quantity });
+          if (factionResp.error) {
+            ctx.log("error", `All deposit methods failed for ${displayName}: ${factionResp.error.message}`);
+            continue;
+          }
+        }
       }
     }
     unloadedItems.push(`${quantity}x ${displayName}`);
@@ -411,10 +418,24 @@ export const minerRoutineV2: Routine = async function* (ctx: RoutineContext) {
           await navigateToSystem(ctx, homeSystem, { fuelThresholdPct: 50, hullThresholdPct: 30 });
         }
       }
+      // Navigate to station POI in current system before docking
+      if (!bot.docked) {
+        const { pois: startupPois } = await getSystemInfo(ctx);
+        const startupStation = findStation(startupPois);
+        if (startupStation) {
+          const travelResp = await bot.exec("travel", { target_poi: startupStation.id });
+          if (travelResp.error && !travelResp.error.message.includes("already")) {
+            ctx.log("error", `Startup: travel to station failed: ${travelResp.error.message}`);
+          }
+        }
+      }
       await ensureDocked(ctx);
-      await handleCargoFromResponse(ctx, nonFuelCargo, settings0);
-      const names = nonFuelCargo.map(i => `${i.quantity}x ${i.name || i.item_id}`).join(", ");
-      ctx.log("mining", `Startup: deposited ${names} — cargo clear for mining`);
+      const unloaded = await handleCargoFromResponse(ctx, nonFuelCargo, settings0);
+      if (unloaded.length > 0) {
+        ctx.log("mining", `Startup: deposited ${unloaded.join(", ")} — cargo clear for mining`);
+      } else {
+        ctx.log("error", `Startup: failed to deposit cargo — will retry in main loop`);
+      }
     }
   }
 
@@ -763,16 +784,21 @@ export const minerRoutineV2: Routine = async function* (ctx: RoutineContext) {
     // ── Optimized cargo handling ──
     yield "unload_cargo";
     const cargoUnloadResp = await bot.exec("get_cargo");
+    let cargoUnloadItems: Array<Record<string, unknown>>;
     if (cargoUnloadResp.result && typeof cargoUnloadResp.result === "object") {
       const result = cargoUnloadResp.result as Record<string, unknown>;
-      const cargoItems = (
+      cargoUnloadItems = (
         Array.isArray(result) ? result :
         Array.isArray(result.items) ? result.items :
         Array.isArray(result.cargo) ? result.cargo :
         []
       ) as Array<Record<string, unknown>>;
-
-      await handleCargoFromResponse(ctx, cargoItems, settings);
+    } else {
+      if (cargoUnloadResp.error) ctx.log("error", `get_cargo failed: ${cargoUnloadResp.error.message} — using cached inventory`);
+      cargoUnloadItems = bot.inventory.map(i => ({ item_id: i.itemId, name: i.name, quantity: i.quantity } as Record<string, unknown>));
+    }
+    if (cargoUnloadItems.length > 0) {
+      await handleCargoFromResponse(ctx, cargoUnloadItems, settings);
     }
 
     // Update status after unloading (single call instead of multiple)

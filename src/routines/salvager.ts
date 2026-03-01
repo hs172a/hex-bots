@@ -340,6 +340,26 @@ export const salvagerRoutine: Routine = async function* (ctx: RoutineContext) {
     }
     bot.docked = true;
 
+    // ── Process towed wreck at salvage yard (sell_wreck or scrap_wreck) ──
+    if (settings.enableTowing) {
+      if (settings.depositMode === "sell") {
+        const sellWreckResp = await bot.exec("sell_wreck");
+        if (!sellWreckResp.error) {
+          const cr = (sellWreckResp.result as Record<string, unknown>)?.credits as number || 0;
+          if (cr > 0) ctx.log("trade", `Sold towed wreck for ${cr}cr`);
+        }
+      } else {
+        const scrapWreckResp = await bot.exec("scrap_wreck");
+        if (!scrapWreckResp.error) {
+          const items = ((scrapWreckResp.result as Record<string, unknown>)?.items as Array<Record<string, unknown>>) || [];
+          if (items.length > 0) {
+            const names = items.map(i => `${(i.quantity as number) || 1}x ${(i.name as string) || "material"}`).join(", ");
+            ctx.log("scavenge", `Scrapped towed wreck: ${names}`);
+          }
+        }
+      }
+    }
+
     // ── Collect storage + sell/deposit cargo ──
     await collectFromStorage(ctx);
     const creditsBefore = bot.credits;

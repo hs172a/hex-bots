@@ -963,6 +963,124 @@ export async function depositNonFuelCargo(ctx: RoutineContext): Promise<boolean>
   return deposited > 0;
 }
 
+/**
+ * Pre-start cargo clearance — deposit any items in cargo that are not needed
+ * for the current routine. Always keeps: fuel, energy_cell, ammo/ammunition.
+ *
+ * Navigates to the nearest station in the current system (or to homeSystem
+ * if no local station is found). Deposits via faction storage first, falls
+ * back to station storage.
+ *
+ * @returns List of deposited item descriptions (empty if nothing to clear).
+ */
+export async function clearStartupCargo(
+  ctx: RoutineContext,
+  opts: {
+    /** Additional item_ids to preserve in cargo (e.g. craft materials, trade items). */
+    keepItemIds?: Set<string>;
+    /** "faction" tries faction_deposit_items first, falls back to station. "storage" goes straight to station. Default: "faction". */
+    depositMode?: "faction" | "storage";
+    /** System to navigate to if no station exists in the current system. */
+    homeSystem?: string;
+    /** Fuel % required for any cross-system travel. Default: 50. */
+    fuelThresholdPct?: number;
+    /** Hull % below which navigation is skipped. Default: 30. */
+    hullThresholdPct?: number;
+  },
+): Promise<string[]> {
+  const { bot } = ctx;
+  const keepItemIds = opts.keepItemIds ?? new Set<string>();
+  const depositMode = opts.depositMode ?? "faction";
+  const homeSystem = opts.homeSystem || bot.system;
+  const fuelThresholdPct = opts.fuelThresholdPct ?? 50;
+  const hullThresholdPct = opts.hullThresholdPct ?? 30;
+
+  await bot.refreshCargo();
+
+  const KEEP_PATTERNS = ["fuel", "energy_cell", "ammo", "ammunition"];
+  const toDeposit = bot.inventory.filter(item => {
+    if (item.quantity <= 0) return false;
+    const lower = (item.itemId || "").toLowerCase();
+    if (KEEP_PATTERNS.some(p => lower.includes(p))) return false;
+    if (keepItemIds.has(item.itemId)) return false;
+    return true;
+  });
+
+  if (toDeposit.length === 0) return [];
+
+  ctx.log("system", `Startup: clearing ${toDeposit.length} cargo type(s) before starting...`);
+
+  // Find a station in the current system
+  const { pois } = await getSystemInfo(ctx);
+  let station = findStation(pois);
+
+  if (!station && homeSystem && homeSystem !== bot.system) {
+    ctx.log("travel", `Startup: no local station — navigating to ${homeSystem} to deposit cargo...`);
+    await ensureUndocked(ctx);
+    const fueled = await ensureFueled(ctx, fuelThresholdPct);
+    if (!fueled) {
+      ctx.log("error", "Startup: cannot refuel for cargo deposit trip — skipping clearance");
+      return [];
+    }
+    const arrived = await navigateToSystem(ctx, homeSystem, { fuelThresholdPct, hullThresholdPct });
+    if (!arrived) {
+      ctx.log("error", `Startup: failed to reach ${homeSystem} — skipping cargo clearance`);
+      return [];
+    }
+    const { pois: newPois } = await getSystemInfo(ctx);
+    station = findStation(newPois);
+  }
+
+  if (!station) {
+    ctx.log("error", "Startup: no station found for cargo deposit — skipping clearance");
+    return [];
+  }
+
+  // Travel to station POI
+  await ensureUndocked(ctx);
+  if (bot.poi !== station.id) {
+    const tResp = await bot.exec("travel", { target_poi: station.id });
+    if (tResp.error && !tResp.error.message.includes("already")) {
+      ctx.log("error", `Startup: travel to station failed: ${tResp.error.message}`);
+      return [];
+    }
+    bot.poi = station.id;
+  }
+
+  await ensureDocked(ctx);
+  if (!bot.docked) {
+    ctx.log("error", "Startup: could not dock — skipping cargo clearance");
+    return [];
+  }
+
+  // Deposit items
+  const deposited: string[] = [];
+  for (const item of toDeposit) {
+    if (item.quantity <= 0) continue;
+    let ok = false;
+    if (depositMode === "faction") {
+      const fResp = await bot.exec("faction_deposit_items", { item_id: item.itemId, quantity: item.quantity });
+      ok = !fResp.error;
+    }
+    if (!ok) {
+      const sResp = await bot.exec("deposit_items", { item_id: item.itemId, quantity: item.quantity });
+      ok = !sResp.error;
+    }
+    if (ok) {
+      deposited.push(`${item.quantity}x ${item.name}`);
+    } else {
+      ctx.log("error", `Startup: failed to deposit ${item.quantity}x ${item.name}`);
+    }
+  }
+
+  if (deposited.length > 0) {
+    ctx.log("system", `Startup: deposited ${deposited.join(", ")} — cargo cleared`);
+    await bot.refreshCargo();
+  }
+
+  return deposited;
+}
+
 // ── Navigation ───────────────────────────────────────────────
 
 /** Navigate to a target system via jump chain. Returns true if arrived. */
@@ -1295,8 +1413,10 @@ export async function scavengeWrecks(ctx: RoutineContext, opts?: { fuelOnly?: bo
 }
 
 /**
- * Full wreck salvage chain: loot → salvage → scrap for each wreck.
- * Optionally tow high-value wrecks. Returns total items extracted.
+ * Full wreck salvage chain: loot_wreck in field + optional tow_wreck.
+ * salvage_wreck and scrap_wreck are no longer available in-field (use_tow error);
+ * they must be called at a salvage yard station after towing.
+ * Returns total items looted.
  */
 export async function fullSalvageWrecks(
   ctx: RoutineContext,
@@ -1306,7 +1426,6 @@ export async function fullSalvageWrecks(
   if (bot.docked) return 0;
 
   const enableTow = opts?.enableTow ?? false;
-  const minTowValue = opts?.minTowValue ?? 500;
   const fuelOnly = opts?.fuelOnly ?? false;
 
   const wrecksResp = await bot.exec("get_wrecks");
@@ -1315,6 +1434,7 @@ export async function fullSalvageWrecks(
 
   let totalExtracted = 0;
   const extractedItems: string[] = [];
+  let alreadyTowing = false;
 
   for (const wreck of wrecks) {
     if (bot.state !== "running") break;
@@ -1325,7 +1445,7 @@ export async function fullSalvageWrecks(
       break;
     }
 
-    // Step 1: Loot all items from the wreck
+    // Step 1: Loot all items from the wreck (loot_wreck still works in-field)
     if (wreck.items.length > 0) {
       let candidates = [...wreck.items];
       if (fuelOnly) {
@@ -1334,7 +1454,6 @@ export async function fullSalvageWrecks(
         );
       }
 
-      // Sort: fuel cells first
       candidates.sort((a, b) => {
         const aPri = LOOT_PRIORITY.some(p => a.item_id.includes(p)) ? 0 : 1;
         const bPri = LOOT_PRIORITY.some(p => b.item_id.includes(p)) ? 0 : 1;
@@ -1362,50 +1481,20 @@ export async function fullSalvageWrecks(
       }
     }
 
-    // Step 2: Salvage the wreck for components
-    await bot.refreshStatus();
-    if (bot.cargoMax > 0 && bot.cargo >= bot.cargoMax) continue;
-
-    const salvageResp = await bot.exec("salvage_wreck", { wreck_id: wreck.wreck_id });
-    if (!salvageResp.error && salvageResp.result) {
-      const sr = salvageResp.result as Record<string, unknown>;
-      const items = (sr.items as Array<Record<string, unknown>>) || [];
-      if (items.length > 0) {
-        const names = items.map(i => `${(i.quantity as number) || 1}x ${(i.name as string) || (i.item_id as string) || "component"}`).join(", ");
-        extractedItems.push(names);
-        totalExtracted += items.length;
-        ctx.log("scavenge", `Salvaged components: ${names}`);
-      }
-    }
-
-    // Step 3: Scrap the wreck for raw materials
-    await bot.refreshStatus();
-    if (bot.cargoMax > 0 && bot.cargo >= bot.cargoMax) continue;
-
-    const scrapResp = await bot.exec("scrap_wreck", { wreck_id: wreck.wreck_id });
-    if (!scrapResp.error && scrapResp.result) {
-      const sr = scrapResp.result as Record<string, unknown>;
-      const items = (sr.items as Array<Record<string, unknown>>) || [];
-      if (items.length > 0) {
-        const names = items.map(i => `${(i.quantity as number) || 1}x ${(i.name as string) || (i.item_id as string) || "material"}`).join(", ");
-        extractedItems.push(names);
-        totalExtracted += items.length;
-        ctx.log("scavenge", `Scrapped materials: ${names}`);
-      }
-    }
-
-    // Step 4: Optionally tow high-value wrecks
-    if (enableTow) {
+    // Step 2: Tow wreck to salvage yard (one at a time; sell_wreck/scrap_wreck at station)
+    if (enableTow && !alreadyTowing) {
       const towResp = await bot.exec("tow_wreck", { wreck_id: wreck.wreck_id });
       if (!towResp.error) {
-        ctx.log("scavenge", `Towing wreck: ${wreck.name}`);
+        ctx.log("scavenge", `Towing wreck: ${wreck.name} — will process at salvage yard`);
+        alreadyTowing = true;
+        break; // head to station with towed wreck
       }
     }
   }
 
   if (totalExtracted > 0) {
     await bot.refreshCargo();
-    ctx.log("scavenge", `Full salvage: ${totalExtracted} items from ${wrecks.length} wreck(s)`);
+    ctx.log("scavenge", `Looted ${totalExtracted} items from ${wrecks.length} wreck(s)`);
   }
 
   return totalExtracted;

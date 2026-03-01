@@ -22,6 +22,12 @@
           >
             <span class="text-xs">{{ tab.icon }}</span> {{ tab.label }}
           </button>
+          <button 
+            @click="switchTab('legacy')"
+            class="px-5 py-3 text-sm font-medium transition-all border-b-2 text-space-text-dim border-transparent hover:text-space-text"
+          >
+            <span class="text-xs">📱</span> Legacy UI
+          </button>
         </div>
       </div>
 
@@ -86,6 +92,10 @@ const currentTabComponent = computed(() => {
 });
 
 function switchTab(id: string) {
+  if (id === 'legacy') {
+    window.location.href = '/legacy_ui.html';
+    return;
+  }
   showProfile.value = false;
   activeTab.value = id;
 }

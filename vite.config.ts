@@ -12,7 +12,6 @@ export default defineConfig({
   server: {
     port: 5173,
     proxy: {
-      // Проксі WebSocket та API до Bun сервера
       '/ws': {
         target: 'ws://localhost:3000',
         ws: true,

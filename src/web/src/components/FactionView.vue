@@ -14,7 +14,12 @@
           :class="selectedBot === bot.username 
             ? 'bg-[rgba(88,166,255,0.1)] border-space-accent text-space-accent' 
             : 'border-transparent text-space-text hover:bg-space-row-hover'"
-        >{{ bot.username }}</div>
+        >
+          <div class="flex items-center gap-1.5 min-w-0">
+            <span v-if="(bot as any).empire" :title="empireName((bot as any).empire)" class="shrink-0 leading-none">{{ empireIcon((bot as any).empire) }}</span>
+            <span class="truncate">{{ bot.username }}</span>
+          </div>
+        </div>
         <div v-if="botStore.bots.length === 0" class="text-xs text-space-text-dim italic p-2">No bots available</div>
 
         <!-- Section nav (only when in own faction) -->
@@ -85,7 +90,7 @@
             <div>
               <h2 class="text-xl font-bold text-space-text-bright">{{ factionData.name }}</h2>
               <div class="flex items-center gap-3 text-xs mt-1">
-                <span class="px-2 py-0.5 bg-[#21262d] rounded text-space-text">[{{ factionData.tag }}]</span>
+                <span class="px-2 py-0.5 rounded text-space-text">[{{ factionData.tag }}]</span>
                 <span class="text-space-text-dim">Members: {{ factionData.member_count || 0 }}</span>
               </div>
             </div>
@@ -103,7 +108,7 @@
             <div>
               <h2 class="text-xl font-bold text-space-text-bright">{{ factionData.name }}</h2>
               <div class="flex items-center gap-3 text-xs mt-1">
-                <span class="px-2 py-0.5 bg-[#21262d] rounded text-space-text">[{{ factionData.tag }}]</span>
+                <span class="px-2 py-0.5 rounded text-space-text">[{{ factionData.tag }}]</span>
                 <span class="text-space-text-dim">Leader: {{ factionData.leader_username || factionData.leader || '-' }}</span>
               </div>
             </div>
@@ -346,6 +351,7 @@
 <script setup lang="ts">
 import { ref, computed } from 'vue';
 import { useBotStore } from '../stores/botStore';
+import { empireIcon, empireName } from '../utils/empires';
 
 const botStore = useBotStore();
 const selectedBot = ref<string | null>(null);

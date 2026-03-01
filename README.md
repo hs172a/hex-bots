@@ -5,21 +5,34 @@
 
 A web-based bot fleet manager for [SpaceMolt](https://www.spacemolt.com) — run multiple bots with automated routines, monitor and control everything from a reactive live dashboard.
 
-![Dashboard](https://img.shields.io/badge/interface-vue3_spa-blue) ![Runtime](https://img.shields.io/badge/runtime-bun-black) ![No Dependencies](https://img.shields.io/badge/deps-zero_runtime-green) ![Version](https://img.shields.io/badge/version-1.1.5-purple)
+![Dashboard](https://img.shields.io/badge/interface-vue3_spa-blue) ![Runtime](https://img.shields.io/badge/runtime-bun-black) ![No Dependencies](https://img.shields.io/badge/deps-zero_runtime-green) ![Version](https://img.shields.io/badge/version-1.2.0-purple)
 
 ## What It Does
 
-Bot Runner manages a fleet of SpaceMolt bots from a single web dashboard. Each bot runs an automated routine (mining, exploring, crafting, rescue) while you monitor from your browser.
+Bot Runner manages a fleet of SpaceMolt bots from a single web dashboard. Each bot runs an automated routine (mining, exploring, crafting, salvaging, rescue) while you monitor from your browser.
 
 - **Vue 3 SPA Dashboard** — reactive real-time UI at `http://localhost:3000`
-- **5 Routines** — Miner, Explorer, Crafter, Coordinator, Fuel Rescue
+- **6 Routines** — Miner, Explorer, Crafter, Coordinator, Fuel Rescue, Salvager
 - **Faction Management** — members, storage, facilities, diplomacy, intel
 - **Galaxy Map** — auto-built from explorer data
-- **Manual Control** — execute any game command from the detailed bot profile page with instant toast feedback
+- **Manual Control** — full command panel per bot with detailed live log output, craft filter, and execution lock
 - **Multi-bot** — run as many bots as you want, each with its own routine
 - **Zero runtime deps** — just Bun
 
 ## New Features in This Fork
+
+### Dashboard
+- **Extended fleet stats bar** — Active Bots, Fleet Credits, Trade Profit (today), Trades (today), Avg Profit/Trade, Ores Mined, Items Crafted, Explored systems
+- **Auto-scrolling log panels** — Activity Log, Broadcast/Chat, and System Messages all scroll to the newest entry automatically
+- **Bot state badges** — running bots show their current routine name instead of just "running"
+- **Inline start** — select a routine and start any bot directly from the fleet table row
+
+### Bot Profile — Control Panel
+- **Full response log** — every command prints all server data line-by-line just like the legacy UI (POIs, connections, cargo items, market prices, nearby players, etc.)
+- **Execution lock** — the control grid is dimmed and pointer-events disabled while a command is in flight, preventing accidental double-clicks
+- **Craft filter** — the recipe dropdown only shows recipes you can actually craft with your current cargo; recipe card shows each ingredient with quantity and "in cargo" count, plus the output item
+- **Refresh Catalog button** — force-refreshes the public station and ship catalog from the SpaceMolt API without restarting the server
+- **Long Distance Travel** — unified "Auto Start" button handles undocking and sequential multi-hop jumps; shows the final destination system in the route header
 
 ### Bot Profile — Ship Tab
 - **Side-by-side layout** — Ship stats and Installed Modules displayed in one row
@@ -136,6 +149,7 @@ Full manual control panel for any bot:
 | **Crafter** | Crafts items up to configured stock limits. Add/remove recipes with category picker. |
 | **Coordinator** | Analyses market demand across the fleet, assigns ore quotas to miners and craft targets to crafters. |
 | **Fuel Rescue** | Monitors fleet for stranded bots (low fuel), delivers fuel cells or credits. |
+| **Salvager** | Scavenges wrecks for loot. In full-salvage mode: loots wrecks, tows them to a salvage yard, then scraps or sells them while docked. |
 
 All routines include:
 - Auto-refuel and repair at configurable thresholds
@@ -179,7 +193,7 @@ Credentials are saved to `sessions/<username>/credentials.json`. Bots auto-disco
 
 ```
 src/
-  botmanager.ts      Entry point — discovers bots, starts web server, handles actions
+  botmanager.ts      Entry point — discovers bots, starts web server, handles WebActions
   bot.ts             Bot class — login, exec, status caching, routine runner
   api.ts             SpaceMolt REST client (v1/v2) with session management and rate-limit retry
   apilogger.ts       Optional file logging for all API requests/responses (data/api-logs/)
@@ -187,7 +201,7 @@ src/
   ui.ts              Log routing (bot → web server → browser)
   debug.ts           Debug logging to data/debug.log
   catalogstore.ts    Game catalog cache (items/ships/skills/recipes) — 24h disk persistence
-  publiccatalog.ts   Public ship & station catalog (no auth required)
+  publicCatalog.ts   Public ship & station catalog (no auth required); force-refresh via refreshCatalog action
   mapstore.ts        Galaxy map persistence and pathfinding
   routines/
     common.ts        Shared utilities (dock, refuel, travel, scavenge, emergency recovery)
@@ -196,20 +210,23 @@ src/
     crafter.ts       Crafting routine (uses catalogStore cache)
     coordinator.ts   Fleet coordinator — market demand analysis, assigns miner/crafter targets
     rescue.ts        Fuel rescue routine
+    salvager.ts      Salvage routine — loot + tow_wreck to station + sell/scrap when docked
   web/
-    server.ts        Bun HTTP + WebSocket server
+    server.ts        Bun HTTP + WebSocket server; WebAction type union
     src/             Vue 3 SPA (Vite + TailwindCSS + Pinia)
-      App.vue        Root layout with header (logo + version) and sidebar navigation
+      App.vue        Root layout — sidebar navigation, Legacy UI button
       components/
-        Dashboard.vue      Bot fleet overview table
-        BotProfile.vue     Full manual control panel (Ship, Skills, Travel, Station tabs)
-        ShipyardView.vue   Fleet, showroom, commission ship, module management
-        MissionsView.vue   Mission browser and active mission tracker
-        FactionView.vue    Faction management (overview, members, storage, facilities, diplomacy, intel)
-        SettingsView.vue   Per-routine settings + General settings (API logging, faction config)
-        MapView.vue        Interactive galaxy map
+        Dashboard.vue         Fleet table, auto-scroll logs, extended fleet stats bar
+        BotProfile.vue        Bot profile tabs (Ship, Skills, Travel, Station, Control)
+        BotControlPanel.vue   Manual control panel — full log output, craft filter, execution lock, Refresh Catalog
+        ShipyardView.vue      Fleet, showroom, commission ship, module management
+        MissionsView.vue      Mission browser and active mission tracker
+        FactionView.vue       Faction management (overview, members, storage, facilities, diplomacy, intel)
+        SettingsView.vue      Per-routine settings + General settings (API logging, faction config)
+        MapView.vue           Interactive galaxy map
+        StatsView.vue         Per-bot stats breakdown + faction activity log with period filter
       stores/
-        botStore.ts        Bots, public catalog, WebSocket sendExec, settings save
+        botStore.ts           Pinia store — bots, public catalog, sendExec, wsSend, statsDaily
 data/
   settings.json      Persisted routine settings
   catalog.json       Cached game catalog (refreshed every 24h)

@@ -5,6 +5,39 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Hex Bots</title>
   <link rel="icon" href="favicon.png">
+  <style>
+    :root {
+        --space-black: #0a0e17;
+        --deep-void: #0d1321;
+        --nebula-blue: #1a2744;
+        --plasma-cyan: #00d4ff;
+        --laser-blue: #4dabf7;
+        --shell-orange: #ff6b35;
+        --claw-red: #e63946;
+        --bio-green: #2dd4bf;
+        --star-white: #e8f4f8;
+        --chrome-silver: #a8c5d6;
+        --hull-grey: #3d5a6c;
+        --warning-yellow: #ffd93d;
+        --void-purple: #9b59b6;
+        --dim-grey: #2a3a4a;
+        --glow-cyan: 0 0 30px #00d4ff80;
+        --glow-orange: 0 0 30px #ff6b3580;
+    }
+    body, .bg-space-bg {
+      background-color: var(--deep-void) !important;
+    }
+    .card, .bg-space-card {
+      background: linear-gradient(135deg, var(--nebula-blue), var(--deep-void));
+      /* border: 1px solid var(--hull-grey); */
+    }
+    .card > .bg-space-card {
+      background: transparent !important;
+    }
+    .hover\:bg-space-row-hover:hover {
+      --tw-bg-opacity: 0.4 !important;
+    }
+  </style>
 </head>
 <body>
   <div id="app"></div>
