@@ -16,6 +16,7 @@ import {
   repairShip,
   ensureFueled,
   depositCargoAtHome,
+  depositCargoLocal,
   navigateToSystem,
   fetchSecurityLevel,
   scavengeWrecks,
@@ -447,12 +448,12 @@ export const explorerRoutine: Routine = async function* (ctx: RoutineContext) {
         yield* visitOtherPoi(ctx, systemId, poi);
       }
 
-      // ── Check cargo — if full, return to Sol Central to deposit ──
+      // ── Check cargo — if nearly full, deposit at nearest in-system station ──
       await bot.refreshStatus();
-      if (bot.cargoMax > 0 && bot.cargo >= bot.cargoMax) {
+      if (bot.cargoMax > 0 && bot.cargoMax - bot.cargo < 5) {
         yield "deposit_cargo";
-        await depositCargoAtHome(ctx, { fuelThresholdPct: FUEL_SAFETY_PCT, hullThresholdPct: 30 });
-        // After depositing, we're likely in Sol — break to restart system scan
+        await depositCargoLocal(ctx, pois, { fuelThresholdPct: FUEL_SAFETY_PCT, hullThresholdPct: 30 });
+        // May have moved to a different system (no local station fallback)
         await bot.refreshStatus();
         if (bot.system !== systemId) {
           ctx.log("info", `Moved to ${bot.system} after deposit — restarting system scan`);
@@ -916,9 +917,10 @@ async function* tradeUpdateRoutine(ctx: RoutineContext): AsyncGenerator<string, 
 
       // ── Deposit cargo if getting full ──
       await bot.refreshStatus();
-      if (bot.cargoMax > 0 && bot.cargo >= bot.cargoMax) {
+      if (bot.cargoMax > 0 && bot.cargoMax - bot.cargo < 5) {
         yield "deposit_cargo";
-        await depositCargoAtHome(ctx, { fuelThresholdPct: FUEL_SAFETY_PCT, hullThresholdPct: 30 });
+        const sysPoisForDeposit = (await getSystemInfo(ctx)).pois;
+        await depositCargoLocal(ctx, sysPoisForDeposit, { fuelThresholdPct: FUEL_SAFETY_PCT, hullThresholdPct: 30 });
       }
 
       // ── Check skills ──

@@ -922,6 +922,54 @@ export async function depositCargoAtHome(
   return deposited;
 }
 
+/**
+ * Deposit cargo at the nearest station in the current system.
+ * If no station is present, falls back to `depositCargoAtHome` (Sol Central).
+ * Returns true if deposit succeeded.
+ */
+export async function depositCargoLocal(
+  ctx: RoutineContext,
+  pois: SystemPOI[],
+  opts: { fuelThresholdPct: number; hullThresholdPct: number } = { fuelThresholdPct: 40, hullThresholdPct: 30 },
+): Promise<boolean> {
+  const { bot } = ctx;
+  const localStation = findStation(pois);
+
+  if (!localStation) {
+    ctx.log("trade", `No station in ${bot.system} — navigating to Sol Central to deposit...`);
+    return depositCargoAtHome(ctx, opts);
+  }
+
+  ctx.log("trade", `Cargo near-full (${bot.cargo}/${bot.cargoMax}) — docking at ${localStation.name} to deposit...`);
+
+  await ensureUndocked(ctx);
+  if (bot.poi !== localStation.id) {
+    const tResp = await bot.exec("travel", { target_poi: localStation.id });
+    if (tResp.error && !tResp.error.message.includes("already")) {
+      ctx.log("error", `Travel to ${localStation.name} failed: ${tResp.error.message} — falling back to Sol Central`);
+      return depositCargoAtHome(ctx, opts);
+    }
+    bot.poi = localStation.id;
+  }
+
+  if (!bot.docked) {
+    const dResp = await bot.exec("dock");
+    if (dResp.error && !dResp.error.message.includes("already")) {
+      ctx.log("error", `Dock failed at ${localStation.name}: ${dResp.error.message}`);
+      return false;
+    }
+    bot.docked = true;
+  }
+
+  await collectFromStorage(ctx);
+  const deposited = await depositNonFuelCargo(ctx);
+  await tryRefuel(ctx);
+  await ensureUndocked(ctx);
+
+  if (deposited) ctx.log("trade", `Deposited cargo at ${localStation.name} — resuming exploration`);
+  return deposited;
+}
+
 /** Deposit all non-fuel cargo to faction storage (shared pool). Assumes docked. Returns true if any items deposited. */
 export async function depositNonFuelCargo(ctx: RoutineContext): Promise<boolean> {
   const { bot } = ctx;
@@ -1090,7 +1138,7 @@ export async function navigateToSystem(
   opts: { fuelThresholdPct: number; hullThresholdPct: number; noJettison?: boolean; autoCloak?: boolean; onJump?: (jumpNumber: number) => Promise<boolean> },
 ): Promise<boolean> {
   const { bot } = ctx;
-  const MAX_JUMPS = 20;
+  const MAX_JUMPS = (readSettings().general?.maxJumps as number) || 20;
 
   for (let attempt = 0; attempt < MAX_JUMPS; attempt++) {
     await bot.refreshStatus();
@@ -1347,9 +1395,11 @@ export async function scavengeWrecks(ctx: RoutineContext, opts?: { fuelOnly?: bo
 
   let totalLooted = 0;
   const lootedItems: string[] = [];
+  let cargoFull = false;
 
   for (const wreck of wrecks) {
     if (bot.state !== "running") break;
+    if (cargoFull) break; // no point trying more wrecks
 
     // Check cargo space
     await bot.refreshStatus();
@@ -1391,7 +1441,8 @@ export async function scavengeWrecks(ctx: RoutineContext, opts?: { fuelOnly?: bo
       if (lootResp.error) {
         const errMsg = lootResp.error.message.toLowerCase();
         if (errMsg.includes("no_space") || errMsg.includes("not enough cargo") || errMsg.includes("cargo space")) {
-          break; // cargo full — stop looting this wreck
+          cargoFull = true; // stop looting all wrecks — cargo is full
+          break;
         }
         if (errMsg.includes("empty") || errMsg.includes("not found") || errMsg.includes("not in wreck")) {
           break; // wreck gone or empty

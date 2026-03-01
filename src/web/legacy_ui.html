@@ -1857,9 +1857,9 @@
         <div class="sidebar-item" onclick="switchSettingsTab('gas_harvester')">GasHarvester</div>
         <div class="sidebar-item" onclick="switchSettingsTab('ice_harvester')">IceHarvester</div>
         <div class="sidebar-item" onclick="switchSettingsTab('salvager')">Salvager</div>
-        <div class="sidebar-item" onclick="switchSettingsTab('hunter')">Hunter</div>
-        <div class="sidebar-item" onclick="switchSettingsTab('ai')">AI</div>
         <div class="sidebar-item" onclick="switchSettingsTab('cleanup')">Cleanup</div>
+        <div class="sidebar-item" onclick="switchSettingsTab('ai')">AI</div>
+        <div class="sidebar-item" onclick="switchSettingsTab('hunter')">Hunter</div>
       </div>
       <div class="settings-panel" id="settingsContent">
         <!-- filled by JS -->
@@ -2220,7 +2220,8 @@ function connect() {
         break;
       case 'status':
         bots = msg.bots || [];
-        renderBots();
+        // Skip re-rendering the bot list if a routine select is focused (user is picking)
+        if (!document.activeElement?.closest?.('.row-actions')) renderBots();
         renderStats();
         updateChatBotSelect();
         // Update profile if open
@@ -2404,7 +2405,7 @@ function renderStatsTab() {
   document.getElementById('pStatSystems').textContent = num(tSystems);
 
   // Faction funds
-  const treasury = factionData ? (factionData.treasury ?? factionData.credits ?? null) : null;
+  const treasury = factionTreasury ?? (factionData ? (factionData.treasury ?? factionData.credits ?? null) : null);
   document.getElementById('pStatFaction').textContent = treasury != null ? num(treasury) + 'cr' : '-';
 
   const tbody = document.getElementById('statsTableBody');
@@ -2471,8 +2472,7 @@ function renderStats() {
   document.getElementById('statCredits').textContent = num(credits) + 'cr';
   document.getElementById('statSystems').textContent = num(systems);
   document.getElementById('statActive').textContent = active;
-  // Faction funds from cached factionData
-  const treasury = factionData ? (factionData.treasury ?? factionData.credits ?? null) : null;
+  const treasury = factionTreasury ?? (factionData ? (factionData.treasury ?? factionData.credits ?? null) : null);
   document.getElementById('statFaction').textContent = treasury != null ? num(treasury) : '-';
 }
 
@@ -2480,21 +2480,25 @@ let _factionFundsInFlight = false;
 /** Fetch faction treasury in the background for the stats bar. */
 function refreshFactionFunds() {
   if (_factionFundsInFlight) return;
-  // Prefer a running bot (more likely to have an active session)
-  const running = bots.filter(b => b.state === 'running');
-  const pick = running.length > 0 ? running[0] : bots[0];
-  if (!pick) return;
+  // faction_info does not return credits/treasury — use view_faction_storage which does,
+  // but it requires docking. Prefer a docked running bot; fall back to any docked bot.
+  const docked = bots.filter(b => b.docked);
+  const pick = docked.find(b => b.state === 'running') ?? docked[0] ?? null;
+  if (!pick) return; // no docked bot — try again next tick
 
   _factionFundsInFlight = true;
-  sendExec(pick.username, 'faction_info', undefined, (result) => {
+  sendExec(pick.username, 'view_faction_storage', undefined, (result) => {
     _factionFundsInFlight = false;
     if (result.ok && result.data) {
-      factionData = result.data;
-      const treasury = factionData.treasury ?? factionData.credits ?? null;
-      const label = treasury != null ? num(treasury) + 'cr' : '-';
-      document.getElementById('statFaction').textContent = label;
-      const pEl = document.getElementById('pStatFaction');
-      if (pEl) pEl.textContent = label;
+      const credits = result.data.credits ?? null;
+      if (credits != null) {
+        factionTreasury = credits;
+        if (factionData) factionData.treasury = credits;
+        const label = num(credits) + 'cr';
+        document.getElementById('statFaction').textContent = label;
+        const pEl = document.getElementById('pStatFaction');
+        if (pEl) pEl.textContent = label;
+      }
     }
   });
 }
@@ -4653,12 +4657,12 @@ function renderSettingsPanel() {
     renderIceHarvesterSettings(panel);
   } else if (activeSettingsTab === 'salvager') {
     renderSalvagerSettings(panel);
-  } else if (activeSettingsTab === 'hunter') {
-    renderHunterSettings(panel);
-  } else if (activeSettingsTab === 'ai') {
-    renderAiSettings(panel);
   } else if (activeSettingsTab === 'cleanup') {
     renderCleanupSettings(panel);
+  } else if (activeSettingsTab === 'ai') {
+    renderAiSettings(panel);
+  } else if (activeSettingsTab === 'hunter') {
+    renderHunterSettings(panel);
   }
 }
 
@@ -4667,6 +4671,7 @@ function renderGeneralSettings(panel) {
   const factionDonatePct = general.factionDonatePct ?? 10;
   const factionStorageSystem = general.factionStorageSystem || '';
   const factionStorageStation = general.factionStorageStation || '';
+  const maxJumps = general.maxJumps ?? 20;
 
   // Build station options from mapData
   let stationOpts = '<option value="">(not set)</option>';
@@ -4705,6 +4710,14 @@ function renderGeneralSettings(panel) {
       </div>
     </div>
 
+    <div class="setting-row">
+      <div>
+        <div class="setting-label">Max Navigation Jumps</div>
+        <div class="setting-hint">Maximum jumps allowed per navigation call. Increase for larger galaxies. Default: 20.</div>
+      </div>
+      <input type="number" id="set-general-maxJumps" min="5" max="100" value="${maxJumps}" style="width:70px">
+    </div>
+
     <div class="settings-save-bar">
       <button class="primary" onclick="saveGeneralSettings()">Save Settings</button>
     </div>
@@ -4718,6 +4731,7 @@ function saveGeneralSettings() {
     factionDonatePct: parseInt(document.getElementById('set-general-donatePct').value) || 0,
     factionStorageSystem,
     factionStorageStation,
+    maxJumps: parseInt(document.getElementById('set-general-maxJumps').value) || 20,
   };
   send({ type: 'saveSettings', routine: 'general', settings: s });
 }
@@ -5452,6 +5466,89 @@ function saveTraderSettings() {
   settings.trader = s;
 }
 
+// ── AI Settings ────────────────────────────────────────────
+function renderAiSettings(panel) {
+  const a = settings.ai || {};
+  const baseUrl = a.baseUrl || '';
+  const apiKey = a.apiKey || '';
+  const model = a.model || '';
+  const cycleIntervalSec = a.cycleIntervalSec ?? 10;
+  const maxToolCallsPerCycle = a.maxToolCallsPerCycle ?? 40;
+  const captainsLogEveryN = a.captainsLogEveryN ?? 5;
+
+  const inputStyle = `style="background:var(--bg-input);color:var(--text);border:1px solid var(--border);border-radius:4px;padding:5px 8px;width:100%;box-sizing:border-box"`;
+
+  panel.innerHTML = `
+    <h3>AI Settings</h3>
+    <div class="settings-desc">Configure the LLM used by the AI routine. Values here override environment variables. Leave blank to use env vars (OPENAI_COMPAT_BASE_URL, OPENAI_COMPAT_API_KEY, AI_MODEL) or Ollama defaults.</div>
+
+    <div class="setting-row">
+      <div>
+        <div class="setting-label">Base URL</div>
+        <div class="setting-hint">OpenAI-compatible endpoint base URL, e.g. https://integrate.api.nvidia.com/v1 or http://localhost:11434/v1</div>
+      </div>
+      <input type="text" id="set-ai-baseUrl" value="${esc(baseUrl)}" placeholder="http://localhost:11434/v1" ${inputStyle}>
+    </div>
+
+    <div class="setting-row">
+      <div>
+        <div class="setting-label">API Key</div>
+        <div class="setting-hint">Bearer token for the LLM endpoint. Use "ollama" for local Ollama.</div>
+      </div>
+      <input type="password" id="set-ai-apiKey" value="${esc(apiKey)}" placeholder="ollama" ${inputStyle}>
+    </div>
+
+    <div class="setting-row">
+      <div>
+        <div class="setting-label">Model</div>
+        <div class="setting-hint">Model name to use, e.g. llama3.2, z-ai/glm4.7, gpt-4o-mini</div>
+      </div>
+      <input type="text" id="set-ai-model" value="${esc(model)}" placeholder="llama3.2" ${inputStyle}>
+    </div>
+
+    <div class="setting-row">
+      <div>
+        <div class="setting-label">Cycle Interval (seconds)</div>
+        <div class="setting-hint">How long to sleep between AI decision cycles.</div>
+      </div>
+      <input type="number" id="set-ai-cycleIntervalSec" min="5" max="300" value="${cycleIntervalSec}">
+    </div>
+
+    <div class="setting-row">
+      <div>
+        <div class="setting-label">Max Tool Calls Per Cycle</div>
+        <div class="setting-hint">Safety cap on tool calls per cycle to prevent runaway loops.</div>
+      </div>
+      <input type="number" id="set-ai-maxToolCallsPerCycle" min="5" max="100" value="${maxToolCallsPerCycle}">
+    </div>
+
+    <div class="setting-row">
+      <div>
+        <div class="setting-label">Captain's Log Every N Cycles</div>
+        <div class="setting-hint">How often the AI writes a captain's log entry.</div>
+      </div>
+      <input type="number" id="set-ai-captainsLogEveryN" min="1" max="20" value="${captainsLogEveryN}">
+    </div>
+
+    <div class="settings-save-bar">
+      <button class="primary" onclick="saveAiSettings()">Save Settings</button>
+    </div>
+  `;
+}
+
+function saveAiSettings() {
+  const s = {
+    baseUrl: document.getElementById('set-ai-baseUrl').value.trim(),
+    apiKey: document.getElementById('set-ai-apiKey').value.trim(),
+    model: document.getElementById('set-ai-model').value.trim(),
+    cycleIntervalSec: parseInt(document.getElementById('set-ai-cycleIntervalSec').value) || 10,
+    maxToolCallsPerCycle: parseInt(document.getElementById('set-ai-maxToolCallsPerCycle').value) || 40,
+    captainsLogEveryN: parseInt(document.getElementById('set-ai-captainsLogEveryN').value) || 5,
+  };
+  send({ type: 'saveSettings', routine: 'ai', settings: s });
+  settings.ai = s;
+}
+
 // ── Chat bot select ────────────────────────────────────────
 function updateChatBotSelect() {
   const select = document.getElementById('chatBot');
@@ -5593,6 +5690,7 @@ let missionsSelectedBot = null;
 let activeMissionsCache = {};
 let factionSelectedBot = null;
 let factionData = null; // cached faction_info result
+let factionTreasury = null; // cached credit balance from view_faction_storage
 let factionActivePanel = 'overview'; // overview | members | storage | facilities | diplomacy | intel | rooms | missions | activity
 let factionLogLines = [];       // all faction log entries
 let factionLogFilter = 'all';   // 'all' | 'deposit' | 'withdraw' | 'donation' | 'gift'
@@ -5814,7 +5912,13 @@ function fetchFactionInfo(username) {
       return;
     }
     factionData = result.data;
-    renderFactionContent(username);
+    // faction_info doesn't include treasury — fetch it separately
+    sendExec(username, 'view_faction_storage', { station_id: 'any' }, (storageResult) => {
+      if (storageResult.ok && storageResult.data && storageResult.data.credits != null) {
+        factionData.treasury = storageResult.data.credits;
+      }
+      if (factionSelectedBot === username) renderFactionContent(username);
+    });
   });
 }
 
@@ -7670,87 +7774,18 @@ function renderSalvagerSettings(panel) {
   `;
 }
 
-// ── AI ──────────────────────────────────────────────────────
-function renderAiSettings(panel) {
-  const a = settings.ai || {};
-  const baseUrl = a.baseUrl || '';
-  const apiKey = a.apiKey || '';
-  const model = a.model || '';
-  const cycleIntervalSec = a.cycleIntervalSec ?? 10;
-  const maxToolCallsPerCycle = a.maxToolCallsPerCycle ?? 40;
-  const captainsLogEveryN = a.captainsLogEveryN ?? 5;
-
-  const inputStyle = `style="background:var(--bg-input);color:var(--text);border:1px solid var(--border);border-radius:4px;padding:5px 8px;width:100%;box-sizing:border-box"`;
-
-  panel.innerHTML = `
-    <h3>AI Settings</h3>
-    <div class="settings-desc">Configure the LLM used by the AI routine. Values here override environment variables. Leave blank to use env vars (OPENAI_COMPAT_BASE_URL, OPENAI_COMPAT_API_KEY, AI_MODEL) or Ollama defaults.</div>
-
-    <div class="setting-row">
-      <div>
-        <div class="setting-label">Base URL</div>
-        <div class="setting-hint">OpenAI-compatible endpoint base URL, e.g. https://api.openai.com/v1 or http://localhost:11434/v1</div>
-      </div>
-      <input type="text" id="set-ai-baseUrl" value="${esc(baseUrl)}" placeholder="http://localhost:11434/v1" ${inputStyle}>
-    </div>
-
-    <div class="setting-row">
-      <div>
-        <div class="setting-label">API Key</div>
-        <div class="setting-hint">Bearer token for the LLM endpoint. Use "ollama" for local Ollama.</div>
-      </div>
-      <input type="password" id="set-ai-apiKey" value="${esc(apiKey)}" placeholder="ollama" ${inputStyle}>
-    </div>
-
-    <div class="setting-row">
-      <div>
-        <div class="setting-label">Model</div>
-        <div class="setting-hint">Model name to use, e.g. llama3.2, gpt-4o-mini</div>
-      </div>
-      <input type="text" id="set-ai-model" value="${esc(model)}" placeholder="llama3.2" ${inputStyle}>
-    </div>
-
-    <div class="setting-row">
-      <div>
-        <div class="setting-label">Cycle Interval (seconds)</div>
-        <div class="setting-hint">How long to sleep between AI decision cycles.</div>
-      </div>
-      <input type="number" id="set-ai-cycleIntervalSec" min="5" max="300" value="${cycleIntervalSec}">
-    </div>
-
-    <div class="setting-row">
-      <div>
-        <div class="setting-label">Max Tool Calls Per Cycle</div>
-        <div class="setting-hint">Safety cap on tool calls per cycle to prevent runaway loops.</div>
-      </div>
-      <input type="number" id="set-ai-maxToolCallsPerCycle" min="5" max="100" value="${maxToolCallsPerCycle}">
-    </div>
-
-    <div class="setting-row">
-      <div>
-        <div class="setting-label">Captain's Log Every N Cycles</div>
-        <div class="setting-hint">How often the AI writes a captain's log entry.</div>
-      </div>
-      <input type="number" id="set-ai-captainsLogEveryN" min="1" max="20" value="${captainsLogEveryN}">
-    </div>
-
-    <div class="settings-save-bar">
-      <button class="primary" onclick="saveAiSettings()">Save Settings</button>
-    </div>
-  `;
-}
-
-function saveAiSettings() {
+function saveSalvagerSettings() {
   const s = {
-    baseUrl: document.getElementById('set-ai-baseUrl').value.trim(),
-    apiKey: document.getElementById('set-ai-apiKey').value.trim(),
-    model: document.getElementById('set-ai-model').value.trim(),
-    cycleIntervalSec: parseInt(document.getElementById('set-ai-cycleIntervalSec').value) || 10,
-    maxToolCallsPerCycle: parseInt(document.getElementById('set-ai-maxToolCallsPerCycle').value) || 40,
-    captainsLogEveryN: parseInt(document.getElementById('set-ai-captainsLogEveryN').value) || 5,
+    system: document.getElementById('set-salvager-system').value,
+    homeSystem: document.getElementById('set-salvager-homeSystem').value,
+    depositMode: (function() { const v = document.getElementById('set-salvager-depositPrimary').value; return v.startsWith('bot:') ? 'gift' : v; })(),
+    depositFallback: (function() { const v = document.getElementById('set-salvager-depositSecondary').value; return v.startsWith('bot:') ? 'gift' : v; })(),
+    cargoThreshold: parseInt(document.getElementById('set-salvager-cargoThreshold').value) || 80,
+    refuelThreshold: parseInt(document.getElementById('set-salvager-refuelThreshold').value) || 50,
+    repairThreshold: parseInt(document.getElementById('set-salvager-repairThreshold').value) || 40,
   };
-  send({ type: 'saveSettings', routine: 'ai', settings: s });
-  settings.ai = s;
+  send({ type: 'saveSettings', routine: 'salvager', settings: s });
+  settings.salvager = s;
 }
 
 // ── Hunter ──────────────────────────────────────────────────
@@ -7796,9 +7831,9 @@ function renderHunterSettings(panel) {
     <div class="setting-row">
       <div>
         <div class="setting-label">Repair Threshold (%)</div>
-        <div class="setting-hint">Abort patrol and retreat when hull drops below this percentage.</div>
+        <div class="setting-hint">Abort patrol and retreat to a high-security system when hull drops below this percentage.</div>
       </div>
-      <input type="number" id="set-hunter-repairThreshold" min="10" max="80" value="${repairThreshold}">
+      <input type="number" id="set-hunter-repairThreshold" min="20" max="80" value="${repairThreshold}">
     </div>
 
     <div class="setting-row">
@@ -7812,20 +7847,20 @@ function renderHunterSettings(panel) {
     <div class="setting-row">
       <div>
         <div class="setting-label">Attack Mode</div>
-        <div class="setting-hint">Target NPCs only (safe), or all players in unregulated systems.</div>
+        <div class="setting-hint">Restrict attacks to NPC pirates only, or also engage hostile players.</div>
       </div>
       <select id="set-hunter-onlyNPCs">
-        <option value="true" ${onlyNPCs ? 'selected' : ''}>NPCs only</option>
-        <option value="false" ${!onlyNPCs ? 'selected' : ''}>All targets (PvP)</option>
+        <option value="true"${onlyNPCs ? ' selected' : ''}>NPC Pirates Only (safe)</option>
+        <option value="false"${!onlyNPCs ? ' selected' : ''}>NPCs + Hostile Players</option>
       </select>
     </div>
 
     <div class="setting-row">
       <div>
-        <div class="setting-label">Faction Response Range</div>
-        <div class="setting-hint">Max jumps away to respond to allied faction combat alerts. Set 0 to disable.</div>
+        <div class="setting-label">Faction Alert Response Range (jumps)</div>
+        <div class="setting-hint">Max jumps away to respond when an allied bot broadcasts a [COMBAT WARNING] or [HULL DAMAGE] alert. Set to 0 to disable.</div>
       </div>
-      <input type="number" id="set-hunter-responseRange" min="0" max="10" value="${responseRange}">
+      <input type="number" id="set-hunter-responseRange" min="0" max="20" value="${responseRange}">
     </div>
 
     <div class="settings-save-bar">
@@ -7840,25 +7875,11 @@ function saveHunterSettings() {
     refuelThreshold: parseInt(document.getElementById('set-hunter-refuelThreshold').value) || 40,
     repairThreshold: parseInt(document.getElementById('set-hunter-repairThreshold').value) || 30,
     fleeThreshold: parseInt(document.getElementById('set-hunter-fleeThreshold').value) || 20,
-    onlyNPCs: document.getElementById('set-hunter-onlyNPCs').value !== 'false',
+    onlyNPCs: document.getElementById('set-hunter-onlyNPCs').value === 'true',
     responseRange: parseInt(document.getElementById('set-hunter-responseRange').value) ?? 3,
   };
   send({ type: 'saveSettings', routine: 'hunter', settings: s });
   settings.hunter = s;
-}
-
-function saveSalvagerSettings() {
-  const s = {
-    system: document.getElementById('set-salvager-system').value,
-    homeSystem: document.getElementById('set-salvager-homeSystem').value,
-    depositMode: (function() { const v = document.getElementById('set-salvager-depositPrimary').value; return v.startsWith('bot:') ? 'gift' : v; })(),
-    depositFallback: (function() { const v = document.getElementById('set-salvager-depositSecondary').value; return v.startsWith('bot:') ? 'gift' : v; })(),
-    cargoThreshold: parseInt(document.getElementById('set-salvager-cargoThreshold').value) || 80,
-    refuelThreshold: parseInt(document.getElementById('set-salvager-refuelThreshold').value) || 50,
-    repairThreshold: parseInt(document.getElementById('set-salvager-repairThreshold').value) || 40,
-  };
-  send({ type: 'saveSettings', routine: 'salvager', settings: s });
-  settings.salvager = s;
 }
 
 // ── Shipyard ────────────────────────────────────────────────

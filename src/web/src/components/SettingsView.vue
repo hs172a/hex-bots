@@ -52,6 +52,14 @@
 
         <div class="setting-row">
           <div>
+            <div class="text-sm text-space-text">Max Navigation Jumps</div>
+            <div class="text-xs text-space-text-dim mt-0.5">Maximum jumps allowed per <code class="text-space-accent">navigateToSystem</code> call. Increase for larger galaxies. Default: 20.</div>
+          </div>
+          <input type="number" v-model.number="generalForm.maxJumps" min="5" max="100" class="input w-20 text-sm" />
+        </div>
+
+        <div class="setting-row">
+          <div>
             <div class="text-sm text-space-text">Enable API Request Logging</div>
             <div class="text-xs text-space-text-dim mt-0.5">Write all game API requests and responses to <code class="text-space-accent">data/api-logs/</code>. Default: off.</div>
           </div>
@@ -642,9 +650,9 @@ const settingsTabs = [
   { id: 'ice_harvester', name: 'IceHarvester' },
   { id: 'salvager', name: 'Salvager' },
   { id: 'hunter', name: 'Hunter' },
-  { id: 'ai', name: 'AI' },
-  { id: 'cleanup', name: 'Cleanup' },
   { id: 'gatherer', name: 'Gatherer' },
+  { id: 'cleanup', name: 'Cleanup' },
+  { id: 'ai', name: 'AI' },
 ];
 
 // ── Shared helpers ──────────────────────────────────────────
@@ -673,7 +681,7 @@ function oreNameById(id: string): string {
 }
 
 // ── General form ────────────────────────────────────────────
-const generalForm = ref({ factionDonatePct: 10, factionStation: '', enableApiLogging: false });
+const generalForm = ref({ factionDonatePct: 10, factionStation: '', enableApiLogging: false, maxJumps: 20 });
 
 // ── Miner form ──────────────────────────────────────────────
 const minerForm = ref({
@@ -896,6 +904,7 @@ watch(() => botStore.settings, (s) => {
     const fSta = s.general.factionStorageStation || '';
     generalForm.value.factionStation = fSys && fSta ? `${fSys}|${fSta}` : '';
     generalForm.value.enableApiLogging = s.general.enableApiLogging ?? false;
+    generalForm.value.maxJumps = s.general.maxJumps ?? 20;
   }
   if (s.miner) {
     const m = s.miner;
@@ -1023,6 +1032,7 @@ function saveGeneral() {
     factionDonatePct: generalForm.value.factionDonatePct,
     factionStorageSystem, factionStorageStation,
     enableApiLogging: generalForm.value.enableApiLogging,
+    maxJumps: generalForm.value.maxJumps,
   });
 }
 

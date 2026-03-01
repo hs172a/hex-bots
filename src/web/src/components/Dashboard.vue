@@ -65,7 +65,7 @@
               <th class="py-2 px-0 font-semibold">Hull</th>
               <th class="py-2 px-0 font-semibold">Shield</th>
               <th class="py-2 px-0 font-semibold">Cargo</th>
-              <th class="py-2 px-0 font-semibold">Location</th>
+              <th class="py-2 px-0 font-semibold min-w-24">Location</th>
               <th class="py-2 px-0 font-semibold">Actions</th>
             </tr>
           </thead>
@@ -125,7 +125,7 @@
                   color="magenta"
                 />
               </td>
-              <td class="px-0 py-1 text-space-cyan">
+              <td class="px-0 py-1 text-xs text-space-cyan min-w-20">
                 {{ bot.poi ? botStore.resolveLocation(bot.system || '', bot.poi) : (botStore.resolveLocation(bot.system || '') || bot.location) }}
               </td>
               <td class="px-0 py-1">
@@ -387,7 +387,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, ref, watch, nextTick } from 'vue';
+import { computed, ref, watch, nextTick, onMounted } from 'vue';
 import { useBotStore } from '../stores/botStore';
 import ProgressBar from './ProgressBar.vue';
 
@@ -599,6 +599,12 @@ watch(() => parsedBroadcastLogs.value.length, () => nextTick(() => {
   if (broadcastLogRef.value) broadcastLogRef.value.scrollTop = broadcastLogRef.value.scrollHeight;
 }));
 watch(() => filteredSystemLogs.value.length, () => nextTick(() => {
+  if (systemLogRef.value) systemLogRef.value.scrollTop = systemLogRef.value.scrollHeight;
+}));
+
+onMounted(() => nextTick(() => {
+  if (activityLogRef.value) activityLogRef.value.scrollTop = activityLogRef.value.scrollHeight;
+  if (broadcastLogRef.value) broadcastLogRef.value.scrollTop = broadcastLogRef.value.scrollHeight;
   if (systemLogRef.value) systemLogRef.value.scrollTop = systemLogRef.value.scrollHeight;
 }));
 

@@ -5,14 +5,14 @@
 
 A web-based bot fleet manager for [SpaceMolt](https://www.spacemolt.com) — run multiple bots with automated routines, monitor and control everything from a reactive live dashboard.
 
-![Dashboard](https://img.shields.io/badge/interface-vue3_spa-blue) ![Runtime](https://img.shields.io/badge/runtime-bun-black) ![No Dependencies](https://img.shields.io/badge/deps-zero_runtime-green) ![Version](https://img.shields.io/badge/version-1.2.0-purple)
+![Dashboard](https://img.shields.io/badge/interface-vue3_spa-blue) ![Runtime](https://img.shields.io/badge/runtime-bun-black) ![No Dependencies](https://img.shields.io/badge/deps-zero_runtime-green) ![Version](https://img.shields.io/badge/version-1.3.0-purple)
 
 ## What It Does
 
-Bot Runner manages a fleet of SpaceMolt bots from a single web dashboard. Each bot runs an automated routine (mining, exploring, crafting, salvaging, rescue) while you monitor from your browser.
+Bot Runner manages a fleet of SpaceMolt bots from a single web dashboard. Each bot runs an automated routine (mining, exploring, crafting, salvaging, hunting, or full AI control) while you monitor from your browser.
 
 - **Vue 3 SPA Dashboard** — reactive real-time UI at `http://localhost:3000`
-- **6 Routines** — Miner, Explorer, Crafter, Coordinator, Fuel Rescue, Salvager
+- **13 Routines** — Miner, Explorer, Crafter, Coordinator, Fuel Rescue, Salvager, Trader, Gas Harvester, Ice Harvester, Gatherer, Faction Trader, Hunter, AI
 - **Faction Management** — members, storage, facilities, diplomacy, intel
 - **Galaxy Map** — auto-built from explorer data
 - **Manual Control** — full command panel per bot with detailed live log output, craft filter, and execution lock
@@ -146,16 +146,24 @@ Full manual control panel for any bot:
 |---------|-------------|
 | **Miner** | Mines ore at asteroid belts, returns to station to sell/deposit. Configurable target ore, cargo threshold, sell vs deposit. |
 | **Explorer** | Jumps system to system, visits every POI, surveys resources. Builds the galaxy map. |
-| **Crafter** | Crafts items up to configured stock limits. Add/remove recipes with category picker. |
-| **Coordinator** | Analyses market demand across the fleet, assigns ore quotas to miners and craft targets to crafters. |
+| **Crafter** | Crafts items up to configured stock limits. Add/remove recipes with category picker. Includes fallback XP-grinding when configured set is exhausted. |
+| **Coordinator** | Analyses market demand across the fleet, assigns ore quotas to miners and craft targets to crafters. Uses cached global market data. |
 | **Fuel Rescue** | Monitors fleet for stranded bots (low fuel), delivers fuel cells or credits. |
 | **Salvager** | Scavenges wrecks for loot. In full-salvage mode: loots wrecks, tows them to a salvage yard, then scraps or sells them while docked. |
+| **Trader** | Finds price spreads between stations, buys low and sells high. |
+| **Gas Harvester** | Harvests gas clouds and nebulae, deposits to faction storage or station. |
+| **Ice Harvester** | Harvests ice fields, deposits to faction storage or station. |
+| **Gatherer** | Collects build materials for a faction facility. Goal assigned from Station → Build tab. |
+| **Faction Trader** | Runs faction sell routes, deposits items to faction storage. Returns home when storage is empty. |
+| **Hunter** | Patrols lawless systems, engages NPC/player targets, monitors ammo/hull thresholds. Responds to faction combat alerts within a configurable jump range. |
+| **AI** | Uses an LLM (Ollama or any OpenAI-compatible endpoint) to play SpaceMolt autonomously. Maintains persistent memory, uses map/catalog tools, and writes captain's log entries. |
 
 All routines include:
 - Auto-refuel and repair at configurable thresholds
 - Wreck scavenging (loot fuel cells and cargo from debris)
 - Emergency fuel recovery (sell cargo, wait for rescue)
 - Auto-collect credits from station storage on dock
+- Skill checks before starting (validates required skills are trained)
 
 ### Faction Tab
 Full faction management from the browser:
@@ -170,10 +178,15 @@ Full faction management from the browser:
 Configuration saved to `data/settings.json`. Changes apply immediately (no restart needed).
 
 - **General** — faction storage system/station, faction donate %, enable API request logging
-- **Miner** — target ore, mining system, deposit bot, sell ore, cargo/refuel/repair thresholds
+- **Miner** — target ore, mining system, deposit bot, sell ore, cargo/refuel/repair thresholds, per-bot ore quotas
 - **Crafter** — recipe list with add/remove + category picker, stock limits, thresholds
 - **Explorer** — max jumps, survey mode, scan POIs, avoid low security, thresholds
 - **Fuel Rescue** — scan interval, fuel trigger %, cells to deliver, credits to send
+- **Trader** — min profit/unit, max cargo value, home system, thresholds
+- **Gas Harvester** / **Ice Harvester** — target resource type, system, deposit mode, thresholds
+- **Salvager** — target system, home system, primary/secondary deposit mode, thresholds
+- **Hunter** — patrol system, refuel/repair/flee thresholds, ammo threshold, NPCs-only, auto cloak, faction alert response range
+- **AI** — LLM base URL, API key, model name, cycle interval, max tool calls per cycle, captain's log frequency
 
 ### Other Tabs
 - **Map** — galaxy map built from explorer data, filterable by security level and resources
@@ -195,47 +208,68 @@ Credentials are saved to `sessions/<username>/credentials.json`. Bots auto-disco
 src/
   botmanager.ts      Entry point — discovers bots, starts web server, handles WebActions
   bot.ts             Bot class — login, exec, status caching, routine runner
-  api.ts             SpaceMolt REST client (v1/v2) with session management and rate-limit retry
+  api.ts             SpaceMolt REST client (v1/v2) — session mgmt, rate-limit retry, response cache
+  httpcache.ts       Process-level HTTP cache for external fetches (ETag + Cache-Control aware)
   apilogger.ts       Optional file logging for all API requests/responses (data/api-logs/)
   session.ts         Credential persistence
   ui.ts              Log routing (bot → web server → browser)
   debug.ts           Debug logging to data/debug.log
   catalogstore.ts    Game catalog cache (items/ships/skills/recipes) — 24h disk persistence
-  publicCatalog.ts   Public ship & station catalog (no auth required); force-refresh via refreshCatalog action
+  publicCatalog.ts   Public ship & station catalog (no auth required)
   mapstore.ts        Galaxy map persistence and pathfinding
   routines/
-    common.ts        Shared utilities (dock, refuel, travel, scavenge, emergency recovery)
-    miner.ts         Mining routine
-    explorer.ts      Exploration routine
-    crafter.ts       Crafting routine (uses catalogStore cache)
-    coordinator.ts   Fleet coordinator — market demand analysis, assigns miner/crafter targets
-    rescue.ts        Fuel rescue routine
-    salvager.ts      Salvage routine — loot + tow_wreck to station + sell/scrap when docked
+    common.ts          Shared utilities (dock, refuel, travel, scavenge, emergency recovery)
+    miner.ts           Mining routine
+    explorer.ts        Exploration routine
+    crafter.ts         Crafting routine — catalog cache, fallback XP grind
+    coordinator.ts     Fleet coordinator — market demand analysis, cached global market fetch
+    rescue.ts          Fuel rescue routine
+    salvager.ts        Salvage routine
+    trader.ts          Station-to-station price spread trading
+    gas_harvester.ts   Gas cloud / nebula harvesting
+    ice_harvester.ts   Ice field harvesting
+    gatherer.ts        Build material collection
+    faction_trader.ts  Faction sell routes + return-home when storage empty
+    hunter.ts          PvP/PvE patrol — faction combat alert response, configurable flee/ammo thresholds
+    ai.ts              LLM-driven autonomous play (Ollama / OpenAI-compatible)
+    cleanup.ts         Consolidate scattered station storage
   web/
-    server.ts        Bun HTTP + WebSocket server; WebAction type union
-    src/             Vue 3 SPA (Vite + TailwindCSS + Pinia)
-      App.vue        Root layout — sidebar navigation, Legacy UI button
+    server.ts          Bun HTTP + WebSocket server
+    legacy_ui.html     Legacy vanilla-JS UI (always at /legacy)
+    src/               Vue 3 SPA (Vite + TailwindCSS + Pinia)
+      App.vue          Root layout — sidebar navigation
       components/
         Dashboard.vue         Fleet table, auto-scroll logs, extended fleet stats bar
         BotProfile.vue        Bot profile tabs (Ship, Skills, Travel, Station, Control)
-        BotControlPanel.vue   Manual control panel — full log output, craft filter, execution lock, Refresh Catalog
+        BotControlPanel.vue   Manual control panel — full log output, craft filter, execution lock
         ShipyardView.vue      Fleet, showroom, commission ship, module management
         MissionsView.vue      Mission browser and active mission tracker
         FactionView.vue       Faction management (overview, members, storage, facilities, diplomacy, intel)
-        SettingsView.vue      Per-routine settings + General settings (API logging, faction config)
+        SettingsView.vue      Per-routine settings — all 13 routines + General
         MapView.vue           Interactive galaxy map
-        StatsView.vue         Per-bot stats breakdown + faction activity log with period filter
+        StatsView.vue         Per-bot stats + faction activity log
       stores/
-        botStore.ts           Pinia store — bots, public catalog, sendExec, wsSend, statsDaily
+        botStore.ts           Pinia store — bots, catalog, settings, sendExec, wsSend
 data/
   settings.json      Persisted routine settings
   catalog.json       Cached game catalog (refreshed every 24h)
   map.json           Galaxy map data
-  api-logs/          API request/response logs (when logging enabled)
+  ai_memory.json     AI routine persistent memory (goals, insights, decisions)
+  api-logs/          API request/response logs (when enabled)
 sessions/
   <username>/
     credentials.json
 ```
+
+## Environment Variables (AI Routine)
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `OPENAI_COMPAT_BASE_URL` | `http://localhost:11434/v1` | LLM endpoint (Ollama or OpenAI-compatible) |
+| `OPENAI_COMPAT_API_KEY` | `ollama` | Bearer token for LLM endpoint |
+| `AI_MODEL` | `llama3.2` | Model name |
+
+Values in **Settings → AI** override these environment variables.
 
 ## About SpaceMolt
 
