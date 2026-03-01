@@ -213,9 +213,19 @@
                   <div v-if="bt.bonus_type" class="text-[10px] text-space-cyan">+{{ bt.bonus_value }} {{ bt.bonus_type.replace('_', ' ') }}</div>
                   <div v-if="bt.build_cost" class="text-[10px] text-space-yellow mt-0.5">Cost: {{ formatBuildCost(bt.build_cost) }}</div>
                 </div>
-                <button @click="buildFacility(bt.id, bt.name)" :disabled="loading || hasFacility(bt.id)" class="btn text-xs px-3 py-1 ml-2">
-                  {{ hasFacility(bt.id) ? '✓ Built' : 'Build' }}
-                </button>
+                <div class="flex flex-col gap-1 items-end ml-2">
+                  <button @click="buildFacility(bt.id, bt.name)"
+                    :disabled="loading || hasFacility(bt.id) || currentGatherGoal?.target_id === bt.id"
+                    class="btn text-xs px-3 py-1">
+                    {{ hasFacility(bt.id) ? '✓ Built' : 'Build' }}
+                  </button>
+                  <span v-if="currentGatherGoal?.target_id === bt.id" class="text-[10px] text-space-cyan flex items-center gap-1">
+                    ⚙️ Gathering
+                    <button @click="clearGatherGoal()" class="text-space-red hover:text-red-400 text-[10px]" title="Cancel goal">✕</button>
+                  </span>
+                  <button v-else-if="!hasFacility(bt.id)" @click="gatherFacilityMaterials(bt)"
+                    class="btn text-[10px] px-2 py-0.5 whitespace-nowrap">📦 Gather</button>
+                </div>
               </div>
             </div>
           </div>
@@ -239,10 +249,20 @@
                 <div v-if="facilityDetail.build_time" class="text-space-text-dim">Build time: {{ facilityDetail.build_time }} cycles</div>
                 <div v-if="facilityDetail.hint" class="px-2 py-1.5 bg-[#0d2233] border border-[#1a3a5a] rounded text-space-accent">{{ facilityDetail.hint }}</div>
               </div>
-              <div class="flex gap-2 mt-4">
-                <button @click="buildFacility(facilityDetail.id, facilityDetail.name); facilityDetail = null" :disabled="loading || hasFacility(facilityDetail.id)" class="btn btn-primary flex-1 text-xs">
+              <div class="flex gap-2 mt-4 flex-wrap">
+                <button @click="buildFacility(facilityDetail.id, facilityDetail.name); facilityDetail = null"
+                  :disabled="loading || hasFacility(facilityDetail.id) || currentGatherGoal?.target_id === facilityDetail.id"
+                  class="btn btn-primary flex-1 text-xs">
                   {{ hasFacility(facilityDetail.id) ? 'Already Built' : 'Build Now' }}
                 </button>
+                <button
+                  v-if="!hasFacility(facilityDetail.id) && facilityDetail.build_materials?.length && currentGatherGoal?.target_id !== facilityDetail.id"
+                  @click="gatherFacilityMaterials(facilityDetail); facilityDetail = null"
+                  class="btn flex-1 text-xs">📦 Gather</button>
+                <span v-else-if="currentGatherGoal?.target_id === facilityDetail.id" class="flex items-center gap-1 text-xs text-space-cyan flex-1 justify-center">
+                  ⚙️ Gathering
+                  <button @click="clearGatherGoal()" class="text-space-red text-[10px]">✕</button>
+                </span>
                 <button @click="facilityDetail = null" class="btn flex-1 text-xs">Cancel</button>
               </div>
             </div>
@@ -324,7 +344,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, reactive } from 'vue';
+import { ref, computed } from 'vue';
 import { useBotStore } from '../stores/botStore';
 
 const botStore = useBotStore();
@@ -345,6 +365,9 @@ const factionFacilities = ref<any[]>([]);
 const buildableTypes = ref<any[]>([]);
 const facilitiesLoaded = ref(false);
 const facilityDetail = ref<any>(null);
+const factionTypeCache = ref<Record<string, any>>({});
+
+const currentGatherGoal = computed(() => (botStore.settings?.gatherer?.goal as any) || null);
 
 // Modals
 const showCreateModal = ref(false);
@@ -387,6 +410,7 @@ function selectBot(username: string) {
   buildableTypes.value = [];
   facilitiesLoaded.value = false;
   facilityDetail.value = null;
+  factionTypeCache.value = {};
   errorMsg.value = '';
   statusMsg.value = '';
   refreshData();
@@ -491,12 +515,58 @@ function loadBuildableTypes() {
 }
 
 function loadFacilityDetail(facilityTypeId: string) {
+  if (factionTypeCache.value[facilityTypeId]) {
+    facilityDetail.value = factionTypeCache.value[facilityTypeId];
+    return;
+  }
   if (!selectedBot.value) return;
   botStore.sendExec(selectedBot.value, 'facility', { action: 'types', facility_type: facilityTypeId }, (result: any) => {
     if (result.ok && result.data) {
-      facilityDetail.value = result.data;
+      const info = (result.data.types || [])[0] ?? result.data;
+      factionTypeCache.value[facilityTypeId] = info;
+      facilityDetail.value = info;
     }
   });
+}
+
+function gatherFacilityMaterials(bt: any) {
+  const cached = factionTypeCache.value[bt.id];
+  const mats = cached?.build_materials || bt.build_materials;
+  if (!mats?.length) {
+    if (!selectedBot.value) return;
+    botStore.sendExec(selectedBot.value, 'facility', { action: 'types', facility_type: bt.id }, (result: any) => {
+      if (result.ok && result.data) {
+        const info = (result.data.types || [])[0] ?? result.data;
+        factionTypeCache.value[bt.id] = info;
+        if (!info.build_materials?.length) { setError('No build materials defined'); return; }
+        doSaveGatherGoal(bt.id, bt.name, info.build_materials);
+      }
+    });
+    return;
+  }
+  doSaveGatherGoal(bt.id, bt.name, mats);
+}
+
+function doSaveGatherGoal(typeId: string, typeName: string, mats: any[]) {
+  botStore.saveSettings('gatherer', {
+    goal: {
+      id: `faction_${typeId}_${Date.now()}`,
+      target_id: typeId,
+      target_name: typeName,
+      target_poi: '',
+      target_system: '',
+      materials: mats.map((m: any) => ({
+        item_id: m.item_id,
+        item_name: m.name || m.item_name,
+        quantity_needed: m.quantity,
+      })),
+    },
+  });
+  setStatus(`📦 Gather goal created: ${typeName}`);
+}
+
+function clearGatherGoal() {
+  botStore.saveSettings('gatherer', { goal: null });
 }
 
 function buildFacility(facilityTypeId: string, facilityName?: string) {

@@ -138,6 +138,9 @@ export class WebServer {
   // Action callback — set by botmanager
   onAction: ((action: WebAction) => Promise<WebActionResult>) | null = null;
 
+  // Player profile proxy — set by botmanager
+  onPlayerInfo: ((playerId: string) => Promise<unknown>) | null = null;
+
   // Available routines — set by botmanager
   routines: string[] = [];
 
@@ -186,7 +189,10 @@ export class WebServer {
   }
 
   start(): void {
-    const indexPath = join(import.meta.dir, "index.html");
+    const legacyPath = join(import.meta.dir, "legacy_ui.html");
+    const distDir = join(process.cwd(), "dist", "web");
+    const distIndex = join(distDir, "index.html");
+    const hasBuiltApp = existsSync(distIndex);
 
     this.server = Bun.serve<WSData>({
       port: this.port,
@@ -224,6 +230,18 @@ export class WebServer {
           return Response.json(publicCatalog.getAll());
         }
 
+        // Player profile proxy
+        if (url.pathname.startsWith("/api/player-info/")) {
+          const playerId = url.pathname.slice("/api/player-info/".length);
+          if (!playerId || !this.onPlayerInfo) return Response.json({ error: "not available" }, { status: 404 });
+          try {
+            const data = await this.onPlayerInfo(playerId);
+            return Response.json(data);
+          } catch (e) {
+            return Response.json({ error: String(e) }, { status: 500 });
+          }
+        }
+
         // Per-bot persistent log files
         if (url.pathname.startsWith("/api/logs/")) {
           const botName = decodeURIComponent(url.pathname.slice("/api/logs/".length));
@@ -248,12 +266,26 @@ export class WebServer {
           return Response.json({ ok: false, error: "No action handler" });
         }
 
-        // Serve index.html for all other routes (read fresh for dev, no cache)
-        return new Response(readFileSync(indexPath, "utf-8"), {
-          headers: {
-            "Content-Type": "text/html; charset=utf-8",
-            "Cache-Control": "no-store",
-          },
+        // Legacy UI (always available)
+        if (url.pathname === "/legacy") {
+          return new Response(readFileSync(legacyPath, "utf-8"), {
+            headers: { "Content-Type": "text/html; charset=utf-8", "Cache-Control": "no-store" },
+          });
+        }
+
+        // Production: serve built Vue SPA from dist/web/
+        if (hasBuiltApp) {
+          if (url.pathname !== "/") {
+            const asset = Bun.file(join(distDir, url.pathname));
+            if (await asset.exists()) return new Response(asset);
+          }
+          return new Response(Bun.file(distIndex));
+        }
+
+        // Dev mode: new UI runs on Vite at http://localhost:5173
+        // Fall back to legacy UI so port 3000 stays usable
+        return new Response(readFileSync(legacyPath, "utf-8"), {
+          headers: { "Content-Type": "text/html; charset=utf-8", "Cache-Control": "no-store" },
         });
       },
 

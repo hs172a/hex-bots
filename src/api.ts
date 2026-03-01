@@ -339,6 +339,19 @@ export class SpaceMoltAPI {
     throw lastError || new Error("Failed to connect to v2 server");
   }
 
+  async getPlayerProfile(playerId: string): Promise<unknown> {
+    await this.ensureSession();
+    const baseUrl = this.baseUrl.replace(/\/api\/v\d+$/, "");
+    const url = `${baseUrl}/api/player/${playerId}`;
+    const resp = await fetch(url, {
+      headers: {
+        "X-Session-Id": this.session!.id,
+        "User-Agent": USER_AGENT,
+      },
+    });
+    return await resp.json();
+  }
+
   private async doRequest(command: string, payload?: Record<string, unknown>): Promise<ApiResponse> {
     // Route commands with sub-actions through v2 endpoints where each action
     // is a separate path: /api/v2/spacemolt_{command}/{action}
@@ -421,7 +434,9 @@ export class SpaceMoltAPI {
           s.playerId = s.player_id;
         }
       }
-      logApiResponse(this.label, url, resp.status, duration, data);
+      if (command !== "catalog") {
+        logApiResponse(this.label, url, resp.status, duration, data);
+      }
       return data as ApiResponse;
     } catch {
       // Non-JSON response (e.g. HTML error page, empty body)

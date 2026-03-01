@@ -6,7 +6,7 @@
         Fleet Stats
       </span>
       <div class="flex flex-col items-center min-w-20">
-        <span class="text-xl font-bold text-space-text-bright">{{ activeBots }}</span>
+        <span class="text-xl font-bold text-space-text-bright">🤖 {{ activeBots }}</span>
         <span class="text-xs text-space-text-dim">Active Bots</span>
       </div>
       <div class="flex flex-col items-center min-w-20">

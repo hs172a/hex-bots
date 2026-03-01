@@ -62,6 +62,7 @@ Bot Runner manages a fleet of SpaceMolt bots from a single web dashboard. Each b
 ### Prerequisites
 
 - [Bun](https://bun.sh) runtime (v1.0+)
+- [Node.js](https://nodejs.org) (for Vite build tooling)
 - A SpaceMolt account — register at [spacemolt.com/dashboard](https://spacemolt.com/dashboard) to get a registration code
 
 ### Install
@@ -72,13 +73,43 @@ cd spacemolt_botrunner
 bun install
 ```
 
-### Run
+### Development mode (two terminals)
 
+The new Vue 3 SPA requires Vite to compile TypeScript and Vue files. Run the backend and frontend separately:
+
+**Terminal 1 — Backend + WebSocket server:**
 ```bash
 bun start
 ```
 
-Open `http://localhost:3000` in your browser. Use `PORT=8080 bun start` for a different port.
+**Terminal 2 — Vue SPA (new UI, with hot-reload):**
+```bash
+bun run dev:web
+```
+
+| URL | What you get |
+|-----|--------------|
+| `http://localhost:5173` | ✅ New Vue 3 UI (hot-reload) |
+| `http://localhost:3000` | Legacy UI (original vanilla JS) |
+| `http://localhost:3000/legacy` | Legacy UI (always available) |
+
+Vite automatically proxies `/ws` and `/api` requests to the Bun backend on port 3000.
+
+### Production mode (single command)
+
+Build the Vue SPA once, then run a single server that serves everything:
+
+```bash
+bun run build:web   # compile Vue SPA → dist/web/
+bun start           # serves new UI at port 3000
+```
+
+| URL | What you get |
+|-----|--------------|
+| `http://localhost:3000` | ✅ New Vue 3 UI (built) |
+| `http://localhost:3000/legacy` | Legacy UI |
+
+Use `PORT=8080 bun start` for a different port.
 
 ## Dashboard
 

@@ -14,6 +14,7 @@ import { salvagerRoutine } from "./routines/salvager.js";
 import { hunterRoutine } from "./routines/hunter.js";
 import { factionTraderRoutine } from "./routines/faction_trader.js";
 import { cleanupRoutine } from "./routines/cleanup.js";
+import { gathererRoutine } from "./routines/gatherer.js";
 import { mapStore } from "./mapstore.js";
 import { catalogStore } from "./catalogstore.js";
 import { publicCatalog } from "./publicCatalog.js";
@@ -45,6 +46,7 @@ const ROUTINES: Record<string, { name: string; fn: Routine }> = {
   hunter: { name: "Hunter", fn: hunterRoutine },
   faction_trader: { name: "FactionTrader", fn: factionTraderRoutine },
   cleanup: { name: "Cleanup", fn: cleanupRoutine },
+  gatherer: { name: "Gatherer", fn: gathererRoutine },
 };
 
 // ── Auto-discover existing sessions ─────────────────────────
@@ -405,6 +407,11 @@ async function main(): Promise<void> {
   server = new WebServer(port);
   server.routines = Object.keys(ROUTINES);
   server.onAction = handleAction;
+  server.onPlayerInfo = async (playerId: string) => {
+    const bot = [...bots.values()][0];
+    if (!bot) throw new Error("No bot available");
+    return await bot.api.getPlayerProfile(playerId);
+  };
 
   // Apply persisted API logging setting immediately at startup
   const startupApiLogging = server.settings?.general?.enableApiLogging;

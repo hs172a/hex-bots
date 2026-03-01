@@ -1,6 +1,6 @@
 <template>
-  <div class="flex-1 flex gap-4 p-4 overflow-hidden">
-    <!-- Sidebar: Bot selector + panel nav -->
+  <div class="flex-1 flex gap-2 p-2 overflow-hidden">
+    <!-- Sidebar -->
     <div class="w-56 bg-space-card border border-space-border rounded-lg flex flex-col overflow-hidden flex-shrink-0">
       <div class="px-3 py-2 border-b border-space-border">
         <h3 class="text-xs font-semibold text-space-text-dim uppercase tracking-wider">Shipyard</h3>
@@ -318,23 +318,18 @@
               <span v-for="tag in selectedShipCatalog.flavor_tags" :key="tag" class="px-1.5 py-0.5 rounded bg-[#21262d] text-space-text-dim text-[10px]">{{ tag }}</span>
             </div>
 
-            <!-- Build Goal panel -->
+            <!-- Gather goal panel -->
             <div v-if="selectedShipCatalog.build_materials?.length" class="pt-2 border-t border-[#21262d]">
-              <GoalProgressPanel
-                v-if="shipBuildGoal"
-                :goal="shipBuildGoal"
-                :bots="botNames"
-                @assign="onGoalAssign"
-                @pause="onGoalPause"
-                @resume="onGoalResume"
-                @delete="onGoalDelete"
-                @build="doCommissionShip"
-              />
+              <div v-if="currentGatherGoal?.target_id === commissionShipClass"
+                class="flex items-center justify-between bg-[#0d2233] border border-[#1a3a5a] rounded-md p-2 text-xs">
+                <span class="text-space-cyan">⚙️ Gathering materials for build...</span>
+                <button @click="clearGatherGoal()" class="text-space-red hover:text-red-400 text-[10px]">✕ Cancel</button>
+              </div>
               <button
                 v-else
-                @click="startBuildGoal"
+                @click="gatherShipMaterials()"
                 class="btn text-[10px] px-3 py-1 w-full"
-              >📋 Collect Materials for Build</button>
+              >� Gather Materials for Build</button>
             </div>
           </div>
 
@@ -396,11 +391,8 @@
 <script setup lang="ts">
 import { ref, computed, watch } from 'vue';
 import { useBotStore } from '../stores/botStore';
-import { useGoalStore } from '../stores/goalStore';
-import GoalProgressPanel from './GoalProgressPanel.vue';
 
 const botStore = useBotStore();
-const goalStore = useGoalStore();
 const selectedBot = ref<string | null>(null);
 const activePanel = ref('overview');
 const loading = ref(false);
@@ -727,74 +719,33 @@ function doCommissionShip() {
   });
 }
 
-// ── Build Goal ────────────────────────────────────────────
+// ── Gather Goal ───────────────────────────────────────────
 
-const shipBuildGoal = computed(() => {
-  if (!commissionShipClass.value) return null;
-  return goalStore.goals.find(
-    g => g.type === 'ship' && g.target_id === commissionShipClass.value && g.status !== 'done',
-  ) || null;
-});
+const currentGatherGoal = computed(() => (botStore.settings?.gatherer?.goal as any) || null);
 
-const botNames = computed(() => botStore.bots.map((b: any) => b.username));
-
-function syncGoalToServer() {
-  const g = shipBuildGoal.value;
-  if (!g) { botStore.saveSettings('buildGoal', { status: 'done', materials: [] }); return; }
-  botStore.saveSettings('buildGoal', {
-    type: g.type,
-    target_id: g.target_id,
-    target_name: g.target_name,
-    assigned_bot: g.assigned_bot,
-    status: g.status,
-    materials: g.materials.map(m => ({
-      item_id: m.item_id,
-      item_name: m.item_name,
-      quantity_needed: m.quantity_needed,
-      quantity_have: m.quantity_have,
-    })),
-  });
-}
-
-function startBuildGoal() {
+function gatherShipMaterials() {
   if (!selectedShipCatalog.value?.build_materials?.length) return;
-  const assignedBot = selectedBot.value || botNames.value[0] || '';
-  const goal = goalStore.createGoal(
-    'ship',
-    commissionShipClass.value,
-    selectedShipCatalog.value.name,
-    selectedShipCatalog.value.build_materials,
-    assignedBot,
-  );
-  const currentBot: any = botStore.bots.find((b: any) => b.username === assignedBot);
-  goalStore.analyzeGoal(goal.id, currentBot?.inventory || [], currentBot?.storage || [], []);
-  syncGoalToServer();
+  const bot = botStore.bots.find((b: any) => b.username === selectedBot.value) as any;
+  botStore.saveSettings('gatherer', {
+    goal: {
+      id: `ship_${commissionShipClass.value}_${Date.now()}`,
+      target_id: commissionShipClass.value,
+      target_name: selectedShipCatalog.value.name,
+      target_poi: bot?.poi || '',
+      target_system: bot?.system || bot?.location || '',
+      materials: selectedShipCatalog.value.build_materials.map((m: any) => ({
+        item_id: m.item_id,
+        item_name: m.item_name || m.name,
+        quantity_needed: m.quantity,
+      })),
+    },
+  });
+  setStatus('📦 Gather goal created!', true);
 }
 
-function onGoalAssign(bot: string) {
-  if (!shipBuildGoal.value) return;
-  goalStore.setAssignedBot(shipBuildGoal.value.id, bot);
-  const currentBot: any = botStore.bots.find((b: any) => b.username === bot);
-  goalStore.analyzeGoal(shipBuildGoal.value.id, currentBot?.inventory || [], currentBot?.storage || [], []);
-  syncGoalToServer();
-}
-
-function onGoalPause() {
-  if (!shipBuildGoal.value) return;
-  goalStore.pauseGoal(shipBuildGoal.value.id);
-  syncGoalToServer();
-}
-
-function onGoalResume() {
-  if (!shipBuildGoal.value) return;
-  goalStore.resumeGoal(shipBuildGoal.value.id);
-  syncGoalToServer();
-}
-
-function onGoalDelete() {
-  if (!shipBuildGoal.value) return;
-  goalStore.deleteGoal(shipBuildGoal.value.id);
-  botStore.saveSettings('buildGoal', { status: 'done', materials: [] });
+function clearGatherGoal() {
+  botStore.saveSettings('gatherer', { goal: null });
+  setStatus('Gather goal cleared', false);
 }
 
 // Auto-load data when switching panels

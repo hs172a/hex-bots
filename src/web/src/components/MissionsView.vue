@@ -1,6 +1,6 @@
 <template>
   <div class="flex-1 flex gap-2 p-2 overflow-hidden">
-    <!-- ── Sidebar: bot selector ── -->
+    <!-- Sidebar -->
     <div class="w-56 bg-space-card border border-space-border rounded-lg flex flex-col overflow-hidden flex-shrink-0">
       <div class="px-3 py-2 border-b border-space-border">
         <h3 class="text-xs font-semibold text-space-text-dim uppercase tracking-wider">Bots</h3>
@@ -30,7 +30,7 @@
 
       <div v-else class="space-y-4 pr-1">
 
-        <!-- ── Header + filters ── -->
+        <!-- Header + filters -->
         <div class="space-y-2">
           <!-- Status row -->
           <div class="flex items-center gap-3">

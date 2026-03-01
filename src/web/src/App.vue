@@ -20,7 +20,7 @@
               ? 'text-space-text-bright border-space-accent' 
               : 'text-space-text-dim border-transparent hover:text-space-text'"
           >
-            {{ tab.label }}
+            <span class="text-xs">{{ tab.icon }}</span> {{ tab.label }}
           </button>
         </div>
       </div>
@@ -64,14 +64,14 @@ import ShipyardView from './components/ShipyardView.vue';
 import { version } from '../../../package.json';
 
 const tabs = [
-  { id: 'dashboard', label: 'Dashboard', component: Dashboard },
-  { id: 'map', label: 'Map', component: MapView },
-  { id: 'market', label: 'Market', component: MarketView },
-  { id: 'missions', label: 'Missions', component: MissionsView },
-  { id: 'faction', label: 'Faction', component: FactionView },
-  { id: 'shipyard', label: 'Shipyard', component: ShipyardView },
-  { id: 'stats', label: 'Stats', component: StatsView },
-  { id: 'settings', label: 'Settings', component: SettingsView },
+  { id: 'dashboard', label: 'Dashboard', component: Dashboard, icon: '📊' },
+  { id: 'map', label: 'Map', component: MapView, icon: '🗺️' },
+  { id: 'market', label: 'Market', component: MarketView, icon: '🛒' },
+  { id: 'missions', label: 'Missions', component: MissionsView, icon: '🎯' },
+  { id: 'faction', label: 'Faction', component: FactionView, icon: '🏛️' },
+  { id: 'shipyard', label: 'Shipyard', component: ShipyardView, icon: '🛠️' },
+  { id: 'stats', label: 'Stats', component: StatsView, icon: '📊' },
+  { id: 'settings', label: 'Settings', component: SettingsView, icon: '⚙️' },
 ];
 
 const activeTab = ref('dashboard');

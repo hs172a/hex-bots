@@ -1,7 +1,7 @@
 <template>
-  <div class="flex-1 flex gap-4 p-4 overflow-hidden">
-    <!-- Settings Sidebar -->
-    <div class="w-48 bg-space-card border border-space-border rounded-lg flex flex-col overflow-hidden flex-shrink-0">
+  <div class="flex-1 flex gap-2 p-2 overflow-hidden">
+    <!-- Sidebar -->
+    <div class="w-56 bg-space-card border border-space-border rounded-lg flex flex-col overflow-hidden flex-shrink-0">
       <div class="px-3 py-2 border-b border-space-border">
         <h3 class="text-xs font-semibold text-space-text-dim uppercase tracking-wider">Bot Types</h3>
       </div>
@@ -352,6 +352,42 @@
         <div class="save-bar"><button @click="saveTrader" class="btn btn-primary">Save Settings</button></div>
       </div>
 
+      <!-- Gatherer Settings -->
+      <div v-else-if="activeTab === 'gatherer'">
+        <h3 class="text-[15px] font-semibold text-space-text-bright mb-1">Gatherer Settings</h3>
+        <p class="text-xs text-space-text-dim mb-5">Collects build materials for a facility. Goal is assigned from the Station → Build tab.</p>
+
+        <!-- Current goal (read-only) -->
+        <div class="mb-4 p-3 rounded-md border border-space-border bg-space-bg">
+          <div class="text-xs font-semibold text-space-text-dim uppercase mb-2">Current Goal</div>
+          <template v-if="gathererGoal">
+            <div class="flex items-start justify-between gap-2">
+              <div>
+                <div class="text-sm text-space-text-bright font-medium">{{ gathererGoal.target_name }}</div>
+                <div class="text-[10px] text-space-text-dim mt-0.5">{{ gathererGoal.target_system }} · {{ gathererGoal.target_poi }}</div>
+                <div class="flex flex-wrap gap-1 mt-1.5">
+                  <span v-for="m in gathererGoal.materials" :key="m.item_id" class="px-1.5 py-0.5 rounded text-[10px] bg-[#21262d] text-space-text">
+                    {{ m.quantity_needed }}x {{ m.item_name }}
+                  </span>
+                </div>
+              </div>
+              <button @click="clearGathererGoal" class="btn btn-secondary text-xs px-2 py-0.5 shrink-0">✕ Clear</button>
+            </div>
+          </template>
+          <div v-else class="text-xs text-space-text-dim italic">No goal set. Click 📦 Gather on a facility in the Station → Build tab.</div>
+        </div>
+
+        <div class="setting-row">
+          <div><div class="text-sm text-space-text">Refuel Threshold (%)</div><div class="text-xs text-space-text-dim mt-0.5">Refuel when fuel drops below this %.</div></div>
+          <input type="number" v-model.number="gathererForm.refuelThreshold" min="20" max="80" class="input text-sm w-24" />
+        </div>
+        <div class="setting-row">
+          <div><div class="text-sm text-space-text">Repair Threshold (%)</div><div class="text-xs text-space-text-dim mt-0.5">Repair hull when HP drops below this %.</div></div>
+          <input type="number" v-model.number="gathererForm.repairThreshold" min="20" max="80" class="input text-sm w-24" />
+        </div>
+        <div class="save-bar"><button @click="saveGatherer" class="btn btn-primary">Save Settings</button></div>
+      </div>
+
       <!-- Cleanup Settings -->
       <div v-else-if="activeTab === 'cleanup'">
         <h3 class="text-[15px] font-semibold text-space-text-bright mb-1">Cleanup Settings</h3>
@@ -527,6 +563,7 @@ const settingsTabs = [
   { id: 'ice_harvester', name: 'IceHarvester' },
   { id: 'salvager', name: 'Salvager' },
   { id: 'cleanup', name: 'Cleanup' },
+  { id: 'gatherer', name: 'Gatherer' },
 ];
 
 // ── Shared helpers ──────────────────────────────────────────
@@ -686,6 +723,15 @@ const traderForm = ref({
   repairThreshold: 40,
 });
 
+// ── Gatherer form ───────────────────────────────────────────
+const gathererForm = ref({ refuelThreshold: 30, repairThreshold: 40 });
+
+const gathererGoal = computed(() => (botStore.settings?.gatherer?.goal as any) || null);
+
+function clearGathererGoal() {
+  botStore.saveSettings('gatherer', { goal: null });
+}
+
 // ── Cleanup form ────────────────────────────────────────────
 const cleanupForm = ref({ homeStation: '' });
 
@@ -797,6 +843,10 @@ watch(() => botStore.settings, (s) => {
     traderForm.value.refuelThreshold = t.refuelThreshold ?? 50;
     traderForm.value.repairThreshold = t.repairThreshold ?? 40;
   }
+  if (s.gatherer) {
+    gathererForm.value.refuelThreshold = s.gatherer.refuelThreshold ?? 30;
+    gathererForm.value.repairThreshold = s.gatherer.repairThreshold ?? 40;
+  }
   if (s.cleanup) {
     const sys = s.cleanup.homeSystem || '';
     const sta = s.cleanup.homeStation || '';
@@ -892,6 +942,13 @@ function saveRescue() { botStore.saveSettings('rescue', { ...rescueForm.value })
 function saveExplorer() { botStore.saveSettings('explorer', { ...explorerForm.value }); }
 function saveCoordinator() { botStore.saveSettings('coordinator', { ...coordForm.value }); }
 function saveTrader() { botStore.saveSettings('trader', { ...traderForm.value }); }
+
+function saveGatherer() {
+  botStore.saveSettings('gatherer', {
+    refuelThreshold: gathererForm.value.refuelThreshold,
+    repairThreshold: gathererForm.value.repairThreshold,
+  });
+}
 
 function saveCleanup() {
   const [homeSystem, homeStation] = cleanupForm.value.homeStation
