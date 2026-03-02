@@ -52,21 +52,21 @@
       >
         <!-- System Header -->
         <div @click="toggleExpand(sys.id)" class="flex items-center gap-2 px-3 py-2 cursor-pointer select-none bg-[rgba(255,255,255,0.02)] hover:bg-space-row-hover transition-colors">
-          <span class="text-[10px] text-space-text-dim w-4 text-center transition-transform" :class="expanded.has(sys.id) ? 'rotate-90' : ''">&#9654;</span>
+          <span class="text-[11px] text-space-text-dim w-4 text-center transition-transform" :class="expanded.has(sys.id) ? 'rotate-90' : ''">&#9654;</span>
           <span class="text-sm font-semibold text-space-text-bright">{{ sys.name || sys.id }}</span>
           <span v-html="secBadge(sys.security_level)" class="flex-shrink-0"></span>
           <div class="text-xs text-space-text-dim ml-auto flex gap-3 flex-shrink-0">
             <span>{{ (sys.pois || []).length }} POI{{ (sys.pois || []).length !== 1 ? 's' : '' }}</span>
             <span>{{ (sys.connections || []).length }} jump{{ (sys.connections || []).length !== 1 ? 's' : '' }}</span>
           </div>
-          <span class="text-[10px] text-space-text-dim opacity-70">{{ timeAgo(sys.last_updated) }}</span>
+          <span class="text-[11px] text-space-text-dim opacity-70">{{ timeAgo(sys.last_updated) }}</span>
         </div>
 
         <!-- System Body (expanded) -->
         <div v-if="expanded.has(sys.id)" class="border-t border-space-border px-3 py-3">
           <!-- Connections -->
           <div v-if="sys.connections?.length" class="flex flex-wrap gap-1 items-center mb-3 text-xs">
-            <span class="font-semibold text-space-text-dim uppercase text-[10px] tracking-wider mr-1">Connections</span>
+            <span class="font-semibold text-space-text-dim uppercase text-[11px] tracking-wider mr-1">Connections</span>
             <span v-for="c in sys.connections" :key="c.system_id || c.id" class="px-2 py-0.5 rounded-full bg-[#21262d] text-space-text text-xs">
               {{ c.system_name || c.system_id || c.id }}
             </span>
@@ -76,23 +76,23 @@
           <div v-for="poi in sys.pois" :key="poi.id" class="bg-space-bg border border-[#21262d] rounded-md p-2.5 mb-2 last:mb-0">
             <div class="flex items-center gap-2 mb-1">
               <span class="text-sm font-semibold text-space-text">{{ poi.name || poi.id }}</span>
-              <span class="text-[10px] px-1.5 py-0.5 rounded-lg bg-[#21262d] text-space-text-dim">{{ poi.type }}</span>
+              <span class="text-[11px] px-1.5 py-0.5 rounded-lg bg-[#21262d] text-space-text-dim">{{ poi.type }}</span>
               <span v-if="poi.has_base" class="text-xs text-space-cyan font-medium">{{ poi.base_name || 'Station' }}</span>
             </div>
             <!-- Ores -->
             <div v-if="poi.ores_found?.length" class="mt-1.5">
-              <div class="text-[10px] font-semibold text-space-text-dim uppercase tracking-wider mb-1">Resources Mined</div>
+              <div class="text-[11px] font-semibold text-space-text-dim uppercase tracking-wider mb-1">Resources Mined</div>
               <div class="flex flex-wrap gap-1">
-                <span v-for="ore in poi.ores_found" :key="ore.item_id" class="text-[10px] px-1.5 py-0.5 rounded-lg bg-[#0d2818] text-space-green">
+                <span v-for="ore in poi.ores_found" :key="ore.item_id" class="text-[11px] px-1.5 py-0.5 rounded-lg bg-[#0d2818] text-space-green">
                   {{ ore.name }} x{{ ore.total_mined }}
                 </span>
               </div>
             </div>
             <!-- Market (first 5) -->
             <div v-if="poi.market?.length" class="mt-1.5">
-              <div class="text-[10px] font-semibold text-space-text-dim uppercase tracking-wider mb-1">Market Prices</div>
+              <div class="text-[11px] font-semibold text-space-text-dim uppercase tracking-wider mb-1">Market Prices</div>
               <table class="w-full text-xs border-collapse">
-                <thead><tr class="text-[10px] text-space-text-dim uppercase">
+                <thead><tr class="text-[11px] text-space-text-dim uppercase">
                   <th class="text-left py-0.5 px-1">Item</th><th class="text-left py-0.5 px-1">Buy</th><th class="text-left py-0.5 px-1">Sell</th>
                 </tr></thead>
                 <tbody>
@@ -103,7 +103,7 @@
                   </tr>
                 </tbody>
               </table>
-              <div v-if="poi.market.length > 5" class="text-[10px] text-space-accent mt-0.5">+{{ poi.market.length - 5 }} more items</div>
+              <div v-if="poi.market.length > 5" class="text-[11px] text-space-accent mt-0.5">+{{ poi.market.length - 5 }} more items</div>
             </div>
           </div>
         </div>
@@ -141,11 +141,11 @@ function timeAgo(isoStr: string): string {
 }
 
 function secBadge(level: string): string {
-  if (!level) return '<span class="text-[10px] font-semibold px-1.5 py-0.5 rounded-full bg-[#21262d] text-[#8b949e]">Unknown</span>';
+  if (!level) return '<span class="text-[11px] font-semibold px-1.5 py-0.5 rounded-full bg-[#21262d] text-[#8b949e]">Unknown</span>';
   const lc = level.toLowerCase();
-  if (lc.includes('high') || lc.includes('safe')) return `<span class="text-[10px] font-semibold px-1.5 py-0.5 rounded-full bg-[#0d2818] text-[#3fb950]">${level}</span>`;
-  if (lc.includes('low') || lc.includes('danger')) return `<span class="text-[10px] font-semibold px-1.5 py-0.5 rounded-full bg-[#2d0000] text-[#f85149]">${level}</span>`;
-  return `<span class="text-[10px] font-semibold px-1.5 py-0.5 rounded-full bg-[#2d1b00] text-[#d29922]">${level}</span>`;
+  if (lc.includes('high') || lc.includes('safe')) return `<span class="text-[11px] font-semibold px-1.5 py-0.5 rounded-full bg-[#0d2818] text-[#3fb950]">${level}</span>`;
+  if (lc.includes('low') || lc.includes('danger')) return `<span class="text-[11px] font-semibold px-1.5 py-0.5 rounded-full bg-[#2d0000] text-[#f85149]">${level}</span>`;
+  return `<span class="text-[11px] font-semibold px-1.5 py-0.5 rounded-full bg-[#2d1b00] text-[#d29922]">${level}</span>`;
 }
 
 function secOrder(level: string): number {

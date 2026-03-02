@@ -121,19 +121,19 @@
           <div class="grid grid-cols-4 gap-2 text-center">
             <div class="bg-space-bg border border-[#21262d] rounded-md p-2">
               <div class="text-lg font-bold text-space-cyan">{{ memberCount }}</div>
-              <div class="text-[10px] text-space-text-dim">Members</div>
+              <div class="text-[11px] text-space-text-dim">Members</div>
             </div>
             <div class="bg-space-bg border border-[#21262d] rounded-md p-2">
               <div class="text-lg font-bold text-space-green">{{ onlineCount }}</div>
-              <div class="text-[10px] text-space-text-dim">Online</div>
+              <div class="text-[11px] text-space-text-dim">Online</div>
             </div>
             <div class="bg-space-bg border border-[#21262d] rounded-md p-2">
               <div class="text-lg font-bold text-space-yellow">{{ fmt(factionData.treasury ?? factionData.credits ?? 0) }}</div>
-              <div class="text-[10px] text-space-text-dim">Treasury</div>
+              <div class="text-[11px] text-space-text-dim">Treasury</div>
             </div>
             <div class="bg-space-bg border border-[#21262d] rounded-md p-2">
               <div class="text-lg font-bold text-space-magenta">{{ factionFacilities.length }}</div>
-              <div class="text-[10px] text-space-text-dim">Facilities</div>
+              <div class="text-[11px] text-space-text-dim">Facilities</div>
             </div>
           </div>
         </div>
@@ -150,18 +150,18 @@
               <div class="w-7 h-7 bg-space-accent rounded-full flex items-center justify-center text-xs text-white font-bold">{{ (m.username || '?')[0].toUpperCase() }}</div>
               <div>
                 <div class="text-xs font-medium text-space-text">{{ m.username || m.name }}</div>
-                <div class="text-[10px] text-space-text-dim">{{ m.role || 'Member' }}</div>
+                <div class="text-[11px] text-space-text-dim">{{ m.role || 'Member' }}</div>
               </div>
             </div>
             <div class="flex items-center gap-2 text-xs">
               <span :class="m.is_online ? 'text-space-green' : 'text-space-text-dim'">{{ m.is_online ? 'Online' : 'Offline' }}</span>
-              <select v-if="m.username !== selectedBot" @change="promoteMember(m, ($event.target as HTMLSelectElement).value)" class="input text-[10px] py-0.5 px-1">
+              <select v-if="m.username !== selectedBot" @change="promoteMember(m, ($event.target as HTMLSelectElement).value)" class="input text-[11px] py-0.5 px-1">
                 <option value="" disabled selected>Role</option>
                 <option value="Member">Member</option>
                 <option value="Officer">Officer</option>
                 <option value="Leader">Leader</option>
               </select>
-              <button v-if="m.username !== selectedBot" @click="kickMember(m)" class="text-[10px] px-2 py-0.5 rounded border border-space-border text-space-text-dim hover:border-space-red hover:text-space-red transition-colors">Kick</button>
+              <button v-if="m.username !== selectedBot" @click="kickMember(m)" class="text-[11px] px-2 py-0.5 rounded border border-space-border text-space-text-dim hover:border-space-red hover:text-space-red transition-colors">Kick</button>
             </div>
           </div>
         </div>
@@ -189,18 +189,40 @@
           </div>
 
           <!-- Existing facilities -->
-          <div v-if="factionFacilities.length > 0" class="mb-4">
-            <h4 class="text-xs font-semibold text-space-text-dim uppercase mb-2">Active Facilities</h4>
-            <div v-for="f in factionFacilities" :key="f.facility_id" class="bg-space-bg border border-[#21262d] rounded-md p-3 mb-2">
-              <div class="flex items-center justify-between">
-                <div>
-                  <div class="text-sm font-medium text-space-text">{{ f.name }}</div>
-                  <div class="text-xs text-space-text-dim">{{ f.description || f.type || '' }}</div>
-                  <div v-if="f.faction_service" class="text-[10px] text-space-text-dim mt-0.5">Service: {{ f.faction_service }}</div>
+          <h4 class="text-xs font-semibold text-space-text-dim uppercase mb-2">Active Facilities</h4>
+          <div v-if="factionFacilities.length > 0" class="grid grid-cols-5 gap-2">
+            <div v-for="f in factionFacilities" :key="f.facility_id"
+              class="bg-space-bg border border-[#21262d] rounded-md p-2 mb-2 text-xs"
+              :class="f.active === false ? 'opacity-60' : ''">
+              <div class="flex items-start justify-between gap-2">
+                <div class="min-w-0 flex-1">
+                  <div class="flex items-center gap-1.5 flex-wrap">
+                    <span class="font-medium text-space-text">{{ f.name }}</span>
+                    <span v-if="f.level" class="text-[11px] text-space-text-dim">Lv{{ f.level }}</span>
+                    <span :class="f.active !== false ? 'text-space-green' : 'text-space-red'" class="text-[11px]">{{ f.active !== false ? '● Active' : '● Inactive' }}</span>
+                  </div>
+                  <div v-if="f.description" class="text-[11px] text-space-text-dim mt-0.5">{{ f.description }}</div>
+                  <div v-if="f.faction_service" class="text-[11px] text-space-text-dim">Service: {{ f.faction_service }}</div>
+                  <div v-if="f.capacity" class="text-[11px] text-space-text-dim">Cap: {{ f.capacity }}</div>
                 </div>
-                <div class="text-right text-xs">
-                  <div :class="f.active !== false ? 'text-space-green' : 'text-space-red'">{{ f.active !== false ? 'Active' : 'Inactive' }}</div>
-                  <div v-if="f.capacity" class="text-space-text-dim">Cap: {{ f.capacity }}</div>
+                <div class="flex flex-col items-end gap-1 shrink-0">
+                  <button @click="toggleFactionFacility(f)"
+                    :disabled="factionActionLoading === f.facility_id"
+                    class="btn btn-secondary text-[11px] px-2 py-0.5 disabled:opacity-40">
+                    {{ factionActionLoading === f.facility_id ? '...' : f.active !== false ? 'Disable' : 'Enable' }}
+                  </button>
+                </div>
+              </div>
+              <!-- Upgrade options -->
+              <div v-if="factionUpgradeMap[f.facility_id]?.length" class="mt-1.5 pt-1.5 border-t border-[#30363d]">
+                <div class="text-[11px] text-space-text-dim uppercase tracking-wider mb-1">Upgrades available</div>
+                <div class="flex flex-wrap gap-1">
+                  <button v-for="u in factionUpgradeMap[f.facility_id]" :key="u.facility_type || u.id"
+                    @click="upgradeFactionFacility(f, u.facility_type || u.id)"
+                    :disabled="factionActionLoading === f.facility_id"
+                    class="btn btn-primary text-[11px] px-2 py-0.5 disabled:opacity-40">
+                    {{ factionActionLoading === f.facility_id ? '...' : '↑ ' + (u.name || u.facility_type || u.id) }}
+                  </button>
                 </div>
               </div>
             </div>
@@ -209,28 +231,55 @@
           <div v-else class="text-xs text-space-text-dim italic mb-4">Click "Refresh" to load facilities.</div>
 
           <!-- Buildable types -->
-          <div v-if="buildableTypes.length > 0">
-            <h4 class="text-xs font-semibold text-space-text-dim uppercase mb-2">Build New Facility</h4>
-            <div v-for="bt in buildableTypes" :key="bt.id" class="bg-space-bg border border-[#21262d] rounded-md p-3 mb-2">
-              <div class="flex items-center justify-between">
-                <div class="flex-1 cursor-pointer" @click="loadFacilityDetail(bt.id)">
-                  <div class="text-sm font-medium text-space-text hover:text-space-accent">{{ bt.name }}</div>
-                  <div v-if="bt.bonus_type" class="text-[10px] text-space-cyan">+{{ bt.bonus_value }} {{ bt.bonus_type.replace('_', ' ') }}</div>
-                  <div v-if="bt.build_cost" class="text-[10px] text-space-yellow mt-0.5">Cost: {{ formatBuildCost(bt.build_cost) }}</div>
+          <h4 class="text-xs font-semibold text-space-text-dim uppercase mb-2">Build New Facility</h4>
+          <div v-if="buildableTypes.length > 0" class="grid grid-cols-5 gap-2">
+            <div v-for="bt in buildableTypes" :key="bt.id"
+              class="bg-space-bg border border-[#21262d] rounded-md p-2 mb-2 text-xs transition-opacity"
+              :class="[!bt.buildable && !hasFacility(bt.id) ? 'opacity-50' : '', hasFacility(bt.id) ? 'border-green-900/30' : '']">
+              <div class="flex items-start justify-between gap-2">
+                <div class="min-w-0 flex-1">
+                  <div class="flex items-center gap-1.5 flex-wrap">
+                    <span class="font-medium" :class="hasFacility(bt.id) ? 'text-space-green' : 'text-space-text'">{{ bt.name }}</span>
+                    <span v-if="bt.level" class="text-[11px] text-space-text-dim">Lv{{ bt.level }}</span>
+                    <span v-if="hasFacility(bt.id)" class="text-[11px] px-1 py-0.5 rounded bg-green-900/30 text-space-green">✓ built</span>
+                    <span v-else-if="!bt.buildable" class="text-[11px] px-1 py-0.5 rounded bg-[#30363d] text-space-text-dim">🔒 locked</span>
+                  </div>
+                  <div v-if="bt.description" class="text-[11px] text-space-text-dim mt-0.5 line-clamp-2">{{ bt.description }}</div>
+                  <div v-if="bt.bonus_type" class="text-[11px] text-space-cyan mt-0.5">+{{ bt.bonus_value }} {{ bt.bonus_type.replace(/_/g, ' ') }}</div>
+                  <div v-if="bt.faction_service" class="text-[11px] text-space-accent">⚙️ {{ bt.faction_service.replace(/_/g, ' ') }}</div>
+                  <div v-if="bt.build_time" class="text-[11px] text-space-text-dim">⏱ {{ bt.build_time }} cycles</div>
                 </div>
-                <div class="flex flex-col gap-1 items-end ml-2">
+                <div class="text-right shrink-0">
+                  <div class="text-space-yellow text-[11px] mb-1">{{ bt.build_cost != null ? formatBuildCost(bt.build_cost) : '—' }}</div>
                   <button @click="buildFacility(bt.id, bt.name)"
-                    :disabled="loading || hasFacility(bt.id) || currentGatherGoal?.target_id === bt.id"
-                    class="btn text-xs px-3 py-1">
-                    {{ hasFacility(bt.id) ? '✓ Built' : 'Build' }}
+                    :disabled="hasFacility(bt.id) || !bt.buildable || factionActionLoading === bt.id"
+                    class="btn text-[11px] px-2 py-0.5 disabled:opacity-40 disabled:cursor-not-allowed"
+                    :class="hasFacility(bt.id) ? 'btn-secondary' : bt.buildable ? 'btn-primary' : 'btn-secondary'">
+                    {{ factionActionLoading === bt.id ? '...' : hasFacility(bt.id) ? '✓ Built' : !bt.buildable ? '🔒 Locked' : '🔨 Build' }}
                   </button>
-                  <span v-if="currentGatherGoal?.target_id === bt.id" class="text-[10px] text-space-cyan flex items-center gap-1">
+                  <div v-if="factionBuildErrors[bt.id]" class="text-[11px] text-red-400 mt-1">⚠ {{ factionBuildErrors[bt.id] }}</div>
+                </div>
+              </div>
+              <!-- Build materials -->
+              <div v-if="(factionTypeCache[bt.id]?.build_materials || bt.build_materials)?.length"
+                class="mt-1.5 pt-1.5 border-t border-[#30363d] flex items-end justify-between gap-2">
+                <div class="min-w-0">
+                  <div class="text-[11px] text-space-text-dim uppercase tracking-wider mb-0.5">Materials required</div>
+                  <div class="flex flex-wrap gap-x-3 gap-y-0.5 text-[11px] text-space-text-dim">
+                    <span v-for="m in (factionTypeCache[bt.id]?.build_materials || bt.build_materials)" :key="m.item_id">{{ m.name || m.item_id }} ×{{ m.quantity }}</span>
+                  </div>
+                </div>
+                <div class="shrink-0 flex flex-col items-end gap-1">
+                  <span v-if="currentGatherGoal?.target_id === bt.id" class="text-[11px] text-space-cyan flex items-center gap-1">
                     ⚙️ Gathering
-                    <button @click="clearGatherGoal()" class="text-space-red hover:text-red-400 text-[10px]" title="Cancel goal">✕</button>
+                    <button @click="clearGatherGoal()" class="text-space-red hover:text-red-400" title="Cancel">✕</button>
                   </span>
                   <button v-else-if="!hasFacility(bt.id)" @click="gatherFacilityMaterials(bt)"
-                    class="btn text-[10px] px-2 py-0.5 whitespace-nowrap">📦 Gather</button>
+                    class="btn btn-secondary text-[11px] px-2 py-0.5 whitespace-nowrap">📦 Gather</button>
                 </div>
+              </div>
+              <div v-else-if="!factionTypeCache[bt.id]" class="mt-1 text-[11px] text-space-text-dim/40 italic cursor-pointer hover:text-space-text-dim" @click="loadFacilityDetail(bt.id)">
+                Click to load details
               </div>
             </div>
           </div>
@@ -266,7 +315,7 @@
                   class="btn flex-1 text-xs">📦 Gather</button>
                 <span v-else-if="currentGatherGoal?.target_id === facilityDetail.id" class="flex items-center gap-1 text-xs text-space-cyan flex-1 justify-center">
                   ⚙️ Gathering
-                  <button @click="clearGatherGoal()" class="text-space-red text-[10px]">✕</button>
+                  <button @click="clearGatherGoal()" class="text-space-red text-[11px]">✕</button>
                 </span>
                 <button @click="facilityDetail = null" class="btn flex-1 text-xs">Cancel</button>
               </div>
@@ -372,8 +421,14 @@ const buildableTypes = ref<any[]>([]);
 const facilitiesLoaded = ref(false);
 const facilityDetail = ref<any>(null);
 const factionTypeCache = ref<Record<string, any>>({});
+const factionActionLoading = ref<string | null>(null);
+const factionBuildErrors = ref<Record<string, string>>({});
+const factionUpgradeMap = ref<Record<string, any[]>>({}); // facility_id → upgrade options
 
-const currentGatherGoal = computed(() => (botStore.settings?.gatherer?.goal as any) || null);
+const currentGatherGoal = computed(() =>
+  (selectedBot.value ? (botStore.settings as any)?.[selectedBot.value]?.goal : null) ??
+  (botStore.settings as any)?.gatherer?.goal ?? null
+);
 
 // Modals
 const showCreateModal = ref(false);
@@ -392,6 +447,23 @@ const sections = [
 ];
 
 function fmt(n: number): string { return new Intl.NumberFormat().format(n); }
+
+function execAsync(command: string, params?: any): Promise<any> {
+  return new Promise(resolve => {
+    if (!selectedBot.value) return resolve({ ok: false, error: 'No bot selected' });
+    botStore.sendExec(selectedBot.value, command, params, resolve);
+  });
+}
+
+function parseBuildError(raw: string): string {
+  const msg = raw.replace(/^[\w_]+:\s*/i, '').trim();
+  const m = msg.match(/need (\d+) x ([\w_]+),?\s*have (\d+) in storage \+ (\d+) in cargo/i);
+  if (m) {
+    const qty = m[1], itemId = m[2].replace(/_/g, ' '), have = parseInt(m[3]) + parseInt(m[4]);
+    return `Missing: ${qty}\u00d7 ${itemId} (have ${have})`;
+  }
+  return msg;
+}
 
 function setError(msg: string) { errorMsg.value = msg; setTimeout(() => { errorMsg.value = ''; }, 5000); }
 function setStatus(msg: string) { statusMsg.value = msg; setTimeout(() => { statusMsg.value = ''; }, 4000); }
@@ -417,6 +489,9 @@ function selectBot(username: string) {
   facilitiesLoaded.value = false;
   facilityDetail.value = null;
   factionTypeCache.value = {};
+  factionActionLoading.value = null;
+  factionBuildErrors.value = {};
+  factionUpgradeMap.value = {};
   errorMsg.value = '';
   statusMsg.value = '';
   refreshData();
@@ -491,9 +566,52 @@ function loadFacilities() {
     if (result.ok && result.data) {
       factionFacilities.value = result.data.faction_facilities || [];
     }
-    // Now load buildable types
     loadBuildableTypes();
+    loadFactionUpgrades();
   });
+}
+
+async function loadFactionUpgrades(): Promise<void> {
+  const res = await execAsync('facility', { action: 'upgrades' });
+  if (!res.ok || !res.data) return;
+  const list: any[] = res.data.upgrades || res.data.facilities || (Array.isArray(res.data) ? res.data : []);
+  const map: Record<string, any[]> = {};
+  for (const entry of list) {
+    const id: string = entry.facility_id;
+    if (!id) continue;
+    const opts: any[] = entry.available_upgrades || entry.upgrades || (entry.facility_type ? [entry] : []);
+    if (opts.length) map[id] = opts;
+  }
+  factionUpgradeMap.value = map;
+}
+
+async function toggleFactionFacility(f: any): Promise<void> {
+  factionActionLoading.value = f.facility_id;
+  try {
+    const res = await execAsync('facility', { action: 'toggle', facility_id: f.facility_id });
+    if (res.ok) {
+      f.active = !f.active;
+    } else {
+      setError(res.error || 'Toggle failed');
+    }
+  } finally {
+    factionActionLoading.value = null;
+  }
+}
+
+async function upgradeFactionFacility(f: any, toTypeId: string): Promise<void> {
+  factionActionLoading.value = f.facility_id;
+  try {
+    const res = await execAsync('facility', { action: 'upgrade', facility_id: f.facility_id, facility_type: toTypeId });
+    if (res.ok) {
+      setStatus('Facility upgraded!');
+      loadFacilities();
+    } else {
+      setError(parseBuildError(res.error || 'Upgrade failed'));
+    }
+  } finally {
+    factionActionLoading.value = null;
+  }
 }
 
 function loadBuildableTypes() {
@@ -528,7 +646,8 @@ function loadFacilityDetail(facilityTypeId: string) {
   if (!selectedBot.value) return;
   botStore.sendExec(selectedBot.value, 'facility', { action: 'types', facility_type: facilityTypeId }, (result: any) => {
     if (result.ok && result.data) {
-      const info = (result.data.types || [])[0] ?? result.data;
+      const raw = (result.data.types || [])[0] ?? result.data;
+      const info = { ...raw, id: raw.id || raw.type_id || facilityTypeId };
       factionTypeCache.value[facilityTypeId] = info;
       facilityDetail.value = info;
     }
@@ -542,7 +661,8 @@ function gatherFacilityMaterials(bt: any) {
     if (!selectedBot.value) return;
     botStore.sendExec(selectedBot.value, 'facility', { action: 'types', facility_type: bt.id }, (result: any) => {
       if (result.ok && result.data) {
-        const info = (result.data.types || [])[0] ?? result.data;
+        const raw = (result.data.types || [])[0] ?? result.data;
+        const info = { ...raw, id: raw.id || raw.type_id || bt.id };
         factionTypeCache.value[bt.id] = info;
         if (!info.build_materials?.length) { setError('No build materials defined'); return; }
         doSaveGatherGoal(bt.id, bt.name, info.build_materials);
@@ -554,7 +674,8 @@ function gatherFacilityMaterials(bt: any) {
 }
 
 function doSaveGatherGoal(typeId: string, typeName: string, mats: any[]) {
-  botStore.saveSettings('gatherer', {
+  if (!selectedBot.value) return;
+  botStore.saveSettings(selectedBot.value, {
     goal: {
       id: `faction_${typeId}_${Date.now()}`,
       target_id: typeId,
@@ -572,21 +693,27 @@ function doSaveGatherGoal(typeId: string, typeName: string, mats: any[]) {
 }
 
 function clearGatherGoal() {
-  botStore.saveSettings('gatherer', { goal: null });
+  if (!selectedBot.value) return;
+  botStore.saveSettings(selectedBot.value, { goal: null });
 }
 
-function buildFacility(facilityTypeId: string, facilityName?: string) {
-  if (!selectedBot.value || loading.value) return;
-  loading.value = true;
-  botStore.sendExec(selectedBot.value, 'facility', { action: 'faction_build', facility_type: facilityTypeId }, (result: any) => {
-    loading.value = false;
-    if (result.ok) {
+async function buildFacility(facilityTypeId: string, facilityName?: string): Promise<void> {
+  if (!selectedBot.value) return;
+  factionActionLoading.value = facilityTypeId;
+  factionBuildErrors.value[facilityTypeId] = '';
+  try {
+    const res = await execAsync('facility', { action: 'faction_build', facility_type: facilityTypeId });
+    if (res.ok) {
       setStatus(`${facilityName || facilityTypeId} built!`);
       loadFacilities();
     } else {
-      setError(result.error || 'Build failed');
+      const cleaned = parseBuildError(res.error || 'Build failed');
+      factionBuildErrors.value[facilityTypeId] = cleaned;
+      setError(cleaned);
     }
-  });
+  } finally {
+    factionActionLoading.value = null;
+  }
 }
 
 function hasFacility(facilityTypeId: string): boolean {

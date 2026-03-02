@@ -6,7 +6,7 @@
         <h1 class="text-sm font-semibold text-space-text-bright tracking-wide py-2 flex items-center gap-2">
           <img src="/favicon.png" alt="" class="w-6 h-6">
           Hex Bots
-          <span class="text-[10px] text-space-text-dim">v{{ version }}</span>
+          <span class="text-[11px] text-space-text-dim">v{{ version }}</span>
         </h1>
         
         <!-- Top tabs -->
@@ -22,24 +22,53 @@
           >
             <span class="text-xs">{{ tab.icon }}</span> {{ tab.label }}
           </button>
-          <button 
-            @click="switchTab('legacy')"
-            class="px-5 py-3 text-sm font-medium transition-all border-b-2 text-space-text-dim border-transparent hover:text-space-text"
-          >
-            <span class="text-xs">📱</span> Legacy UI
-          </button>
         </div>
       </div>
 
-      <!-- Connection status -->
-      <div class="flex items-center gap-3.5">
+      <!-- Right side: block indicator + admin buttons + connection status -->
+      <div class="flex items-center gap-2">
+
+        <!-- IP block warning -->
+        <div
+          v-if="ipBlocked"
+          class="flex items-center gap-1.5 text-xs px-2.5 py-1 rounded border border-orange-700/60 bg-orange-900/20 text-orange-400 font-medium animate-pulse"
+          title="All bots are paused until the block expires"
+        >
+          ⛔ IP Blocked {{ blockCountdownText }}
+        </div>
+
+        <!-- Refresh map -->
+        <button
+          @click="adminRefreshMap"
+          :disabled="refreshing.map"
+          title="Force-refresh galaxy map from API"
+          class="flex items-center justify-center w-7 h-7 rounded border border-space-border text-space-text-dim hover:border-space-accent hover:text-space-accent transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+        >
+          <span :class="refreshing.map ? 'animate-spin inline-block' : ''" style="display:inline-block">🗺️</span>
+        </button>
+
+        <!-- Refresh catalog -->
+        <button
+          @click="adminRefreshCatalog"
+          :disabled="refreshing.catalog"
+          title="Force-refresh item catalog from API"
+          class="flex items-center justify-center w-7 h-7 rounded border border-space-border text-space-text-dim hover:border-space-accent hover:text-space-accent transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+        >
+          <span :class="refreshing.catalog ? 'animate-spin inline-block' : ''" style="display:inline-block">📦</span>
+        </button>
+
+        <!-- Separator -->
+        <div class="w-px h-5 bg-space-border mx-1" />
+
+        <!-- Connection status -->
         <div class="flex items-center gap-1.5 text-xs text-space-text-dim">
-          <div 
+          <div
             class="w-2 h-2 rounded-full transition-colors"
             :class="wsConnected ? 'bg-space-green' : 'bg-space-red'"
           />
           <span>{{ wsConnected ? 'Connected' : 'Disconnected' }}</span>
         </div>
+
       </div>
     </header>
 
@@ -56,17 +85,19 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, onMounted, onUnmounted, provide } from 'vue';
+import { ref, computed, onMounted, onUnmounted, provide, reactive } from 'vue';
 import { useBotStore } from './stores/botStore';
-import Dashboard from './components/Dashboard.vue';
+import Dashboard from './views/DashboardView.vue';
 import BotProfile from './components/BotProfile.vue';
-import SettingsView from './components/SettingsView.vue';
-import MarketView from './components/MarketView.vue';
-import MissionsView from './components/MissionsView.vue';
-import StatsView from './components/StatsView.vue';
-import FactionView from './components/FactionView.vue';
-import MapView from './components/MapView.vue';
-import ShipyardView from './components/ShipyardView.vue';
+import SettingsView from './views/SettingsView.vue';
+import MarketView from './views/MarketView.vue';
+import MissionsView from './views/MissionsView.vue';
+import StatsView from './views/StatsView.vue';
+import FactionView from './views/FactionView.vue';
+import MapView from './views/MapView.vue';
+import ShipyardView from './views/ShipyardView.vue';
+import CommanderView from './views/CommanderView.vue';
+import ActionLogView from './views/ActionLogView.vue';
 import { version } from '../../../package.json';
 
 const tabs = [
@@ -76,6 +107,8 @@ const tabs = [
   { id: 'missions', label: 'Missions', component: MissionsView, icon: '🎯' },
   { id: 'faction', label: 'Faction', component: FactionView, icon: '🏛️' },
   { id: 'shipyard', label: 'Shipyard', component: ShipyardView, icon: '🛠️' },
+  { id: 'commander', label: 'Commander', component: CommanderView, icon: '🧠' },
+  { id: 'actionlog', label: 'Action Log', component: ActionLogView, icon: '📜' },
   { id: 'stats', label: 'Stats', component: StatsView, icon: '📊' },
   { id: 'settings', label: 'Settings', component: SettingsView, icon: '⚙️' },
 ];
@@ -86,6 +119,40 @@ const showProfile = ref(false);
 const profileBot = ref<any>(null);
 const botStore = useBotStore();
 let reconnectDelay = 1000;
+
+// ── IP block state ──
+const ipBlocked = computed(() => botStore.ipBlocked);
+const blockSecsLeft = ref(0);
+const blockCountdownText = computed(() => {
+  if (!blockSecsLeft.value) return '';
+  const m = Math.floor(blockSecsLeft.value / 60);
+  const s = blockSecsLeft.value % 60;
+  return m > 0 ? `${m}:${String(s).padStart(2, '0')}` : `${s}s`;
+});
+let countdownTick: ReturnType<typeof setInterval> | null = null;
+
+// ── Admin refresh state ──
+const refreshing = reactive({ catalog: false, map: false });
+
+async function adminRefreshCatalog() {
+  if (refreshing.catalog) return;
+  refreshing.catalog = true;
+  try {
+    await fetch('/api/admin/refresh-catalog', { method: 'POST' });
+  } finally {
+    refreshing.catalog = false;
+  }
+}
+
+async function adminRefreshMap() {
+  if (refreshing.map) return;
+  refreshing.map = true;
+  try {
+    await fetch('/api/admin/refresh-map', { method: 'POST' });
+  } finally {
+    refreshing.map = false;
+  }
+}
 
 const currentTabComponent = computed(() => {
   return tabs.find(t => t.id === activeTab.value)?.component;
@@ -146,9 +213,14 @@ function connectWebSocket() {
 
 onMounted(() => {
   connectWebSocket();
+  countdownTick = setInterval(() => {
+    const endsAt = botStore.ipBlockEndsAt;
+    blockSecsLeft.value = endsAt > 0 ? Math.max(0, Math.ceil((endsAt - Date.now()) / 1000)) : 0;
+  }, 1000);
 });
 
 onUnmounted(() => {
   ws?.close();
+  if (countdownTick) clearInterval(countdownTick);
 });
 </script>

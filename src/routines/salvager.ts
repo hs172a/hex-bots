@@ -1,5 +1,4 @@
 import type { Routine, RoutineContext } from "../bot.js";
-import { mapStore } from "../mapstore.js";
 import {
   isMinablePoi,
   isStationPoi,
@@ -238,7 +237,7 @@ export const salvagerRoutine: Routine = async function* (ctx: RoutineContext) {
 
     // ── Expand to neighbor systems if current system had no wrecks ──
     if (totalLooted === 0 && !cargoFull && bot.state === "running") {
-      const neighbors = mapStore.getConnections(bot.system);
+      const neighbors = ctx.mapStore.getConnections(bot.system);
       if (neighbors.length > 0) {
         ctx.log("scavenge", `No wrecks locally — checking ${neighbors.length} neighbor system(s)`);
       }

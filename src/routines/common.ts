@@ -6,7 +6,7 @@
  */
 import type { RoutineContext } from "../bot.js";
 import { catalogStore } from "../catalogstore.js";
-import { mapStore } from "../mapstore.js";
+import type { MapStore } from "../mapstore.js";
 
 // ── Types ────────────────────────────────────────────────────
 
@@ -120,8 +120,8 @@ export function stationHasService(poi: SystemPOI, service: keyof BaseServices): 
 
 // ── System data parsing ──────────────────────────────────────
 
-/** Parse system data from get_system response. Saves to mapStore. */
-export function parseSystemData(resp: Record<string, unknown>): SystemInfo {
+/** Parse system data from get_system response. Optionally saves to mapStore when ms is provided. */
+export function parseSystemData(resp: Record<string, unknown>, ms?: MapStore): SystemInfo {
   const sysObj = resp.system as Record<string, unknown> | undefined;
   const rawPois = (sysObj?.pois ?? resp.pois) as Array<Record<string, unknown>> | undefined;
   const rawConns = (sysObj?.connections ?? sysObj?.jump_gates ?? resp.connections) as Array<Record<string, unknown>> | undefined;
@@ -176,8 +176,8 @@ export function parseSystemData(resp: Record<string, unknown>): SystemInfo {
   if (!merged.security_level && resp.security_level) merged.security_level = resp.security_level;
   if (!merged.security_status && resp.security_status) merged.security_status = resp.security_status;
 
-  if (merged.id || sysObj?.id) {
-    mapStore.updateSystem(merged);
+  if (ms && (merged.id || sysObj?.id)) {
+    ms.updateSystem(merged);
   }
 
   return { pois, connections, systemId };
@@ -189,7 +189,7 @@ export async function getSystemInfo(ctx: RoutineContext): Promise<SystemInfo> {
   const systemResp = await bot.exec("get_system");
 
   if (systemResp.result && typeof systemResp.result === "object") {
-    const info = parseSystemData(systemResp.result as Record<string, unknown>);
+    const info = parseSystemData(systemResp.result as Record<string, unknown>, ctx.mapStore);
     if (info.systemId) bot.system = info.systemId;
     return info;
   }
@@ -252,7 +252,7 @@ export async function ensureDocked(ctx: RoutineContext): Promise<boolean> {
 
   // No station in current system — find nearest known station
   ctx.log("system", "No station in current system — searching for nearest station...");
-  const nearest = mapStore.findNearestStationSystem(bot.system);
+  const nearest = ctx.mapStore.findNearestStationSystem(bot.system);
   if (!nearest) {
     ctx.log("error", "No known station in mapped systems — cannot dock");
     return false;
@@ -263,7 +263,7 @@ export async function ensureDocked(ctx: RoutineContext): Promise<boolean> {
   // Navigate there
   if (nearest.systemId !== bot.system) {
     await ensureUndocked(ctx);
-    const route = mapStore.findRoute(bot.system, nearest.systemId);
+    const route = ctx.mapStore.findRoute(bot.system, nearest.systemId);
     if (route && route.length > 1) {
       for (let i = 1; i < route.length; i++) {
         if (bot.state !== "running") return false;
@@ -324,7 +324,7 @@ export async function recordMarketData(ctx: RoutineContext): Promise<void> {
 
   const marketResp = await bot.exec("view_market");
   if (marketResp.result && typeof marketResp.result === "object") {
-    mapStore.updateMarket(bot.system, bot.poi, marketResp.result as Record<string, unknown>);
+    ctx.mapStore.updateMarket(bot.system, bot.poi, marketResp.result as Record<string, unknown>);
   }
 }
 
@@ -753,7 +753,7 @@ export async function ensureFueled(
 
   // Step 4: No local station — find nearest known system with one
   ctx.log("system", "No station in current system — searching known map for nearest station...");
-  const nearest = mapStore.findNearestStationSystem(bot.system);
+  const nearest = ctx.mapStore.findNearestStationSystem(bot.system);
   if (!nearest) {
     ctx.log("error", "No known station in mapped systems — emergency recovery...");
     return await emergencyFuelRecovery(ctx);
@@ -774,7 +774,7 @@ export async function ensureFueled(
     await ensureUndocked(ctx);
 
     // Jump system by system toward the station
-    const route = mapStore.findRoute(bot.system, nearest.systemId);
+    const route = ctx.mapStore.findRoute(bot.system, nearest.systemId);
     if (route && route.length > 1) {
       for (let i = 1; i < route.length; i++) {
         if (bot.state !== "running") return false;
@@ -1145,7 +1145,7 @@ export async function navigateToSystem(
     if (bot.system === targetSystemId) return true;
 
     // Plan route from current position
-    const route = mapStore.findRoute(bot.system, targetSystemId);
+    const route = ctx.mapStore.findRoute(bot.system, targetSystemId);
     let nextSystem: string | null = null;
 
     if (route && route.length > 1) {
@@ -1204,7 +1204,7 @@ export async function navigateToSystem(
     // Update map data for the new system
     const sysResp = await bot.exec("get_system");
     if (sysResp.result && typeof sysResp.result === "object") {
-      parseSystemData(sysResp.result as Record<string, unknown>);
+      parseSystemData(sysResp.result as Record<string, unknown>, ctx.mapStore);
     }
 
     // Auto-cloak in dangerous systems
@@ -1318,9 +1318,9 @@ export async function fetchSecurityLevel(ctx: RoutineContext, systemId: string):
     || (loc.security as string);
 
   if (secLevel) {
-    const stored = mapStore.getSystem(systemId);
+    const stored = ctx.mapStore.getSystem(systemId);
     if (stored && !stored.security_level) {
-      mapStore.updateSystem({ id: systemId, security_level: secLevel } as Record<string, unknown>);
+      ctx.mapStore.updateSystem({ id: systemId, security_level: secLevel } as Record<string, unknown>);
       ctx.log("info", `Security level for ${systemId}: ${secLevel}`);
     }
   }
@@ -1637,7 +1637,7 @@ export async function autoCloakIfDangerous(ctx: RoutineContext): Promise<boolean
   const { bot } = ctx;
   if (bot.isCloaked || bot.docked) return bot.isCloaked;
 
-  const sys = mapStore.getSystem(bot.system);
+  const sys = ctx.mapStore.getSystem(bot.system);
   if (!sys || !isDangerousSystem(sys.security_level)) return false;
 
   const resp = await bot.exec("cloak");
@@ -1813,7 +1813,7 @@ export function logFactionActivity(ctx: RoutineContext, type: string, message: s
   const { bot } = ctx;
   const timestamp = new Date().toLocaleTimeString("en-US", { hour12: false });
   const line = `${timestamp} [${type}] ${bot.username}: ${message}`;
-  bot.onFactionLog?.(bot.username, line);
+  bot.emit("factionLog", bot.username, line);
 }
 
 /** Log a status summary line. */

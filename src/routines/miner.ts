@@ -1,7 +1,7 @@
 import type { Routine, RoutineContext } from "../bot.js";
 import type { CargoItem } from "../bot.js";
-import { mapStore } from "../mapstore.js";
-import { catalogStore } from "../catalogstore.js";
+import type { MapStore } from "../mapstore.js";
+import type { CatalogStore } from "../catalogstore.js";
 import {
   type SystemPOI,
   isOreBeltPoi,
@@ -34,8 +34,8 @@ type DepositMode = "storage" | "faction" | "sell" | "gift";
 const DEFAULT_ORE_QUOTA = 1000;
 
 /** Default ore quotas: all known ores from map at 1000 each. Returns {} if no ores known yet. */
-function defaultOreQuotas(): Record<string, number> {
-  const ores = mapStore.getAllKnownOres();
+function defaultOreQuotas(ms: MapStore): Record<string, number> {
+  const ores = ms.getAllKnownOres();
   if (ores.length === 0) return {};
   const quotas: Record<string, number> = {};
   for (const ore of ores) {
@@ -46,7 +46,7 @@ function defaultOreQuotas(): Record<string, number> {
 
 /** Read miner settings from data/settings.json.
  *  Per-bot overrides for targetOre, depositMode, depositBot are checked first. */
-function getMinerSettings(username?: string): {
+function getMinerSettings(username?: string, ms?: MapStore): {
   depositMode: DepositMode;
   depositFallback: DepositMode;
   cargoThreshold: number;
@@ -97,7 +97,7 @@ function getMinerSettings(username?: string): {
     depositBot: (botOverrides.depositBot as string) || (m.depositBot as string) || "",
     targetOre: (botOverrides.targetOre as string) || (m.targetOre as string) || "",
     acceptMissions,
-    oreQuotas: (m.oreQuotas as Record<string, number>) || defaultOreQuotas(),
+    oreQuotas: (m.oreQuotas as Record<string, number>) || (ms ? defaultOreQuotas(ms) : {}),
   };
 }
 
@@ -110,22 +110,24 @@ function getMinerSettings(username?: string): {
 function pickTargetOre(
   oreQuotas: Record<string, number>,
   factionStorage: CargoItem[],
+  ms: MapStore,
+  cs: CatalogStore,
 ): { oreId: string; deficit: number; current: number; target: number } {
   const entries: Array<{ oreId: string; deficit: number; current: number; target: number; baseValue: number }> = [];
 
   for (const [oreId, target] of Object.entries(oreQuotas)) {
     if (target <= 0) continue;
     // Safety: skip ores with no known ore belt locations (ice/gas ores)
-    const locs = mapStore.findOreLocations(oreId);
-    const hasOreBelt = locs.some(loc => {
-      const sys = mapStore.getSystem(loc.systemId);
+    const locs = ms.findOreLocations(oreId);
+    const hasOreBelt = locs.some((loc: { systemId: string; poiId: string }) => {
+      const sys = ms.getSystem(loc.systemId);
       const poi = sys?.pois.find(p => p.id === loc.poiId);
       return poi ? isOreBeltPoi(poi.type) : false;
     });
     if (locs.length > 0 && !hasOreBelt) continue;
     const current = factionStorage.find(i => i.itemId === oreId)?.quantity || 0;
     const deficit = target - current;
-    const baseValue = catalogStore.getItem(oreId)?.base_value as number || 0;
+    const baseValue = cs.getItem(oreId)?.base_value as number || 0;
     entries.push({ oreId, deficit, current, target, baseValue });
   }
 
@@ -249,7 +251,7 @@ export const minerRoutine: Routine = async function* (ctx: RoutineContext) {
   const { bot } = ctx;
 
   await bot.refreshStatus();
-  const settings0 = getMinerSettings(bot.username);
+  const settings0 = getMinerSettings(bot.username, ctx.mapStore);
   // Home system: from settings, or wherever the bot is now as fallback
   const homeSystem = settings0.homeSystem || bot.system;
   /** Systems where all belts were depleted for the current target ore. Cleared each cycle when ore target changes. */
@@ -292,7 +294,7 @@ export const minerRoutine: Routine = async function* (ctx: RoutineContext) {
     if (!alive) { await sleep(30000); continue; }
 
     // Re-read settings each cycle so changes take effect without restart
-    const settings = getMinerSettings(bot.username);
+    const settings = getMinerSettings(bot.username, ctx.mapStore);
     const cargoThresholdRatio = settings.cargoThreshold / 100;
     const safetyOpts = {
       fuelThresholdPct: settings.refuelThreshold,
@@ -304,10 +306,10 @@ export const minerRoutine: Routine = async function* (ctx: RoutineContext) {
     // ── Ore quotas: pick ore with biggest deficit in faction storage ──
     if (Object.keys(settings.oreQuotas).length > 0) {
       await bot.refreshFactionStorage();
-      const pick = pickTargetOre(settings.oreQuotas, bot.factionStorage);
+      const pick = pickTargetOre(settings.oreQuotas, bot.factionStorage, ctx.mapStore, ctx.catalogStore);
       if (pick.oreId) {
         targetOre = pick.oreId;
-        const oreName = catalogStore.resolveItemName(pick.oreId);
+        const oreName = ctx.catalogStore.resolveItemName(pick.oreId);
         ctx.log("mining", `Quota pick: ${oreName} (${pick.current}/${pick.target}, deficit ${pick.deficit})`);
       } else if (pick.target > 0) {
         // All quotas met — clear targetOre so we mine locally
@@ -354,10 +356,10 @@ export const minerRoutine: Routine = async function* (ctx: RoutineContext) {
     let targetBeltName = "";
 
     if (targetOre) {
-      const allOreLocations = mapStore.findOreLocations(targetOre);
+      const allOreLocations = ctx.mapStore.findOreLocations(targetOre);
       // Filter to ore belts only — exclude ice fields, gas clouds, etc.
-      const oreLocations = allOreLocations.filter(loc => {
-        const sys = mapStore.getSystem(loc.systemId);
+      const oreLocations = allOreLocations.filter((loc: { systemId: string; poiId: string; systemName?: string; hasStation?: boolean }) => {
+        const sys = ctx.mapStore.getSystem(loc.systemId);
         const poi = sys?.pois.find(p => p.id === loc.poiId);
         return poi ? isOreBeltPoi(poi.type) : true; // keep if type unknown
       });
@@ -373,7 +375,7 @@ export const minerRoutine: Routine = async function* (ctx: RoutineContext) {
           const withStation = oreLocations.filter(loc => loc.hasStation);
           const best = withStation.length > 0 ? withStation[0] : oreLocations[0];
 
-          const route = mapStore.findRoute(bot.system, best.systemId);
+          const route = ctx.mapStore.findRoute(bot.system, best.systemId);
           if (route) {
             targetSystemId = best.systemId;
             targetBeltId = best.poiId;
@@ -434,7 +436,7 @@ export const minerRoutine: Routine = async function* (ctx: RoutineContext) {
     if (!beltPoi && targetOre) {
       for (const poi of pois) {
         if (isOreBeltPoi(poi.type)) {
-          const sysData = mapStore.getSystem(bot.system);
+          const sysData = ctx.mapStore.getSystem(bot.system);
           const storedPoi = sysData?.pois.find(p => p.id === poi.id);
           if (storedPoi?.ores_found.some(o => o.item_id === targetOre)) {
             beltPoi = { id: poi.id, name: poi.name };
@@ -517,7 +519,7 @@ export const minerRoutine: Routine = async function* (ctx: RoutineContext) {
 
       const { oreId, oreName } = parseOreFromMineResult(mineResp.result);
       if (oreId && bot.poi) {
-        mapStore.recordMiningYield(bot.system, bot.poi, { item_id: oreId, name: oreName });
+        ctx.mapStore.recordMiningYield(bot.system, bot.poi, { item_id: oreId, name: oreName });
         oresMinedMap.set(oreName, (oresMinedMap.get(oreName) || 0) + 1);
         bot.stats.totalMined++;
       }
@@ -544,7 +546,7 @@ export const minerRoutine: Routine = async function* (ctx: RoutineContext) {
     // ── Belt depleted: try another system before returning home ──
     if (stopReason === "belt depleted" && targetOre && bot.state === "running") {
       depletedSystems.add(bot.system);
-      const altLocations = mapStore.findOreLocations(targetOre)
+      const altLocations = ctx.mapStore.findOreLocations(targetOre)
         .filter(loc => !depletedSystems.has(loc.systemId) && loc.systemId !== bot.system);
 
       if (altLocations.length > 0) {
@@ -552,7 +554,7 @@ export const minerRoutine: Routine = async function* (ctx: RoutineContext) {
         const withStation = altLocations.filter(loc => loc.hasStation);
         const nextLoc = withStation.length > 0 ? withStation[0] : altLocations[0];
 
-        ctx.log("mining", `${bot.system} depleted for ${catalogStore.resolveItemName(targetOre)} — trying ${nextLoc.systemName}`);
+        ctx.log("mining", `${bot.system} depleted for ${ctx.catalogStore.resolveItemName(targetOre)} — trying ${nextLoc.systemName}`);
 
         // Refuel before the jump
         const preFueled = await ensureFueled(ctx, safetyOpts.fuelThresholdPct);

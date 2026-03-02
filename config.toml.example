@@ -1,0 +1,46 @@
+# Hex-Bots Configuration
+# Copy this file to config.toml and adjust as needed.
+# All values shown are defaults — omit any section to use defaults.
+
+[server]
+port = 3000
+host = "localhost"
+
+[fleet]
+max_bots = 20
+login_stagger_ms = 5000
+home_system = ""
+home_base = ""
+default_storage_mode = "sell"        # sell | deposit | faction_deposit | combi
+faction_storage_station = ""
+faction_donate_pct = 0               # 0-100
+min_bot_credits = 0                  # 0 = disabled
+
+[logging]
+api_logging = false
+file_logging = true
+
+# ── Future: Commander (auto-assignment) ──
+# [commander]
+# brain = "scoring"                  # scoring | llm | hybrid
+# evaluation_interval = 180          # seconds
+# reassignment_cooldown = 300
+# urgency_override = true
+
+# ── Future: Economy Engine ──
+# [economy]
+# enable_premium_orders = true
+# max_premium_pct = 50
+# min_crafting_margin_pct = 30
+# batch_sell_size = 100
+
+# ── Future: Goals ──
+# [[goals]]
+# type = "maximize_income"
+# priority = 10
+#
+# [[goals]]
+# type = "explore_region"
+# priority = 5
+# [goals.params]
+# region = "outer_rim"

@@ -141,6 +141,23 @@ export class WebServer {
   // Player profile proxy — set by botmanager
   onPlayerInfo: ((playerId: string) => Promise<unknown>) | null = null;
 
+  // Economy data getter — set by botmanager
+  onEconomyData: (() => unknown) | null = null;
+
+  // Credit history getter — set by botmanager
+  onCreditHistory: ((sinceMs: number) => unknown) | null = null;
+
+  // Goals CRUD — set by botmanager
+  onGetGoals: (() => unknown) | null = null;
+  onSaveGoals: ((goals: unknown[]) => void) | null = null;
+
+  // Commander advisory data — set by botmanager
+  onCommanderData: (() => unknown) | null = null;
+
+  // Admin force-refresh — set by botmanager
+  onRefreshCatalog: (() => Promise<string>) | null = null;
+  onRefreshMap: (() => Promise<string>) | null = null;
+
   // Available routines — set by botmanager
   routines: string[] = [];
 
@@ -229,6 +246,32 @@ export class WebServer {
         if (url.pathname === "/api/public-catalog") {
           return Response.json(publicCatalog.getAll());
         }
+        if (url.pathname === "/api/economy") {
+          if (this.onEconomyData) return Response.json(this.onEconomyData());
+          return Response.json({});
+        }
+        if (url.pathname === "/api/credit-history") {
+          const since = parseInt(url.searchParams.get("since") || "86400000", 10);
+          if (this.onCreditHistory) return Response.json(this.onCreditHistory(since));
+          return Response.json([]);
+        }
+        if (url.pathname === "/api/commander") {
+          if (this.onCommanderData) return Response.json(this.onCommanderData());
+          return Response.json(null);
+        }
+        if (url.pathname === "/api/goals") {
+          if (req.method === "POST") {
+            try {
+              const body = await req.json() as unknown[];
+              if (this.onSaveGoals) this.onSaveGoals(body);
+              return Response.json({ ok: true });
+            } catch (e) {
+              return Response.json({ error: String(e) }, { status: 400 });
+            }
+          }
+          if (this.onGetGoals) return Response.json(this.onGetGoals());
+          return Response.json([]);
+        }
 
         // Player profile proxy
         if (url.pathname.startsWith("/api/player-info/")) {
@@ -254,6 +297,26 @@ export class WebServer {
           const allLines = content.split("\n").filter(l => l);
           const lines = allLines.slice(-tail);
           return Response.json({ lines, total: allLines.length });
+        }
+
+        // Admin force-refresh endpoints
+        if (url.pathname === "/api/admin/refresh-catalog" && req.method === "POST") {
+          if (!this.onRefreshCatalog) return Response.json({ error: "Not available" }, { status: 503 });
+          try {
+            const msg = await this.onRefreshCatalog();
+            return Response.json({ ok: true, message: msg });
+          } catch (e) {
+            return Response.json({ ok: false, error: String(e) }, { status: 500 });
+          }
+        }
+        if (url.pathname === "/api/admin/refresh-map" && req.method === "POST") {
+          if (!this.onRefreshMap) return Response.json({ error: "Not available" }, { status: 503 });
+          try {
+            const msg = await this.onRefreshMap();
+            return Response.json({ ok: true, message: msg });
+          } catch (e) {
+            return Response.json({ ok: false, error: String(e) }, { status: 500 });
+          }
         }
 
         // POST actions (fallback for non-WS clients)
@@ -415,6 +478,10 @@ export class WebServer {
       mapData: mapStore.getAllSystems(),
       knownOres: mapStore.getAllKnownOres(),
     });
+  }
+
+  broadcastRateLimit(blocked: boolean, retryAfterSecs?: number): void {
+    this.broadcast({ type: "rateLimitBlock", blocked, retryAfterSecs });
   }
 
   // ── Stats flushing ──────────────────────────────────────────

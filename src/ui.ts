@@ -1,4 +1,3 @@
-import { debugLog } from "./debug.js";
 
 const COLORS: Record<string, string> = {
   setup: "\x1b[34m",    // blue
@@ -26,22 +25,11 @@ const DIM = "\x1b[2m";
 
 let debugEnabled = false;
 
-/** Optional global log sink — when set, log() routes here instead of console. */
-let globalLogSink: ((category: string, message: string) => void) | null = null;
-
-export function setLogSink(sink: ((category: string, message: string) => void) | null): void {
-  globalLogSink = sink;
-}
-
 export function setDebug(enabled: boolean): void {
   debugEnabled = enabled;
 }
 
 export function log(category: string, message: string): void {
-  if (globalLogSink) {
-    globalLogSink(category, message);
-    return;
-  }
   const color = COLORS[category] || COLORS.info;
   const timestamp = new Date().toLocaleTimeString("en-US", { hour12: false });
   console.log(`${DIM}${timestamp}${RESET} ${color}[${category}]${RESET} ${message}`);
@@ -283,8 +271,6 @@ function parseNotification(n: unknown): { tag: string; category: string; text: s
   if (typeof n === "string") return { tag: "EVENT", category: "info", text: n };
   if (typeof n !== "object" || n === null) return null;
 
-  // Debug: log raw notification structure
-  debugLog("notification:raw", "incoming", n);
 
 
   const notif = n as Record<string, unknown>;
@@ -387,6 +373,27 @@ function formatDataObject(data: Record<string, unknown>): string {
     return `${shipName} (${shipType})`;
   }
 
+  // Combat / damage hit: { damage, pirate_name, pirate_tier, damage_type, your_hull, your_max_hull, your_shield }
+  if (data.damage !== undefined) {
+    const pirateName = (data.pirate_name as string) || (data.attacker as string) || "Unknown";
+    const tier = (data.pirate_tier as string) ? ` (${data.pirate_tier})` : "";
+    const dmgType = (data.damage_type as string) ? ` ${data.damage_type}` : "";
+    const hullParts: string[] = [];
+    if (data.your_hull !== undefined && data.your_max_hull !== undefined)
+      hullParts.push(`Hull: ${data.your_hull}/${data.your_max_hull}`);
+    if (data.your_shield !== undefined) hullParts.push(`Shield: ${data.your_shield}`);
+    const hullStr = hullParts.length ? ` | ${hullParts.join(" | ")}` : "";
+    return `⚔ ${pirateName}${tier} — ${data.damage}${dmgType} dmg${hullStr}`;
+  }
+
+  // Forum / community post: { thread_id, title, author, category, type: new_forum_post, ... }
+  if (data.thread_id || String(data.type || "").includes("forum")) {
+    const title = (data.title as string) || "";
+    const author = (data.author as string) || "";
+    const cat = (data.category as string) || "";
+    return `📌 ${author}${cat ? ` [${cat}]` : ""}${title ? `: ${title}` : ""}`;
+  }
+
   // Generic: format as "key: value" pairs, skip empty/null
   const parts: string[] = [];
   for (const [key, val] of Object.entries(data)) {
@@ -401,13 +408,17 @@ function formatDataObject(data: Record<string, unknown>): string {
  * Log chat and system notifications to stdout so the human watching can see them.
  * Called when we receive notifications from the API response.
  */
-export function logNotifications(notifications: unknown[]): void {
+export function logNotifications(notifications: unknown[], botUsername?: string): void {
   if (!notifications || notifications.length === 0) return;
 
   for (const n of notifications) {
     const parsed = parseNotification(n);
     if (!parsed) continue;
-    log(parsed.category, `[${parsed.tag}] ${parsed.text}`);
+    let text = parsed.text;
+    if (botUsername && parsed.category === "broadcast" && text.startsWith("⚔ ")) {
+      text += ` | 👤 ${botUsername}`;
+    }
+    log(parsed.category, `[${parsed.tag}] ${text}`);
   }
 }
 

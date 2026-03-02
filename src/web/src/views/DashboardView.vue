@@ -80,6 +80,7 @@
                 <span class="text-space-accent font-medium">{{ bot.username }}</span>
               </td>
               <td class="px-0 py-1 text-space-text-dim">
+                <span class="text-[11px]">{{ bot.docked ? '⚓' : '🚀' }}</span>
                 {{ bot.shipName || bot.ship || 'Unknown' }}
               </td>
               <td class="px-0 py-1">
@@ -165,7 +166,7 @@
         <div class="card flex flex-col overflow-hidden py-2 px-3">
           <div class="flex items-center justify-between pb-1.5 border-b border-space-border shrink-0">
             <span class="text-xs font-semibold text-space-text-dim uppercase tracking-wider">Activity Log</span>
-            <select v-model="activityBotFilter" class="input text-[10px] py-0 h-5 pl-1 max-w-[100px]">
+            <select v-model="activityBotFilter" class="input text-[11px] py-0 h-5 pl-1 max-w-[100px]">
               <option value="">All bots</option>
               <option v-for="b in botStore.bots" :key="b.username" :value="b.username">{{ b.username }}</option>
             </select>
@@ -174,7 +175,7 @@
             <div
               v-for="(entry, idx) in filteredActivityLogs"
               :key="idx"
-              class="leading-snug text-[10px] whitespace-pre-wrap"
+              class="leading-snug text-[11px] whitespace-pre-wrap"
             >
               <template v-if="entry.parsed">
                 <span class="text-[#555d6b]">{{ entry.parsed.time }}</span>
@@ -184,7 +185,7 @@
               </template>
               <span v-else class="text-space-text-dim">{{ entry.raw }}</span>
             </div>
-            <div v-if="filteredActivityLogs.length === 0" class="text-space-text-dim text-[10px] italic py-1">No entries</div>
+            <div v-if="filteredActivityLogs.length === 0" class="text-space-text-dim text-[11px] italic py-1">No entries</div>
           </div>
         </div>
 
@@ -192,14 +193,14 @@
         <div class="card flex flex-col overflow-hidden py-2 px-3">
           <div class="flex items-center justify-between pb-1.5 border-b border-space-border shrink-0">
             <span class="text-xs font-semibold text-space-text-dim uppercase tracking-wider">Broadcast / Chat</span>
-            <span class="text-[10px] text-space-text-dim">{{ botStore.broadcastLogs.length }} msgs</span>
+            <span class="text-[11px] text-space-text-dim">{{ botStore.broadcastLogs.length }} msgs</span>
           </div>
           <div ref="broadcastLogRef" class="flex-1 overflow-auto mt-1 pr-0.5 font-mono scrollbar-dark">
             <template v-for="(entry, idx) in parsedBroadcastLogs" :key="idx">
 
               <!-- Market announcement card (RESOURCE SHORTAGE / SURPLUS SALE) -->
               <div v-if="entry.type === 'market'"
-                class="rounded border px-1 py-0.5 my-1 text-[10px]"
+                class="rounded border px-1 py-0.5 my-1 text-[11px]"
                 :class="entry.titleType === 'shortage'
                   ? 'border-orange-800/50 bg-orange-950/20'
                   : entry.titleType === 'surplus'
@@ -210,7 +211,7 @@
                 <div class="flex items-center gap-1.5 mb-1.5">
                   <span class="font-semibold text-space-yellow">{{ entry.sender }}</span>
                   <span
-                    class="px-1.5 py-0 rounded text-[9px] font-bold tracking-wide uppercase"
+                    class="px-1.5 py-0 rounded text-[11px] font-bold tracking-wide uppercase"
                     :class="entry.titleType === 'shortage'
                       ? 'bg-orange-900/60 text-orange-300'
                       : entry.titleType === 'surplus'
@@ -226,20 +227,46 @@
                   >
                     <span class="text-space-text">{{ item.name.replace(/_/g, '\u200b_') }}</span>
                     <span class="text-space-yellow font-semibold">{{ item.price }}cr</span>
-                    <span class="text-[9px] font-bold"
+                    <span class="text-[11px] font-bold"
                       :class="item.multiplier >= 3 ? 'text-red-400' : item.multiplier >= 2 ? 'text-orange-400' : 'text-yellow-500'"
                     >×{{ item.multiplier }}</span>
                   </span>
                 </div>
                 <!-- Command hint -->
-                <div v-if="entry.command" class="text-[9px] text-space-text-dim opacity-60 truncate">
+                <div v-if="entry.command" class="text-[11px] text-space-text-dim opacity-60 truncate">
                   ▶ {{ entry.command.slice(0, 80) }}{{ entry.command.length > 80 ? '…' : '' }}
                 </div>
               </div>
 
+              <!-- Combat hit card (⚔ pirate damage) -->
+              <div v-else-if="entry.type === 'combat'"
+                class="rounded border border-red-800/50 bg-red-950/20 px-1.5 py-1 my-0.5 text-[11px]"
+              >
+                <div class="flex items-center gap-1.5">
+                  <span class="text-red-400 shrink-0">⚔</span>
+                  <span class="font-semibold text-red-300">{{ entry.pirate }}</span>
+                  <span v-if="entry.tier" class="text-[11px] text-red-500/80 border border-red-800/40 rounded px-1">{{ entry.tier }}</span>
+                  <span v-if="entry.victim" class="text-[11px] text-space-text-dim">→ <span class="text-yellow-400">{{ entry.victim }}</span></span>
+                  <span class="ml-auto text-orange-300 font-mono font-semibold">{{ entry.damage }}</span>
+                </div>
+                <div v-if="entry.hullStr" class="text-[11px] text-space-text-dim mt-0.5 pl-4">{{ entry.hullStr }}</div>
+              </div>
+
+              <!-- Forum post card (📌 author [category]: title) -->
+              <div v-else-if="entry.type === 'forum'"
+                class="rounded border border-purple-800/30 bg-purple-950/10 px-1.5 py-1 my-0.5 text-[11px]"
+              >
+                <div class="flex items-center gap-1.5 mb-0.5">
+                  <span class="text-purple-400 shrink-0">📌</span>
+                  <span class="font-semibold text-space-yellow">{{ entry.author }}</span>
+                  <span v-if="entry.category" class="text-[11px] text-purple-400/70 border border-purple-800/40 rounded px-1">{{ entry.category }}</span>
+                </div>
+                <div v-if="entry.forumTitle" class="text-space-text leading-tight pl-4">{{ entry.forumTitle }}</div>
+              </div>
+
               <!-- Attack / combat alert -->
               <div v-else-if="entry.type === 'alert'"
-                class="flex items-start gap-1.5 leading-snug text-[10px] text-red-400 py-0.5"
+                class="flex items-start gap-1.5 leading-snug text-[11px] text-red-400 py-0.5"
               >
                 <span class="shrink-0 text-red-500">⚠</span>
                 <span>{{ entry.raw }}</span>
@@ -247,12 +274,12 @@
 
               <!-- Channel header (e.g. "CHAT SYSTEM 12:15:09") -->
               <div v-else-if="entry.type === 'header'" class="leading-none mt-0 mb-0.5">
-                <span class="text-[9px] text-space-text-dim uppercase tracking-widest opacity-60">{{ entry.tag }}</span>
-                <span class="text-[#555d6b] ml-1 text-[9px]">{{ entry.time }}</span>
+                <span class="text-[11px] text-space-text-dim uppercase tracking-widest opacity-60">{{ entry.tag }}</span>
+                <span class="text-[#555d6b] ml-1 text-[11px]">{{ entry.time }}</span>
               </div>
 
               <!-- Simple: "HH:MM:SS message" -->
-              <div v-else-if="entry.type === 'simple'" class="leading-snug text-[10px]">
+              <div v-else-if="entry.type === 'simple'" class="leading-snug text-[11px]">
                 <span class="text-[#555d6b]">{{ entry.time }}</span>
                 <span class="text-space-cyan"> {{ entry.message }}</span>
               </div>
@@ -261,10 +288,10 @@
               <div v-else-if="entry.type === 'empty'" class="h-1.5"></div>
 
               <!-- Fallback content -->
-              <div v-else class="leading-snug text-[10px] text-space-text-dim whitespace-pre-wrap py-px">{{ entry.raw }}</div>
+              <div v-else class="leading-snug text-[11px] text-space-text-dim whitespace-pre-wrap py-px">{{ entry.raw }}</div>
 
             </template>
-            <div v-if="parsedBroadcastLogs.length === 0" class="text-space-text-dim text-[10px] italic py-1">No messages</div>
+            <div v-if="parsedBroadcastLogs.length === 0" class="text-space-text-dim text-[11px] italic py-1">No messages</div>
           </div>
         </div>
 
@@ -272,11 +299,11 @@
         <div class="card flex flex-col overflow-hidden py-2 px-3">
           <div class="flex items-center gap-1 pb-1.5 border-b border-space-border shrink-0">
             <span class="text-xs font-semibold text-space-text-dim uppercase tracking-wider flex-1">System Messages</span>
-            <select v-model="systemBotFilter" class="input text-[10px] py-0 h-5 pl-1 max-w-[90px]">
+            <select v-model="systemBotFilter" class="input text-[11px] py-0 h-5 pl-1 max-w-[90px]">
               <option value="">All bots</option>
               <option v-for="b in botStore.bots" :key="b.username" :value="b.username">{{ b.username }}</option>
             </select>
-            <select v-model="systemCatFilter" class="input text-[10px] py-0 h-5 pl-1 max-w-[70px]">
+            <select v-model="systemCatFilter" class="input text-[11px] py-0 h-5 pl-1 max-w-[70px]">
               <option value="">All</option>
               <option value="error">error</option>
               <option value="system">system</option>
@@ -287,7 +314,7 @@
             <div
               v-for="(entry, idx) in filteredSystemLogs"
               :key="idx"
-              class="leading-snug text-[10px] whitespace-pre-wrap"
+              class="leading-snug text-[11px] whitespace-pre-wrap"
             >
               <template v-if="entry.parsed">
                 <span class="text-[#555d6b]">{{ entry.parsed.time }}</span>
@@ -295,9 +322,9 @@
                 <span :class="categoryColor(entry.parsed.category)">[{{ entry.parsed.category }}] </span>
                 <span :class="msgColor(entry.parsed.category)"> {{ entry.parsed.message }}</span>
               </template>
-              <span v-else :class="plainSystemColor(entry.raw)" class="text-[10px]">{{ entry.raw }}</span>
+              <span v-else :class="plainSystemColor(entry.raw)" class="text-[11px]">{{ entry.raw }}</span>
             </div>
-            <div v-if="filteredSystemLogs.length === 0" class="text-space-text-dim text-[10px] italic py-1">No entries</div>
+            <div v-if="filteredSystemLogs.length === 0" class="text-space-text-dim text-[11px] italic py-1">No entries</div>
           </div>
         </div>
 
@@ -389,164 +416,19 @@
 <script setup lang="ts">
 import { computed, ref, watch, nextTick, onMounted } from 'vue';
 import { useBotStore } from '../stores/botStore';
-import ProgressBar from './ProgressBar.vue';
+import ProgressBar from '../components/ProgressBar.vue';
+import {
+  useDashboardLogs,
+  categoryColor, msgColor, plainSystemColor,
+} from '../composables/useDashboardLogs';
 
-// ── Log parsing ───────────────────────────────────────────────
 
-interface ParsedLogEntry {
-  raw: string;
-  parsed: { time: string; username: string; category: string; message: string } | null;
-}
+// ── Log composable ────────────────────────────────────────────
 
-interface ParsedBroadcastEntry {
-  type: 'header' | 'content' | 'empty' | 'simple' | 'market' | 'alert';
-  raw: string;
-  tag?: string;
-  time?: string;
-  message?: string;
-  sender?: string;
-  title?: string;
-  titleType?: 'shortage' | 'surplus' | 'other';
-  items?: { name: string; price: number; multiplier: number }[];
-  command?: string;
-}
-
-const LOG_LINE_RE = /^(\d{2}:\d{2}:\d{2})\s+\[([^\]]+)\]\s+\[([^\]]+)\]\s+(.+)$/;
-const BROADCAST_HEADER_RE = /^(\[.+?\]|[A-Z][A-Z0-9 ]+)\s+(\d{2}:\d{2}:\d{2})$/;
-const BROADCAST_SIMPLE_RE = /^(\d{2}:\d{2}:\d{2})\s+(.+)$/;
-const MARKET_RE = /^(.+?):\s+(RESOURCE SHORTAGE|SURPLUS SALE|PRICE ALERT|MARKET UPDATE)\s*[\u2014\u2013-]\s*(.+)$/s;
-const BROADCAST_ITEM_RE = /(\w+)\s+at\s+(\d+(?:\.\d+)?)cr\s+\(([0-9.]+)x\s+normal\)/g;
-
-function parseLogLine(raw: string): ParsedLogEntry {
-  const m = LOG_LINE_RE.exec(raw);
-  if (m) return { raw, parsed: { time: m[1], username: m[2], category: m[3], message: m[4] } };
-  return { raw, parsed: null };
-}
-
-function parseBroadcastLine(raw: string): ParsedBroadcastEntry {
-  if (!raw.trim()) return { type: 'empty', raw };
-
-  // Header: "[TAG] HH:MM:SS" or "CHAT SYSTEM HH:MM:SS"
-  const hm = BROADCAST_HEADER_RE.exec(raw);
-  if (hm) return { type: 'header', raw, tag: hm[1], time: hm[2] };
-
-  // Simple: "HH:MM:SS message"
-  const sm = BROADCAST_SIMPLE_RE.exec(raw);
-  if (sm) return { type: 'simple', raw, time: sm[1], message: sm[2] };
-
-  // Market announcement: "Sender: RESOURCE SHORTAGE — ..."
-  const mm = MARKET_RE.exec(raw);
-  if (mm) {
-    const items: { name: string; price: number; multiplier: number }[] = [];
-    const itemRe = new RegExp(BROADCAST_ITEM_RE.source, 'g');
-    let m: RegExpExecArray | null;
-    while ((m = itemRe.exec(mm[3])) !== null) {
-      items.push({ name: m[1], price: parseInt(m[2]), multiplier: parseFloat(m[3]) });
-    }
-    const cmdMatch = /(?:Dock and (?:sell|buy):)\s*(.+)$/.exec(mm[3]);
-    return {
-      type: 'market',
-      raw,
-      sender: mm[1].trim(),
-      title: mm[2].trim(),
-      titleType: mm[2].includes('SHORTAGE') ? 'shortage' : mm[2].includes('SURPLUS') || mm[2].includes('SALE') ? 'surplus' : 'other',
-      items,
-      command: cmdMatch ? cmdMatch[1].trim() : undefined,
-    };
-  }
-
-  // Alert: attack / combat warnings
-  if (/attack imminent|detected you|enemy ship|combat alert/i.test(raw)) {
-    return { type: 'alert', raw };
-  }
-
-  return { type: 'content', raw };
-}
-
-// ── Color helpers ─────────────────────────────────────────────
-
-const BOT_PALETTE = [
-  'text-space-accent', 'text-purple-400', 'text-lime-400',
-  'text-orange-400', 'text-pink-400', 'text-teal-400', 'text-rose-400',
-];
-
-const CAT_COLORS: Record<string, string> = {
-  error:    'text-red-400',
-  warn:     'text-yellow-400',
-  warning:  'text-yellow-400',
-  wait:     'text-yellow-400',
-  success:  'text-green-400',
-  sold:     'text-green-400',
-  profit:   'text-green-400',
-  mining:   'text-amber-400',
-  mined:    'text-amber-400',
-  trade:    'text-lime-400',
-  market:   'text-lime-400',
-  travel:   'text-sky-400',
-  navigation:'text-sky-400',
-  system:   'text-slate-400',
-  info:     'text-slate-400',
-  combat:   'text-orange-400',
-  faction:  'text-purple-400',
-  crafting: 'text-orange-400',
-  fuel:     'text-cyan-400',
-  repair:   'text-cyan-400',
-};
-
-function botUsernameColor(username: string): string {
-  const idx = botStore.bots.findIndex(b => b.username === username);
-  return BOT_PALETTE[idx >= 0 ? idx % BOT_PALETTE.length : 0];
-}
-
-function categoryColor(cat: string): string {
-  return CAT_COLORS[cat?.toLowerCase()] || 'text-slate-400';
-}
-
-function msgColor(cat: string): string {
-  if (!cat) return 'text-space-text';
-  const c = cat.toLowerCase();
-  if (c === 'error') return 'text-red-300';
-  if (c === 'warn' || c === 'warning' || c === 'wait') return 'text-yellow-200';
-  if (c === 'success') return 'text-green-300';
-  return 'text-space-text';
-}
-
-function plainSystemColor(line: string): string {
-  const l = line.toLowerCase();
-  if (l.includes('error') || l.includes('failed') || l.includes('crash')) return 'text-red-400';
-  if (l.includes('warn') || l.includes('retry')) return 'text-yellow-400';
-  if (l.includes('success') || l.includes('registered') || l.includes('seeded')) return 'text-green-400';
-  return 'text-space-text-dim';
-}
-
-// ── Filters ───────────────────────────────────────────────────
-
-const activityBotFilter = ref('');
-const systemBotFilter = ref('');
-const systemCatFilter = ref('');
-
-// ── Computed filtered/parsed logs ────────────────────────────
-
-const filteredActivityLogs = computed((): ParsedLogEntry[] => {
-  const entries = botStore.activityLogs.map(parseLogLine);
-  if (!activityBotFilter.value) return entries;
-  return entries.filter(e => e.parsed?.username === activityBotFilter.value);
-});
-
-const filteredSystemLogs = computed((): ParsedLogEntry[] => {
-  const entries = botStore.systemLogs.map(parseLogLine);
-  if (!systemBotFilter.value && !systemCatFilter.value) return entries;
-  return entries.filter(e => {
-    if (!e.parsed) return !systemBotFilter.value;
-    if (systemBotFilter.value && e.parsed.username !== systemBotFilter.value) return false;
-    if (systemCatFilter.value && e.parsed.category !== systemCatFilter.value) return false;
-    return true;
-  });
-});
-
-const parsedBroadcastLogs = computed((): ParsedBroadcastEntry[] =>
-  botStore.broadcastLogs.map(parseBroadcastLine)
-);
+const {
+  activityBotFilter, systemBotFilter, systemCatFilter,
+  botUsernameColor, filteredActivityLogs, filteredSystemLogs, parsedBroadcastLogs,
+} = useDashboardLogs();
 
 const emit = defineEmits<{
   (e: 'open-profile', username: string): void;

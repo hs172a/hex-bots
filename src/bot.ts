@@ -1,8 +1,8 @@
 import { SpaceMoltAPI, type ApiResponse } from "./api.js";
 import { SessionManager } from "./session.js";
-import { logNotifications } from "./ui.js";
-import { debugLog } from "./debug.js";
-import { mapStore } from "./mapstore.js";
+import { mapStore, MapStore } from "./mapstore.js";
+import { catalogStore, CatalogStore } from "./catalogstore.js";
+import { EventEmitter } from "events";
 
 export type BotState = "idle" | "running" | "stopping" | "error";
 
@@ -104,6 +104,8 @@ export interface RoutineContext {
   api: SpaceMoltAPI;
   bot: Bot;
   log: (category: string, message: string) => void;
+  mapStore: MapStore;
+  catalogStore: CatalogStore;
   /** Optional: get status of all bots in the fleet (used by rescue routine). */
   getFleetStatus?: () => BotStatus[];
 }
@@ -123,7 +125,7 @@ const RESET = "\x1b[0m";
 
 let colorIndex = 0;
 
-export class Bot {
+export class Bot extends EventEmitter {
   readonly username: string;
   readonly api: SpaceMoltAPI;
   readonly session: SessionManager;
@@ -209,12 +211,6 @@ export class Bot {
   readonly actionLog: string[] = [];
   private maxLogEntries = 200;
 
-  /** Optional callback for routing log output (e.g. to TUI). */
-  onLog?: (username: string, category: string, message: string) => void;
-
-  /** Optional callback for faction activity log entries. */
-  onFactionLog?: (username: string, line: string) => void;
-
   /** Cached skill levels for detecting level-ups. */
   private skillLevels: Map<string, number> = new Map();
 
@@ -231,6 +227,7 @@ export class Bot {
   private static readonly RATE_LIMIT_LOG_COOLDOWN_MS = 15_000;
 
   constructor(username: string, baseDir: string) {
+    super();
     this.username = username;
     this.api = new SpaceMoltAPI();
     this.api.label = username;
@@ -241,6 +238,13 @@ export class Bot {
 
   get state(): BotState {
     return this._state;
+  }
+
+  set state(newState: BotState) {
+    if (this._state !== newState) {
+      this._state = newState;
+      this.emit("stateChange", this.username, newState);
+    }
   }
 
   get routineName(): string | null {
@@ -254,20 +258,17 @@ export class Bot {
     if (this.actionLog.length > this.maxLogEntries) {
       this.actionLog.shift();
     }
-    if (this.onLog) {
-      this.onLog(this.username, category, message);
-    } else {
-      console.log(
-        `\x1b[2m${timestamp}${RESET} ${this.color}[${this.username}]${RESET} ` +
-          `${getCategoryColor(category)}[${category}]${RESET} ${message}`
-      );
-    }
+    
+    this.emit("log", this.username, category, message);
+    console.log(
+      `\x1b[2m${timestamp}${RESET} ${this.color}[${this.username}]${RESET} ` +
+        `${getCategoryColor(category)}[${category}]${RESET} ${message}`
+    );
   }
 
   /** Execute an API command, log the result, handle notifications. */
   async exec(command: string, payload?: Record<string, unknown>): Promise<ApiResponse> {
     this._lastAction = command;
-    debugLog("bot:exec", `${this.username} > ${command}`, payload);
     let resp = await this.api.execute(command, payload);
 
     // Action pending — a previous game action is still resolving (10s tick).
@@ -275,8 +276,14 @@ export class Bot {
     if (resp.error) {
       const msg = resp.error.message || "";
       if (resp.error.code === "action_pending" || msg.includes("action is already pending")) {
-        debugLog("bot:exec", `${this.username} > ${command}: action pending, waiting 10s...`);
         await sleep(10_000);
+        resp = await this.api.execute(command, payload);
+      }
+
+      // Transient server errors — single retry after brief pause
+      const transientCodes = ["gateway_timeout", "service_unavailable", "internal_server_error"];
+      if (resp.error && transientCodes.includes(resp.error.code ?? "")) {
+        await sleep(5000);
         resp = await this.api.execute(command, payload);
       }
 
@@ -288,7 +295,6 @@ export class Bot {
 
         for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
           const delay = 5000 * Math.pow(2, attempt - 1); // 5s, 10s, 20s
-          debugLog("bot:exec", `${this.username} > ${command}: rate limited, retry ${attempt}/${MAX_RETRIES} after ${delay}ms`);
 
           // Only log first retry or if cooldown expired
           if (attempt === 1 && shouldLog) {
@@ -304,7 +310,7 @@ export class Bot {
     }
 
     if (resp.notifications && Array.isArray(resp.notifications) && resp.notifications.length > 0) {
-      logNotifications(resp.notifications);
+      this.emit("notifications", resp.notifications, this.username);
       await this.handleNotifications(resp.notifications);
     }
 
@@ -361,10 +367,8 @@ export class Bot {
   /** Fetch current game state and cache it. */
   async refreshStatus(): Promise<ApiResponse> {
     const resp = await this.exec("get_status");
-    debugLog("bot:refreshStatus", `${this.username} get_status response`, resp.result);
     if (resp.result && typeof resp.result === "object") {
       const r = resp.result as Record<string, unknown>;
-      debugLog("bot:refreshStatus", `${this.username} top-level keys`, Object.keys(r));
 
       this._modules = r.modules as Record<string, unknown> | undefined;
       this._player = r.player as Record<string, unknown> | undefined;
@@ -408,7 +412,6 @@ export class Bot {
       }
 
       this.credits = (p.credits as number) ?? this.credits;
-      debugLog("bot:credits", `${this.username} credits=${this.credits} raw=${p.credits}`);
       this.system = (p.current_system as string) ?? this.system;
       this.poi = (p.current_poi as string) ?? (p.poi_id as string) ?? this.poi;
       this.docked = p.docked_at_base != null
@@ -427,7 +430,6 @@ export class Bot {
 
       // Ship fields
       const ship = r.ship as Record<string, unknown> | undefined;
-      debugLog("bot:ship", `${this.username} ship object`, ship);
       if (ship) {
         const rawName = (ship.name as string) || "";
         const shipType = (ship.ship_type as string) || (ship.type as string) || "";
@@ -572,7 +574,7 @@ export class Bot {
       return;
     }
 
-    this._state = "running";
+    this.state = "running";
     this._routine = routineName;
     this._error = null;
     this._abortController = new AbortController();
@@ -593,6 +595,8 @@ export class Bot {
       api: this.api,
       bot: this,
       log: (cat, msg) => this.log(cat, msg),
+      mapStore,
+      catalogStore,
       getFleetStatus: opts?.getFleetStatus,
     };
 
@@ -610,12 +614,17 @@ export class Bot {
       this._error = msg;
       this.log("error", `Routine error: ${msg}`);
       this._state = "error";
+      // Write full stack trace to stderr for post-mortem analysis
+      if (err instanceof Error && err.stack) {
+        process.stderr.write(`[${this.username}] Routine crash:\n${err.stack}\n`);
+      }
+      this.emit("routineError", this.username, msg, err);
       // Re-throw so the caller's .catch() handler fires, ensuring the bot
       // assignment is cleared and "stopped with error" is logged rather than "finished".
       throw err;
     }
 
-    this._state = "idle";
+    this.state = "idle";
     this._routine = null;
     this.log("system", "Routine finished");
   }
@@ -707,7 +716,7 @@ export class Bot {
       const type = notif.type as string | undefined;
       const msgType = notif.msg_type as string | undefined;
 
-      // Chat messages are already displayed by logNotifications — skip
+      // Chat messages are already displayed via notifications event — skip
       if (msgType === "chat_message") continue;
 
       let data = notif.data as Record<string, unknown> | string | undefined;
@@ -844,7 +853,7 @@ export class Bot {
   /** Signal the bot to stop after the current action. */
   stop(): void {
     if (this._state !== "running") return;
-    this._state = "stopping";
+    this.state = "stopping";
     this._abortController?.abort();
     this.log("system", "Stop requested — will halt after current action");
   }

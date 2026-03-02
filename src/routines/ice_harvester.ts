@@ -1,5 +1,4 @@
 import type { Routine, RoutineContext } from "../bot.js";
-import { mapStore } from "../mapstore.js";
 import {
   isIceFieldPoi,
   findStation,
@@ -160,7 +159,7 @@ export const iceHarvesterRoutine: Routine = async function* (ctx: RoutineContext
     if (settings.targetIce) {
       for (const poi of pois) {
         if (isIceFieldPoi(poi.type)) {
-          const sysData = mapStore.getSystem(bot.system);
+          const sysData = ctx.mapStore.getSystem(bot.system);
           const storedPoi = sysData?.pois.find(p => p.id === poi.id);
           if (storedPoi?.ores_found.some(o => o.item_id === settings.targetIce)) {
             icePoi = { id: poi.id, name: poi.name };
@@ -234,7 +233,7 @@ export const iceHarvesterRoutine: Routine = async function* (ctx: RoutineContext
 
       const { oreId, oreName } = parseOreFromMineResult(mineResp.result);
       if (oreId && bot.poi) {
-        mapStore.recordMiningYield(bot.system, bot.poi, { item_id: oreId, name: oreName });
+        ctx.mapStore.recordMiningYield(bot.system, bot.poi, { item_id: oreId, name: oreName });
         iceMinedMap.set(oreName, (iceMinedMap.get(oreName) || 0) + 1);
         bot.stats.totalMined++;
       }

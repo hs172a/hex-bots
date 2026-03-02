@@ -30,21 +30,16 @@
       "empire_name": "Crimson Pact",
       "system_id": "blood_forge",
       "system_name": "Blood Forge",
-      "services": {
-        "refuel": true,
-        "repair": true,
-        "shipyard": false,
-        "market": true,
-        "cloning": false,
-        "insurance": false,
-        "crafting": true,
-        "missions": false,
-        "storage": true,
-        "salvage_yard": false
-      },
+      "services": [
+        "crafting",
+        "market",
+        "refuel",
+        "repair",
+        "storage"
+      ],
       "condition": "critical",
       "condition_text": "Critical infrastructure failure. Emergency lighting only. Station barely functional.",
-      "satisfaction_pct": 14,
+      "satisfaction_pct": 0,
       "facility_count": 12,
       "defense_level": 80
     },
@@ -56,22 +51,19 @@
       "empire_name": "Crimson Pact",
       "system_id": "krynn",
       "system_name": "Krynn",
-      "services": {
-        "refuel": true,
-        "repair": true,
-        "shipyard": true,
-        "market": true,
-        "cloning": true,
-        "insurance": true,
-        "crafting": true,
-        "missions": true,
-        "storage": true,
-        "salvage_yard": false
-      },
+      "services": [
+        "crafting",
+        "market",
+        "missions",
+        "refuel",
+        "repair",
+        "shipyard",
+        "storage"
+      ],
       "condition": "struggling",
       "condition_text": "Multiple systems running on emergency reserves. Lights flicker in the corridors.",
-      "satisfaction_pct": 55,
-      "facility_count": 48,
+      "satisfaction_pct": 44,
+      "facility_count": 98,
       "defense_level": 100
     },
     {
@@ -82,21 +74,17 @@
       "empire_name": "Crimson Pact",
       "system_id": "iron_reach",
       "system_name": "Iron Reach",
-      "services": {
-        "refuel": true,
-        "repair": true,
-        "shipyard": false,
-        "market": true,
-        "cloning": false,
-        "insurance": false,
-        "crafting": true,
-        "missions": true,
-        "storage": true,
-        "salvage_yard": false
-      },
+      "services": [
+        "crafting",
+        "market",
+        "missions",
+        "refuel",
+        "repair",
+        "storage"
+      ],
       "condition": "critical",
       "condition_text": "Critical infrastructure failure. Emergency lighting only. Station barely functional.",
-      "satisfaction_pct": 12,
+      "satisfaction_pct": 0,
       "facility_count": 12,
       "defense_level": 80
     },
@@ -108,18 +96,15 @@
       "empire_name": "Crimson Pact",
       "system_id": "frontier_war",
       "system_name": "Ironhearth",
-      "services": {
-        "refuel": true,
-        "repair": true,
-        "shipyard": true,
-        "market": true,
-        "cloning": false,
-        "insurance": false,
-        "crafting": true,
-        "missions": true,
-        "storage": true,
-        "salvage_yard": false
-      },
+      "services": [
+        "crafting",
+        "market",
+        "missions",
+        "refuel",
+        "repair",
+        "shipyard",
+        "storage"
+      ],
       "condition": "critical",
       "condition_text": "Critical infrastructure failure. Emergency lighting only. Station barely functional.",
       "satisfaction_pct": 0,
@@ -134,22 +119,19 @@
       "empire_name": "Crimson Pact",
       "system_id": "anvil",
       "system_name": "The Anvil",
-      "services": {
-        "refuel": true,
-        "repair": true,
-        "shipyard": true,
-        "market": true,
-        "cloning": false,
-        "insurance": false,
-        "crafting": true,
-        "missions": false,
-        "storage": true,
-        "salvage_yard": true
-      },
+      "services": [
+        "crafting",
+        "market",
+        "refuel",
+        "repair",
+        "salvage_yard",
+        "shipyard",
+        "storage"
+      ],
       "condition": "critical",
       "condition_text": "Critical infrastructure failure. Emergency lighting only. Station barely functional.",
       "satisfaction_pct": 0,
-      "facility_count": 13,
+      "facility_count": 14,
       "defense_level": 80
     },
     {
@@ -160,18 +142,14 @@
       "empire_name": "Crimson Pact",
       "system_id": "glory",
       "system_name": "The Crucible",
-      "services": {
-        "refuel": true,
-        "repair": true,
-        "shipyard": true,
-        "market": true,
-        "cloning": false,
-        "insurance": false,
-        "crafting": false,
-        "missions": true,
-        "storage": true,
-        "salvage_yard": false
-      },
+      "services": [
+        "market",
+        "missions",
+        "refuel",
+        "repair",
+        "shipyard",
+        "storage"
+      ],
       "condition": "critical",
       "condition_text": "Critical infrastructure failure. Emergency lighting only. Station barely functional.",
       "satisfaction_pct": 0,
@@ -186,18 +164,12 @@
       "empire_name": "Crimson Pact",
       "system_id": "sys_0413",
       "system_name": "The Rampart",
-      "services": {
-        "refuel": true,
-        "repair": true,
-        "shipyard": false,
-        "market": true,
-        "cloning": false,
-        "insurance": false,
-        "crafting": false,
-        "missions": false,
-        "storage": true,
-        "salvage_yard": false
-      },
+      "services": [
+        "market",
+        "refuel",
+        "repair",
+        "storage"
+      ],
       "condition": "critical",
       "condition_text": "Critical infrastructure failure. Emergency lighting only. Station barely functional.",
       "satisfaction_pct": 16,
@@ -212,22 +184,17 @@
       "empire_name": "Nebula Trade Federation",
       "system_id": "cargo_lanes",
       "system_name": "Cargo Lanes",
-      "services": {
-        "refuel": true,
-        "repair": true,
-        "shipyard": false,
-        "market": true,
-        "cloning": false,
-        "insurance": false,
-        "crafting": false,
-        "missions": false,
-        "storage": true,
-        "salvage_yard": true
-      },
+      "services": [
+        "market",
+        "refuel",
+        "repair",
+        "salvage_yard",
+        "storage"
+      ],
       "condition": "struggling",
       "condition_text": "Multiple systems running on emergency reserves. Lights flicker in the corridors.",
-      "satisfaction_pct": 33,
-      "facility_count": 10,
+      "satisfaction_pct": 42,
+      "facility_count": 11,
       "defense_level": 55
     },
     {
@@ -238,18 +205,13 @@
       "empire_name": "Nebula Trade Federation",
       "system_id": "factory_belt",
       "system_name": "Factory Belt",
-      "services": {
-        "refuel": true,
-        "repair": true,
-        "shipyard": false,
-        "market": true,
-        "cloning": false,
-        "insurance": false,
-        "crafting": true,
-        "missions": false,
-        "storage": true,
-        "salvage_yard": false
-      },
+      "services": [
+        "crafting",
+        "market",
+        "refuel",
+        "repair",
+        "storage"
+      ],
       "condition": "critical",
       "condition_text": "Critical infrastructure failure. Emergency lighting only. Station barely functional.",
       "satisfaction_pct": 0,
@@ -264,18 +226,13 @@
       "empire_name": "Nebula Trade Federation",
       "system_id": "gold_run",
       "system_name": "Gold Run",
-      "services": {
-        "refuel": true,
-        "repair": true,
-        "shipyard": false,
-        "market": true,
-        "cloning": false,
-        "insurance": false,
-        "crafting": true,
-        "missions": false,
-        "storage": true,
-        "salvage_yard": false
-      },
+      "services": [
+        "crafting",
+        "market",
+        "refuel",
+        "repair",
+        "storage"
+      ],
       "condition": "critical",
       "condition_text": "Critical infrastructure failure. Emergency lighting only. Station barely functional.",
       "satisfaction_pct": 0,
@@ -290,22 +247,19 @@
       "empire_name": "Nebula Trade Federation",
       "system_id": "haven",
       "system_name": "Haven",
-      "services": {
-        "refuel": true,
-        "repair": true,
-        "shipyard": true,
-        "market": true,
-        "cloning": true,
-        "insurance": true,
-        "crafting": true,
-        "missions": true,
-        "storage": true,
-        "salvage_yard": false
-      },
+      "services": [
+        "crafting",
+        "market",
+        "missions",
+        "refuel",
+        "repair",
+        "shipyard",
+        "storage"
+      ],
       "condition": "operational",
       "condition_text": "Most systems operational, but some facilities show signs of deferred maintenance.",
-      "satisfaction_pct": 80,
-      "facility_count": 35,
+      "satisfaction_pct": 90,
+      "facility_count": 36,
       "defense_level": 100
     },
     {
@@ -316,18 +270,14 @@
       "empire_name": "Nebula Trade Federation",
       "system_id": "market_prime",
       "system_name": "Market Prime",
-      "services": {
-        "refuel": true,
-        "repair": true,
-        "shipyard": false,
-        "market": true,
-        "cloning": false,
-        "insurance": false,
-        "crafting": true,
-        "missions": true,
-        "storage": true,
-        "salvage_yard": false
-      },
+      "services": [
+        "crafting",
+        "market",
+        "missions",
+        "refuel",
+        "repair",
+        "storage"
+      ],
       "condition": "critical",
       "condition_text": "Critical infrastructure failure. Emergency lighting only. Station barely functional.",
       "satisfaction_pct": 0,
@@ -342,18 +292,12 @@
       "empire_name": "Nebula Trade Federation",
       "system_id": "sys_0284",
       "system_name": "The Levy",
-      "services": {
-        "refuel": true,
-        "repair": true,
-        "shipyard": false,
-        "market": true,
-        "cloning": false,
-        "insurance": false,
-        "crafting": false,
-        "missions": false,
-        "storage": true,
-        "salvage_yard": false
-      },
+      "services": [
+        "market",
+        "refuel",
+        "repair",
+        "storage"
+      ],
       "condition": "critical",
       "condition_text": "Critical infrastructure failure. Emergency lighting only. Station barely functional.",
       "satisfaction_pct": 0,
@@ -368,21 +312,17 @@
       "empire_name": "Nebula Trade Federation",
       "system_id": "trader_rest",
       "system_name": "Trader's Rest",
-      "services": {
-        "refuel": true,
-        "repair": true,
-        "shipyard": true,
-        "market": true,
-        "cloning": false,
-        "insurance": false,
-        "crafting": false,
-        "missions": true,
-        "storage": true,
-        "salvage_yard": false
-      },
+      "services": [
+        "market",
+        "missions",
+        "refuel",
+        "repair",
+        "shipyard",
+        "storage"
+      ],
       "condition": "critical",
       "condition_text": "Critical infrastructure failure. Emergency lighting only. Station barely functional.",
-      "satisfaction_pct": 0,
+      "satisfaction_pct": 12,
       "facility_count": 13,
       "defense_level": 80
     },
@@ -394,21 +334,15 @@
       "empire_name": "Nebula Trade Federation",
       "system_id": "treasure_cache",
       "system_name": "Treasure Cache",
-      "services": {
-        "refuel": true,
-        "repair": true,
-        "shipyard": false,
-        "market": true,
-        "cloning": false,
-        "insurance": false,
-        "crafting": false,
-        "missions": false,
-        "storage": true,
-        "salvage_yard": false
-      },
-      "condition": "critical",
-      "condition_text": "Critical infrastructure failure. Emergency lighting only. Station barely functional.",
-      "satisfaction_pct": 16,
+      "services": [
+        "market",
+        "refuel",
+        "repair",
+        "storage"
+      ],
+      "condition": "struggling",
+      "condition_text": "Multiple systems running on emergency reserves. Lights flicker in the corridors.",
+      "satisfaction_pct": 33,
       "facility_count": 11,
       "defense_level": 30
     },
@@ -420,18 +354,15 @@
       "empire_name": "Outer Rim Explorers",
       "system_id": "deep_range",
       "system_name": "Deep Range",
-      "services": {
-        "refuel": true,
-        "repair": true,
-        "shipyard": true,
-        "market": true,
-        "cloning": false,
-        "insurance": false,
-        "crafting": true,
-        "missions": true,
-        "storage": true,
-        "salvage_yard": false
-      },
+      "services": [
+        "crafting",
+        "market",
+        "missions",
+        "refuel",
+        "repair",
+        "shipyard",
+        "storage"
+      ],
       "condition": "critical",
       "condition_text": "Critical infrastructure failure. Emergency lighting only. Station barely functional.",
       "satisfaction_pct": 0,
@@ -446,22 +377,17 @@
       "empire_name": "Outer Rim Explorers",
       "system_id": "first_step",
       "system_name": "First Step",
-      "services": {
-        "refuel": true,
-        "repair": true,
-        "shipyard": false,
-        "market": true,
-        "cloning": false,
-        "insurance": false,
-        "crafting": false,
-        "missions": false,
-        "storage": true,
-        "salvage_yard": false
-      },
+      "services": [
+        "market",
+        "missions",
+        "refuel",
+        "repair",
+        "storage"
+      ],
       "condition": "critical",
       "condition_text": "Critical infrastructure failure. Emergency lighting only. Station barely functional.",
-      "satisfaction_pct": 0,
-      "facility_count": 10,
+      "satisfaction_pct": 14,
+      "facility_count": 11,
       "defense_level": 55
     },
     {
@@ -472,22 +398,20 @@
       "empire_name": "Outer Rim Explorers",
       "system_id": "frontier",
       "system_name": "Frontier",
-      "services": {
-        "refuel": true,
-        "repair": true,
-        "shipyard": true,
-        "market": true,
-        "cloning": true,
-        "insurance": true,
-        "crafting": true,
-        "missions": true,
-        "storage": true,
-        "salvage_yard": true
-      },
+      "services": [
+        "crafting",
+        "market",
+        "missions",
+        "refuel",
+        "repair",
+        "salvage_yard",
+        "shipyard",
+        "storage"
+      ],
       "condition": "struggling",
       "condition_text": "Multiple systems running on emergency reserves. Lights flicker in the corridors.",
-      "satisfaction_pct": 55,
-      "facility_count": 29,
+      "satisfaction_pct": 60,
+      "facility_count": 30,
       "defense_level": 100
     },
     {
@@ -498,21 +422,16 @@
       "empire_name": "Outer Rim Explorers",
       "system_id": "sys_0146",
       "system_name": "Last Light",
-      "services": {
-        "refuel": true,
-        "repair": true,
-        "shipyard": false,
-        "market": true,
-        "cloning": false,
-        "insurance": false,
-        "crafting": true,
-        "missions": false,
-        "storage": true,
-        "salvage_yard": false
-      },
+      "services": [
+        "crafting",
+        "market",
+        "refuel",
+        "repair",
+        "storage"
+      ],
       "condition": "critical",
       "condition_text": "Critical infrastructure failure. Emergency lighting only. Station barely functional.",
-      "satisfaction_pct": 14,
+      "satisfaction_pct": 0,
       "facility_count": 12,
       "defense_level": 30
     },
@@ -524,22 +443,19 @@
       "empire_name": "Outer Rim Explorers",
       "system_id": "sys_0380",
       "system_name": "Starfall",
-      "services": {
-        "refuel": true,
-        "repair": true,
-        "shipyard": false,
-        "market": true,
-        "cloning": false,
-        "insurance": false,
-        "crafting": true,
-        "missions": true,
-        "storage": true,
-        "salvage_yard": false
-      },
+      "services": [
+        "crafting",
+        "market",
+        "missions",
+        "refuel",
+        "repair",
+        "salvage_yard",
+        "storage"
+      ],
       "condition": "critical",
       "condition_text": "Critical infrastructure failure. Emergency lighting only. Station barely functional.",
-      "satisfaction_pct": 0,
-      "facility_count": 18,
+      "satisfaction_pct": 22,
+      "facility_count": 19,
       "defense_level": 30
     },
     {
@@ -550,21 +466,16 @@
       "empire_name": "Outer Rim Explorers",
       "system_id": "unknown_edge",
       "system_name": "Unknown Edge",
-      "services": {
-        "refuel": true,
-        "repair": true,
-        "shipyard": false,
-        "market": true,
-        "cloning": false,
-        "insurance": false,
-        "crafting": true,
-        "missions": false,
-        "storage": true,
-        "salvage_yard": false
-      },
-      "condition": "struggling",
-      "condition_text": "Multiple systems running on emergency reserves. Lights flicker in the corridors.",
-      "satisfaction_pct": 42,
+      "services": [
+        "crafting",
+        "market",
+        "refuel",
+        "repair",
+        "storage"
+      ],
+      "condition": "critical",
+      "condition_text": "Critical infrastructure failure. Emergency lighting only. Station barely functional.",
+      "satisfaction_pct": 0,
       "facility_count": 12,
       "defense_level": 55
     },
@@ -576,21 +487,15 @@
       "empire_name": "Outer Rim Explorers",
       "system_id": "void_gate",
       "system_name": "Void Gate",
-      "services": {
-        "refuel": true,
-        "repair": true,
-        "shipyard": false,
-        "market": true,
-        "cloning": false,
-        "insurance": false,
-        "crafting": false,
-        "missions": false,
-        "storage": true,
-        "salvage_yard": false
-      },
-      "condition": "critical",
-      "condition_text": "Critical infrastructure failure. Emergency lighting only. Station barely functional.",
-      "satisfaction_pct": 0,
+      "services": [
+        "market",
+        "refuel",
+        "repair",
+        "storage"
+      ],
+      "condition": "struggling",
+      "condition_text": "Multiple systems running on emergency reserves. Lights flicker in the corridors.",
+      "satisfaction_pct": 50,
       "facility_count": 10,
       "defense_level": 30
     },
@@ -602,22 +507,20 @@
       "empire_name": "Solarian Confederacy",
       "system_id": "alpha_centauri",
       "system_name": "Alpha Centauri",
-      "services": {
-        "refuel": true,
-        "repair": true,
-        "shipyard": true,
-        "market": true,
-        "cloning": false,
-        "insurance": false,
-        "crafting": true,
-        "missions": true,
-        "storage": true,
-        "salvage_yard": true
-      },
+      "services": [
+        "crafting",
+        "market",
+        "missions",
+        "refuel",
+        "repair",
+        "salvage_yard",
+        "shipyard",
+        "storage"
+      ],
       "condition": "critical",
       "condition_text": "Critical infrastructure failure. Emergency lighting only. Station barely functional.",
       "satisfaction_pct": 0,
-      "facility_count": 14,
+      "facility_count": 15,
       "defense_level": 80
     },
     {
@@ -628,22 +531,19 @@
       "empire_name": "Solarian Confederacy",
       "system_id": "sol",
       "system_name": "Sol",
-      "services": {
-        "refuel": true,
-        "repair": true,
-        "shipyard": true,
-        "market": true,
-        "cloning": true,
-        "insurance": true,
-        "crafting": true,
-        "missions": true,
-        "storage": true,
-        "salvage_yard": false
-      },
-      "condition": "struggling",
-      "condition_text": "Multiple systems running on emergency reserves. Lights flicker in the corridors.",
-      "satisfaction_pct": 55,
-      "facility_count": 65,
+      "services": [
+        "crafting",
+        "market",
+        "missions",
+        "refuel",
+        "repair",
+        "shipyard",
+        "storage"
+      ],
+      "condition": "operational",
+      "condition_text": "Most systems operational, but some facilities show signs of deferred maintenance.",
+      "satisfaction_pct": 88,
+      "facility_count": 68,
       "defense_level": 100
     },
     {
@@ -654,21 +554,18 @@
       "empire_name": "Solarian Confederacy",
       "system_id": "sys_0038",
       "system_name": "Nova Terra",
-      "services": {
-        "refuel": true,
-        "repair": true,
-        "shipyard": true,
-        "market": true,
-        "cloning": false,
-        "insurance": false,
-        "crafting": true,
-        "missions": true,
-        "storage": true,
-        "salvage_yard": false
-      },
+      "services": [
+        "crafting",
+        "market",
+        "missions",
+        "refuel",
+        "repair",
+        "shipyard",
+        "storage"
+      ],
       "condition": "critical",
       "condition_text": "Critical infrastructure failure. Emergency lighting only. Station barely functional.",
-      "satisfaction_pct": 11,
+      "satisfaction_pct": 0,
       "facility_count": 26,
       "defense_level": 55
     },
@@ -680,21 +577,15 @@
       "empire_name": "Solarian Confederacy",
       "system_id": "procyon",
       "system_name": "Procyon",
-      "services": {
-        "refuel": true,
-        "repair": true,
-        "shipyard": false,
-        "market": true,
-        "cloning": false,
-        "insurance": false,
-        "crafting": false,
-        "missions": false,
-        "storage": true,
-        "salvage_yard": false
-      },
-      "condition": "operational",
-      "condition_text": "Most systems operational, but some facilities show signs of deferred maintenance.",
-      "satisfaction_pct": 83,
+      "services": [
+        "market",
+        "refuel",
+        "repair",
+        "storage"
+      ],
+      "condition": "struggling",
+      "condition_text": "Multiple systems running on emergency reserves. Lights flicker in the corridors.",
+      "satisfaction_pct": 66,
       "facility_count": 11,
       "defense_level": 30
     },
@@ -706,18 +597,14 @@
       "empire_name": "Solarian Confederacy",
       "system_id": "sirius",
       "system_name": "Sirius",
-      "services": {
-        "refuel": true,
-        "repair": true,
-        "shipyard": false,
-        "market": true,
-        "cloning": false,
-        "insurance": false,
-        "crafting": true,
-        "missions": true,
-        "storage": true,
-        "salvage_yard": false
-      },
+      "services": [
+        "crafting",
+        "market",
+        "missions",
+        "refuel",
+        "repair",
+        "storage"
+      ],
       "condition": "critical",
       "condition_text": "Critical infrastructure failure. Emergency lighting only. Station barely functional.",
       "satisfaction_pct": 0,
@@ -732,21 +619,18 @@
       "empire_name": "Voidborn Collective",
       "system_id": "nexus",
       "system_name": "Nexus Prime",
-      "services": {
-        "refuel": true,
-        "repair": true,
-        "shipyard": true,
-        "market": true,
-        "cloning": true,
-        "insurance": true,
-        "crafting": true,
-        "missions": true,
-        "storage": true,
-        "salvage_yard": false
-      },
-      "condition": "struggling",
-      "condition_text": "Multiple systems running on emergency reserves. Lights flicker in the corridors.",
-      "satisfaction_pct": 66,
+      "services": [
+        "crafting",
+        "market",
+        "missions",
+        "refuel",
+        "repair",
+        "shipyard",
+        "storage"
+      ],
+      "condition": "operational",
+      "condition_text": "Most systems operational, but some facilities show signs of deferred maintenance.",
+      "satisfaction_pct": 88,
       "facility_count": 34,
       "defense_level": 100
     },
@@ -758,22 +642,19 @@
       "empire_name": "Voidborn Collective",
       "system_id": "node_alpha",
       "system_name": "Node Alpha",
-      "services": {
-        "refuel": true,
-        "repair": true,
-        "shipyard": false,
-        "market": true,
-        "cloning": false,
-        "insurance": false,
-        "crafting": true,
-        "missions": true,
-        "storage": true,
-        "salvage_yard": true
-      },
+      "services": [
+        "crafting",
+        "market",
+        "missions",
+        "refuel",
+        "repair",
+        "salvage_yard",
+        "storage"
+      ],
       "condition": "critical",
       "condition_text": "Critical infrastructure failure. Emergency lighting only. Station barely functional.",
-      "satisfaction_pct": 0,
-      "facility_count": 13,
+      "satisfaction_pct": 11,
+      "facility_count": 14,
       "defense_level": 80
     },
     {
@@ -784,21 +665,17 @@
       "empire_name": "Voidborn Collective",
       "system_id": "node_beta",
       "system_name": "Node Beta",
-      "services": {
-        "refuel": true,
-        "repair": true,
-        "shipyard": true,
-        "market": true,
-        "cloning": false,
-        "insurance": false,
-        "crafting": true,
-        "missions": false,
-        "storage": true,
-        "salvage_yard": false
-      },
+      "services": [
+        "crafting",
+        "market",
+        "refuel",
+        "repair",
+        "shipyard",
+        "storage"
+      ],
       "condition": "critical",
       "condition_text": "Critical infrastructure failure. Emergency lighting only. Station barely functional.",
-      "satisfaction_pct": 0,
+      "satisfaction_pct": 12,
       "facility_count": 13,
       "defense_level": 80
     },
@@ -810,18 +687,12 @@
       "empire_name": "Voidborn Collective",
       "system_id": "node_gamma",
       "system_name": "Node Gamma",
-      "services": {
-        "refuel": true,
-        "repair": true,
-        "shipyard": false,
-        "market": true,
-        "cloning": false,
-        "insurance": false,
-        "crafting": false,
-        "missions": false,
-        "storage": true,
-        "salvage_yard": false
-      },
+      "services": [
+        "market",
+        "refuel",
+        "repair",
+        "storage"
+      ],
       "condition": "critical",
       "condition_text": "Critical infrastructure failure. Emergency lighting only. Station barely functional.",
       "satisfaction_pct": 16,
@@ -836,21 +707,15 @@
       "empire_name": "Voidborn Collective",
       "system_id": "sync",
       "system_name": "Synchrony",
-      "services": {
-        "refuel": true,
-        "repair": true,
-        "shipyard": false,
-        "market": true,
-        "cloning": false,
-        "insurance": false,
-        "crafting": false,
-        "missions": false,
-        "storage": true,
-        "salvage_yard": false
-      },
+      "services": [
+        "market",
+        "refuel",
+        "repair",
+        "storage"
+      ],
       "condition": "critical",
       "condition_text": "Critical infrastructure failure. Emergency lighting only. Station barely functional.",
-      "satisfaction_pct": 16,
+      "satisfaction_pct": 0,
       "facility_count": 10,
       "defense_level": 55
     },
@@ -862,24 +727,18 @@
       "empire_name": "Voidborn Collective",
       "system_id": "experiment",
       "system_name": "The Experiment",
-      "services": {
-        "refuel": true,
-        "repair": true,
-        "shipyard": false,
-        "market": true,
-        "cloning": false,
-        "insurance": false,
-        "crafting": false,
-        "missions": false,
-        "storage": true,
-        "salvage_yard": false
-      },
-      "condition": "thriving",
-      "condition_text": "All systems operating at peak efficiency. The station hums with well-maintained infrastructure.",
-      "satisfaction_pct": 100,
+      "services": [
+        "market",
+        "refuel",
+        "repair",
+        "storage"
+      ],
+      "condition": "struggling",
+      "condition_text": "Multiple systems running on emergency reserves. Lights flicker in the corridors.",
+      "satisfaction_pct": 33,
       "facility_count": 10,
       "defense_level": 30
     }
   ],
-  "_fetched": "2026-03-01T13:52:21.289Z"
+  "_fetched": "2026-03-02T16:31:05.882Z"
 }

@@ -1,6 +1,25 @@
-@tailwind base;
-@tailwind components;
-@tailwind utilities;
+@import "tailwindcss";
+
+@theme {
+  --color-space-bg: #0d1117;
+  --color-space-card: #161b22;
+  --color-space-input: #0d1117;
+  --color-space-row-hover: #1c2128;
+  --color-space-border: #30363d;
+  --color-space-border-active: #58a6ff;
+  --color-space-text: #c9d1d9;
+  --color-space-text-dim: #8b949e;
+  --color-space-text-bright: #f0f6fc;
+  --color-space-accent: #58a6ff;
+  --color-space-green: #3fb950;
+  --color-space-red: #f85149;
+  --color-space-yellow: #d29922;
+  --color-space-cyan: #39d2c0;
+  --color-space-magenta: #bc8cff;
+  --color-space-orange: #db6d28;
+
+  --font-sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
+}
 
 /* Кастомні компоненти в стилі SpaceMolt */
 @layer components {
@@ -11,12 +30,14 @@
   }
 
   .btn-primary {
-    @apply btn bg-space-accent text-white border-space-accent;
+    @apply px-3 py-1.5 rounded text-sm font-medium transition-colors;
+    @apply bg-space-accent text-white border border-space-accent;
     @apply hover:bg-blue-600;
   }
 
   .btn-danger {
-    @apply btn bg-space-red text-white border-space-red;
+    @apply px-3 py-1.5 rounded text-sm font-medium transition-colors;
+    @apply bg-space-red text-white border border-space-red;
     @apply hover:bg-red-600;
   }
 
@@ -35,15 +56,18 @@
   }
 
   .badge-green {
-    @apply badge bg-green-900/30 text-space-green border border-green-800;
+    @apply inline-flex items-center px-2 py-1 rounded-full text-xs font-medium;
+    @apply bg-green-900/30 text-space-green border border-green-800;
   }
 
   .badge-red {
-    @apply badge bg-red-900/30 text-space-red border border-red-800;
+    @apply inline-flex items-center px-2 py-1 rounded-full text-xs font-medium;
+    @apply bg-red-900/30 text-space-red border border-red-800;
   }
 
   .badge-yellow {
-    @apply badge bg-yellow-900/30 text-space-yellow border border-yellow-800;
+    @apply inline-flex items-center px-2 py-1 rounded-full text-xs font-medium;
+    @apply bg-yellow-900/30 text-space-yellow border border-yellow-800;
   }
 }
 

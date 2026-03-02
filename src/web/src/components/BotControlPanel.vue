@@ -1,7 +1,7 @@
 <template>
   <div class="flex-1 flex flex-col gap-2 py-2 px-0 overflow-hidden">
     <!-- Manual Control Panel -->
-    <div class="card py-2 px-3 flex flex-col flex-1 overflow-hidden">
+    <div class="card py-2 px-2 flex flex-col flex-1 overflow-hidden">
       <div class="py-1 px-0 border-b border-space-border bg-space-card">
         <h3 class="text-xs font-semibold text-space-text-dim uppercase">Manual Control</h3>
       </div>
@@ -43,7 +43,7 @@
                   <div
                     v-for="sys in ldFiltered"
                     :key="sys.id"
-                    class="px-2 py-0.5 cursor-pointer text-[10px] leading-5 text-space-text hover:bg-space-accent/20 hover:text-space-accent"
+                    class="px-2 py-0.5 cursor-pointer text-[11px] leading-5 text-space-text hover:bg-space-accent/20 hover:text-space-accent"
                     @mousedown.prevent="selectLdSystem(sys)"
                   >{{ sys.name }}</div>
                 </div>
@@ -56,8 +56,8 @@
             <div v-if="ldRoute.length > 0" class="bg-[#0d1117] border border-space-border rounded p-1 space-y-2 text-[11px]">
               <div class="flex items-center gap-1">
                 <span class="text-xs font-semibold text-space-text-bright shrink-0">Route: {{ ldRoute.length }} jumps</span>
-                <span class="text-[10px] text-space-accent flex-1 truncate text-right">→ {{ ldRoute[ldRoute.length - 1]?.name || ldRoute[ldRoute.length - 1]?.system_id || '' }}</span>
-                <button @click="ldRoute = []; ldRouteError = ''" class="text-[10px] text-space-text-dim hover:text-space-red shrink-0 ml-1">✕</button>
+                <span class="text-[11px] text-space-accent flex-1 truncate text-right">→ {{ ldRoute[ldRoute.length - 1]?.name || ldRoute[ldRoute.length - 1]?.system_id || '' }}</span>
+                <button @click="ldRoute = []; ldRouteError = ''" class="text-[11px] text-space-text-dim hover:text-space-red shrink-0 ml-1">✕</button>
               </div>
               <div class="text-xs text-space-text-dim max-h-20 overflow-auto scrollbar-dark space-y-0.5">
                 <div
@@ -115,10 +115,10 @@
               <input v-model.number="craftQty" type="number" min="1" class="input text-xs w-16 !p-1 scrollbar-dark" value="1">
               <button @click="execCraft" class="btn btn-primary text-xs px-3 py-1">Craft</button>
             </div>
-            <div v-if="selectedRecipeInfo" class="ml-20 bg-[#0d1117] border border-space-border rounded p-2 text-[10px]">
+            <div v-if="selectedRecipeInfo" class="ml-20 bg-[#0d1117] border border-space-border rounded p-2 text-[11px]">
               <div class="flex items-center gap-2 mb-1.5">
                 <span class="font-semibold text-space-text">{{ selectedRecipeInfo.name }}</span>
-                <span v-if="selectedRecipeInfo.category" class="text-space-text-dim px-1 py-0.5 bg-space-border/20 rounded text-[9px]">{{ selectedRecipeInfo.category }}</span>
+                <span v-if="selectedRecipeInfo.category" class="text-space-text-dim px-1 py-0.5 bg-space-border/20 rounded text-[11px]">{{ selectedRecipeInfo.category }}</span>
               </div>
               <template v-if="selectedRecipeInfo.components?.length">
                 <div class="text-space-text-dim font-semibold mb-1">Requires:</div>
@@ -157,7 +157,7 @@
             <select v-model="buyItem" class="input text-xs flex-1 !p-1">
               <option value="">No market data</option>
               <option v-for="item in marketItems" :key="item.item_id" :value="item.item_id">
-                {{ item.name }} ({{ item.buy_price }}₡)
+                {{ item.name || item.item_id }} ({{ item.buy_price }}₡)
               </option>
             </select>
             <input v-model.number="buyQty" type="number" min="1" class="input text-xs w-16 !p-1 scrollbar-dark" value="1">
@@ -236,11 +236,11 @@
 
           <!-- Nearby Players (shown after get_nearby) -->
           <div v-if="nearbyPlayers.length > 0" class="col-span-2 bg-[#0d1117] border border-space-border rounded p-1.5">
-            <div class="text-[10px] font-semibold text-space-text-dim uppercase mb-1">Nearby ({{ nearbyPlayers.length }})</div>
+            <div class="text-[11px] font-semibold text-space-text-dim uppercase mb-1">Nearby ({{ nearbyPlayers.length }})</div>
             <div class="flex flex-wrap gap-1">
               <span
                 v-for="p in nearbyPlayers" :key="p.username || p.id || p.name"
-                class="inline-flex items-center gap-1 text-[10px] px-1.5 py-0.5 rounded border"
+                class="inline-flex items-center gap-1 text-[11px] px-1.5 py-0.5 rounded border"
                 :class="p._pirate
                   ? 'border-space-red/40 bg-space-red/10 text-space-red'
                   : 'border-space-border bg-[#161b22] text-space-text'"
@@ -265,7 +265,7 @@
     </div>
 
     <!-- Activity Log -->
-    <div class="card py-2 px-3 flex flex-col h-56">
+    <div class="card py-2 px-2 flex flex-col h-56">
       <div class="flex py-1 px-0 items-center justify-between border-b border-space-border bg-space-card">
         <h3 class="text-xs font-semibold text-space-text-dim uppercase">Activity Log</h3>
         <div class="flex gap-2">
@@ -277,7 +277,7 @@
         <div
           v-for="(log, idx) in botLogs"
           :key="idx"
-          class="leading-tight whitespace-pre-wrap text-[10px]"
+          class="leading-tight whitespace-pre-wrap text-[11px]"
           :class="{
             'text-space-red': log.type === 'error',
             'text-space-yellow': log.type === 'warn',
@@ -492,6 +492,52 @@ function execAsync(command: string, params?: any): Promise<any> {
 function processExecResult(command: string, data: any) {
   if (!data) return;
   switch (command) {
+    case 'get_status': {
+      const player = data.player || data;
+      const ship = data.ship || {};
+      const upd: Record<string, any> = {};
+      if (player.credits != null) upd.credits = player.credits;
+      if (ship.fuel != null) upd.fuel = ship.fuel;
+      if (ship.max_fuel != null) upd.maxFuel = ship.max_fuel;
+      const hull = ship.hull ?? ship.hp;
+      if (hull != null) upd.hull = hull;
+      const maxHull = ship.max_hull ?? ship.max_hp;
+      if (maxHull != null) upd.maxHull = maxHull;
+      const shield = ship.shield ?? ship.shields;
+      if (shield != null) upd.shield = shield;
+      if (ship.cargo_used != null) upd.cargo = ship.cargo_used;
+      const cargoMax = ship.cargo_capacity ?? ship.max_cargo;
+      if (cargoMax != null) upd.cargoMax = cargoMax;
+      if (player.docked_at_base !== undefined) upd.docked = !!player.docked_at_base;
+      else if (player.docked !== undefined) upd.docked = player.docked;
+      if (player.current_system) upd.system = player.current_system;
+      const poi = player.current_poi ?? player.poi_id;
+      if (poi) upd.poi = poi;
+      if (Object.keys(upd).length) updateBotInStore(upd);
+      break;
+    }
+    case 'get_cargo': {
+      const rawItems = data.items || data.cargo || [];
+      updateBotInStore({
+        inventory: rawItems.map((i: any) => ({
+          itemId: i.item_id || i.id || '',
+          name: i.name || i.item_id || '',
+          quantity: i.quantity ?? 0,
+        }))
+      });
+      break;
+    }
+    case 'view_storage': {
+      const rawItems = data.items || data.storage || [];
+      updateBotInStore({
+        storage: rawItems.map((i: any) => ({
+          itemId: i.item_id || i.id || '',
+          name: i.name || i.item_id || '',
+          quantity: i.quantity ?? 0,
+        }))
+      });
+      break;
+    }
     case 'get_system': {
       const pois = data.system?.pois || data.pois || data.points_of_interest || [];
       if (pois.length > 0) systemPois.value = pois;
@@ -521,6 +567,11 @@ function processExecResult(command: string, data: any) {
       break;
     }
   }
+}
+
+function updateBotInStore(partial: Record<string, any>): void {
+  const idx = botStore.bots.findIndex(b => b.username === currentBot.value.username);
+  if (idx !== -1) Object.assign(botStore.bots[idx], partial);
 }
 
 function extractRecipes(data: any): any[] {

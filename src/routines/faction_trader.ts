@@ -6,8 +6,7 @@
  * best known buyer station, then returns home.
  */
 import type { Bot, Routine, RoutineContext } from "../bot.js";
-import { mapStore } from "../mapstore.js";
-import { catalogStore } from "../catalogstore.js";
+import type { MapStore } from "../mapstore.js";
 import {
   ensureDocked,
   ensureUndocked,
@@ -76,9 +75,9 @@ interface FactionSellRoute {
 // ── Helpers ──────────────────────────────────────────────────
 
 /** Find the cheapest known market sell price for an item (replacement/acquisition cost). */
-function getItemMarketCost(itemId: string): number {
+function getItemMarketCost(itemId: string, ms: MapStore): number {
   let cheapest = Infinity;
-  const systems = mapStore.getAllSystems();
+  const systems = ms.getAllSystems();
   for (const sys of Object.values(systems)) {
     for (const poi of sys.pois) {
       for (const m of poi.market) {
@@ -98,9 +97,9 @@ function getFreeSpace(bot: Bot): number {
 }
 
 /** Estimate fuel cost between two systems using mapStore route data. */
-function estimateFuelCost(fromSystem: string, toSystem: string, costPerJump: number = 50): { jumps: number; cost: number } {
+function estimateFuelCost(fromSystem: string, toSystem: string, ms: MapStore, costPerJump: number = 50): { jumps: number; cost: number } {
   if (fromSystem === toSystem) return { jumps: 0, cost: 0 };
-  const route = mapStore.findRoute(fromSystem, toSystem);
+  const route = ms.findRoute(fromSystem, toSystem);
   if (!route) return { jumps: 999, cost: 999 * costPerJump };
   const jumps = route.length - 1;
   return { jumps, cost: jumps * costPerJump };
@@ -117,7 +116,7 @@ function findFactionSellRoutes(
   const routes: FactionSellRoute[] = [];
   if (bot.factionStorage.length === 0) return routes;
 
-  const allBuys = mapStore.getAllBuyDemand();
+  const allBuys = ctx.mapStore.getAllBuyDemand();
   if (allBuys.length === 0) return routes;
 
   const homeSystem = settings.homeSystem || currentSystem;
@@ -127,7 +126,7 @@ function findFactionSellRoutes(
     const lower = item.itemId.toLowerCase();
     if (lower.includes("fuel") || lower.includes("energy_cell")) continue;
     // Never trade raw ores, ice, or gas — those are crafting inputs
-    const catItem = catalogStore.getItem(item.itemId);
+    const catItem = ctx.catalogStore.getItem(item.itemId);
     if (catItem?.category === "ore") continue;
     if (item.quantity <= 0) continue;
 
@@ -146,14 +145,14 @@ function findFactionSellRoutes(
       .sort((a, b) => b.price - a.price);
 
     // Material cost = cheapest known market price (what this item is worth)
-    const materialCost = getItemMarketCost(item.itemId);
+    const materialCost = getItemMarketCost(item.itemId, ctx.mapStore);
 
     for (const buy of buyers) {
       if (settings.minSellPrice > 0 && buy.price < settings.minSellPrice) continue;
 
       // Round-trip fuel: current → dest + dest → home
-      const toDest = estimateFuelCost(currentSystem, buy.systemId, costPerJump);
-      const returnHome = estimateFuelCost(buy.systemId, homeSystem, costPerJump);
+      const toDest = estimateFuelCost(currentSystem, buy.systemId, ctx.mapStore, costPerJump);
+      const returnHome = estimateFuelCost(buy.systemId, homeSystem, ctx.mapStore, costPerJump);
       if (toDest.jumps >= 999) continue;
       const roundTripJumps = toDest.jumps + (returnHome.jumps < 999 ? returnHome.jumps : 0);
       const roundTripFuel = toDest.cost + (returnHome.jumps < 999 ? returnHome.cost : 0);
@@ -256,7 +255,7 @@ export const factionTraderRoutine: Routine = async function* (ctx: RoutineContex
 
     // Station priority: put routes whose destination is the home station first
     if (settings.stationPriority && settings.homeSystem) {
-      const homeStation = mapStore.findNearestStation(settings.homeSystem);
+      const homeStation = ctx.mapStore.findNearestStation(settings.homeSystem);
       if (homeStation) {
         const homeRoutes = routes.filter(r => r.destSystem === settings.homeSystem && r.destPoi === homeStation.id);
         const otherRoutes = routes.filter(r => !(r.destSystem === settings.homeSystem && r.destPoi === homeStation.id));
@@ -450,7 +449,7 @@ export const factionTraderRoutine: Routine = async function* (ctx: RoutineContex
           noJettison: true,
           onJump: async (jumpNum) => {
             if (jumpNum % 3 !== 0) return true;
-            const buys = mapStore.getAllBuyDemand();
+            const buys = ctx.mapStore.getAllBuyDemand();
             const destBuyer = buys.find(b =>
               b.itemId === route.itemId && b.systemId === route.destSystem && b.poiId === route.destPoi
             );

@@ -7,7 +7,7 @@
  * Deposits everything at the faction storage station set in general settings.
  */
 import type { Routine, RoutineContext } from "../bot.js";
-import { mapStore } from "../mapstore.js";
+import type { MapStore } from "../mapstore.js";
 import {
   ensureDocked,
   ensureUndocked,
@@ -107,8 +107,8 @@ function parseStorageHints(hint: unknown): StorageHintEntry[] {
  * Resolve a station_id / base_id to a system + POI using mapStore.
  * Returns null if we can't find it in our map data.
  */
-function resolveStation(stationId: string): { systemId: string; poiId: string; poiName: string } | null {
-  const allSystems = mapStore.getAllSystems();
+function resolveStation(stationId: string, ms: MapStore): { systemId: string; poiId: string; poiName: string } | null {
+  const allSystems = ms.getAllSystems();
   for (const [sysId, sys] of Object.entries(allSystems)) {
     for (const poi of sys.pois) {
       if (poi.id === stationId || poi.base_id === stationId) {
@@ -120,9 +120,9 @@ function resolveStation(stationId: string): { systemId: string; poiId: string; p
 }
 
 /** Get all known stations with bases from mapStore. */
-function getAllKnownStations(homeSystem: string, homeStation: string): StationTarget[] {
+function getAllKnownStations(homeSystem: string, homeStation: string, ms: MapStore): StationTarget[] {
   const stations: StationTarget[] = [];
-  const allSystems = mapStore.getAllSystems();
+  const allSystems = ms.getAllSystems();
 
   for (const [sysId, sys] of Object.entries(allSystems)) {
     for (const poi of sys.pois) {
@@ -173,11 +173,11 @@ async function depositAtHome(ctx: RoutineContext, settings: ReturnType<typeof ge
   // Resolve home station to POI id (might be a base_id)
   let homePoiId = settings.homeStation;
   if (homePoiId) {
-    const resolved = resolveStation(homePoiId);
+    const resolved = resolveStation(homePoiId, ctx.mapStore);
     if (resolved) homePoiId = resolved.poiId;
   } else {
     // Find any station in the home system
-    const sys = mapStore.getSystem(settings.homeSystem);
+    const sys = ctx.mapStore.getSystem(settings.homeSystem);
     const station = sys?.pois.find(p => p.has_base);
     if (station) homePoiId = station.id;
   }
@@ -248,7 +248,7 @@ export const cleanupRoutine: Routine = async function* (ctx: RoutineContext) {
     const hintEntries = parseStorageHints(hint);
 
     // Get all known stations for comparison
-    const allStations = getAllKnownStations(settings.homeSystem, settings.homeStation);
+    const allStations = getAllKnownStations(settings.homeSystem, settings.homeStation, ctx.mapStore);
 
     // If we got hints, mark stations that have items
     const stationsWithStorage: StationTarget[] = [];
@@ -260,7 +260,7 @@ export const cleanupRoutine: Routine = async function* (ctx: RoutineContext) {
         if (!sid) continue;
 
         // Don't collect from the home station (that's where we deposit)
-        const resolved = resolveStation(sid);
+        const resolved = resolveStation(sid, ctx.mapStore);
         if (resolved && resolved.systemId === settings.homeSystem
             && (resolved.poiId === settings.homeStation || sid === settings.homeStation)) {
           continue;
@@ -303,7 +303,6 @@ export const cleanupRoutine: Routine = async function* (ctx: RoutineContext) {
 
         const remote = await bot.viewStorage(station.stationId);
         const credits = (remote.credits as number) || (remote.stored_credits as number) || 0;
-        const items = bot.parseItemList ? [] : []; // parseItemList is private, check items array
         const itemArray = (
           Array.isArray(remote) ? remote :
           Array.isArray(remote.items) ? remote.items :
@@ -335,7 +334,7 @@ export const cleanupRoutine: Routine = async function* (ctx: RoutineContext) {
         if (existing) {
           existing.hasOrders = true;
         } else {
-          const resolved = resolveStation(sid);
+          const resolved = resolveStation(sid, ctx.mapStore);
           if (resolved) {
             stationsWithStorage.push({
               stationId: sid,
@@ -368,8 +367,8 @@ export const cleanupRoutine: Routine = async function* (ctx: RoutineContext) {
       const aLocal = a.systemId === bot.system ? 0 : 1;
       const bLocal = b.systemId === bot.system ? 0 : 1;
       if (aLocal !== bLocal) return aLocal - bLocal;
-      const aRoute = mapStore.findRoute(bot.system, a.systemId);
-      const bRoute = mapStore.findRoute(bot.system, b.systemId);
+      const aRoute = ctx.mapStore.findRoute(bot.system, a.systemId);
+      const bRoute = ctx.mapStore.findRoute(bot.system, b.systemId);
       const aJumps = aRoute ? aRoute.length - 1 : 999;
       const bJumps = bRoute ? bRoute.length - 1 : 999;
       return aJumps - bJumps;

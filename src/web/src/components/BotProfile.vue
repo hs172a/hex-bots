@@ -16,7 +16,7 @@
       <!-- Sidebar col 1 -->
       <div class="w-72 space-y-3 overflow-hidden">
         <!-- Status -->
-        <div class="card py-2 px-3">
+        <div class="card py-2 px-2">
           <div class="py-1 px-0 border-b border-space-border bg-space-card">
             <h3 class="text-xs font-semibold text-space-text-dim uppercase">📊 Status</h3>
           </div>
@@ -49,7 +49,7 @@
                 </div>
                 <span class="flex-shrink-0 ml-1" :class="(wep.current_ammo ?? 0) === 0 ? 'text-space-red font-semibold' : 'text-space-text'">
                   {{ wep.current_ammo ?? 0 }}/{{ wep.magazine_size ?? '?' }}
-                  <span v-if="wep.ammo_type" class="text-[10px] text-space-text-dim">({{ wep.ammo_type }})</span>
+                  <span v-if="wep.ammo_type" class="text-[11px] text-space-text-dim">({{ wep.ammo_type }})</span>
                 </span>
               </div>
               <div class="flex justify-between">
@@ -72,13 +72,13 @@
           </div>
         </div>
         <!-- Cargo Hold -->
-        <div class="card py-2 px-3 !mt-2">
+        <div class="card py-2 px-2 !mt-2">
           <div class="py-1 px-0 border-b border-space-border bg-space-card">
             <h3 class="text-xs font-semibold text-space-text-dim uppercase">📦 Cargo Hold</h3>
           </div>
           <div class="py-1 px-0 max-h-40 overflow-auto scrollbar-dark">
             <div v-if="inventory.length === 0" class="text-xs text-space-text-dim text-center py-2">Empty</div>
-            <div v-else class="space-y-1">
+            <div v-else class="space-y-1 pr-1">
               <div v-for="item in inventory" :key="item.itemId" class="flex justify-between text-xs">
                 <span class="text-space-text">{{ item.name }}</span>
                 <span class="text-space-text-dim">x{{ item.quantity }}</span>
@@ -87,13 +87,13 @@
           </div>
         </div>
         <!-- Station Storage -->
-        <div class="card py-2 px-3 !mt-2">
+        <div class="card py-2 px-2 !mt-2">
           <div class="py-1 px-0 border-b border-space-border bg-space-card">
             <h3 class="text-xs font-semibold text-space-text-dim uppercase">🏠 Station Storage</h3>
           </div>
           <div class="py-1 px-0 max-h-60 overflow-auto scrollbar-dark">
             <div v-if="storage.length === 0" class="text-xs text-space-text-dim text-center py-2">Empty</div>
-            <div v-else class="space-y-1">
+            <div v-else class="space-y-1 pr-1">
               <div v-for="item in storage" :key="item.itemId" class="flex justify-between text-xs">
                 <span class="text-space-text">{{ item.name }}</span>
                 <span class="text-space-text-dim">x{{ item.quantity }}</span>
@@ -101,8 +101,22 @@
             </div>
           </div>
         </div>
+        <!-- Faction Storage -->
+        <div v-if="factionStorage && factionStorage.length > 0" class="card py-2 px-2 !mt-2 border-space-accent/30">
+          <div class="py-1 px-0 border-b border-space-border bg-space-card">
+            <h3 class="text-xs font-semibold text-space-accent uppercase">🛡️ Faction Storage</h3>
+          </div>
+          <div class="py-1 px-0 max-h-60 overflow-auto scrollbar-dark">
+            <div class="space-y-1 pr-1">
+              <div v-for="item in factionStorage" :key="item.itemId" class="flex justify-between text-xs">
+                <span class="text-space-text">{{ item.name }}</span>
+                <span class="text-space-text-dim">x{{ item.quantity }}</span>
+              </div>
+            </div>
+          </div>
+        </div>
         <!-- Deposit Settings -->
-        <div class="card py-2 px-3 !mt-2">
+        <div class="card py-2 px-2 !mt-2">
           <div class="py-1 px-0 border-b border-space-border bg-space-card">
             <h3 class="text-xs font-semibold text-space-text-dim uppercase">💰 Deposit Settings</h3>
           </div>
@@ -127,7 +141,7 @@
       <!-- Sidebar col 2 -->
       <div class="w-72 space-y-3 overflow-hidden">
         <!-- Statistics -->
-        <div class="card py-2 px-3">
+        <div class="card py-2 px-2">
           <div class="py-1 px-0 border-b border-space-border bg-space-card">
             <h3 class="text-xs font-semibold text-space-text-dim uppercase">📊 Statistics</h3>
           </div>
@@ -145,28 +159,28 @@
           </div>
         </div>
         <!-- Skills -->
-        <div class="card py-2 px-3 !mt-2">
+        <div class="card py-2 px-2 !mt-2">
           <div class="py-1 px-0 border-b border-space-border bg-space-card">
             <h3 class="text-xs font-semibold text-space-text-dim uppercase">🎯 Skills</h3>
           </div>
           <div class="py-1 px-0">
             <div v-if="displaySkills.length === 0" class="text-xs text-space-text-dim text-center py-2">
               No skills data
-              <button @click="fetchSkills" class="ml-2 text-space-accent hover:underline text-[10px]">🔄 Refresh</button>
+              <button @click="fetchSkills" class="ml-2 text-space-accent hover:underline text-[11px]">🔄 Refresh</button>
             </div>
             <div v-else class="space-y-2">
               <template v-for="[category, catSkills] in groupedSkills" :key="category">
                 <div class="flex items-center gap-1.5 mt-1.5 first:mt-0">
                   <span :class="CATEGORY_COLOR[category] || 'text-gray-400'" class="text-xs">{{ CATEGORY_ICON[category] || '📚' }}</span>
-                  <span class="text-[10px] uppercase font-semibold tracking-wide" :class="CATEGORY_COLOR[category] || 'text-gray-400'">{{ category }}</span>
+                  <span class="text-[11px] uppercase font-semibold tracking-wide" :class="CATEGORY_COLOR[category] || 'text-gray-400'">{{ category }}</span>
                   <div class="flex-1 h-px bg-space-border"></div>
                 </div>
                 <div class="space-y-1 pl-1 !mt-0.5 !mb-2">
                   <div v-for="skill in catSkills" :key="skill.skill_id" class="text-xs">
                     <div class="flex justify-between items-baseline">
-                      <span class="text-gray-300 text-[10px]">{{ formatSkillName(skill.skill_id) }}</span>
+                      <span class="text-gray-300 text-[11px]">{{ formatSkillName(skill.skill_id) }}</span>
                       <span class="text-space-text-dim flex items-center gap-1.5">
-                        <span v-if="skill.xp !== undefined && skillXpNext(skill) > 0" class="text-[10px]">{{ skill.xp }}/{{ skillXpNext(skill) }}</span>
+                        <span v-if="skill.xp !== undefined && skillXpNext(skill) > 0" class="text-[11px]">{{ skill.xp }}/{{ skillXpNext(skill) }}</span>
                         <span class="text-space-green font-medium">Lv{{ skill.level || 0 }}</span>
                       </span>
                     </div>
@@ -187,11 +201,15 @@
           <button @click="activeMainTab = 'control'" class="px-4 py-2 text-xs font-medium border-b-2 transition-all" :class="activeMainTab === 'control' ? 'text-space-text-bright border-space-accent' : 'text-space-text-dim border-transparent hover:text-space-text'">🛠️ Control</button>
           <button @click="currentBot.docked && (activeMainTab = 'ship')" class="px-4 py-2 text-xs font-medium border-b-2 transition-all" :class="[activeMainTab === 'ship' ? 'text-space-text-bright border-space-accent' : 'text-space-text-dim border-transparent', currentBot.docked ? 'hover:text-space-text cursor-pointer' : 'opacity-40 cursor-not-allowed']" :title="!currentBot.docked ? 'Dock at a station to manage ship modules' : ''">🛸 Ship</button>
           <button @click="currentBot.docked && loadStationTab()" class="px-4 py-2 text-xs font-medium border-b-2 transition-all" :class="[activeMainTab === 'station' ? 'text-space-text-bright border-space-accent' : 'text-space-text-dim border-transparent', currentBot.docked ? 'hover:text-space-text cursor-pointer' : 'opacity-40 cursor-not-allowed']" :title="!currentBot.docked ? 'Dock at a station to view station info' : ''">🏠 Station</button>
+          <button @click="activeMainTab = 'log'" class="px-4 py-2 text-xs font-medium border-b-2 transition-all" :class="activeMainTab === 'log' ? 'text-space-text-bright border-space-accent' : 'text-space-text-dim border-transparent hover:text-space-text'">📜 Log</button>
+          <button @click="activeMainTab = 'profile'" class="px-4 py-2 text-xs font-medium border-b-2 transition-all" :class="activeMainTab === 'profile' ? 'text-space-text-bright border-space-accent' : 'text-space-text-dim border-transparent hover:text-space-text'">👤 Profile</button>
         </div>
         <!-- Panel components -->
         <BotControlPanel v-show="activeMainTab === 'control'" :bot="bot" @notif="onChildNotif" />
         <BotShipPanel v-show="activeMainTab === 'ship'" :bot="bot" @notif="onChildNotif" />
         <BotStationPanel v-show="activeMainTab === 'station'" ref="stationPanel" :bot="bot" @notif="onChildNotif" />
+        <CaptainsLogPanel v-if="activeMainTab === 'log'" :bot="bot" @notif="onChildNotif" />
+        <BotProfilePanel v-if="activeMainTab === 'profile'" :bot="bot" @notif="onChildNotif" />
       </div>
     </div>
     <!-- Toast notification -->
@@ -220,6 +238,8 @@ import { useBotStore } from '../stores/botStore';
 import BotControlPanel from './BotControlPanel.vue';
 import BotShipPanel from './BotShipPanel.vue';
 import BotStationPanel from './BotStationPanel.vue';
+import CaptainsLogPanel from './CaptainsLogPanel.vue';
+import BotProfilePanel from './BotProfilePanel.vue';
 
 interface Props { bot: any; }
 const props = defineProps<Props>();
@@ -227,7 +247,7 @@ const emit = defineEmits(['close', 'start', 'stop']);
 const botStore = useBotStore();
 
 const SKILL_CATEGORY_MAP: Record<string, string> = {
-  advanced_crafting:'crafting', basic_crafting:'crafting', blueprint_research:'crafting',
+  crafting_advanced:'crafting', crafting_basic:'crafting', blueprint_research:'crafting',
   crafting_mastery:'crafting', electronics_crafting:'crafting', mass_production:'crafting',
   module_crafting:'crafting', quality_control:'crafting', shield_crafting:'crafting',
   ship_construction:'crafting', weapon_crafting:'crafting',
@@ -286,7 +306,7 @@ const CATEGORY_BAR_COLOR: Record<string, string> = {
 const CATEGORY_ORDER = ['mining','ships','navigation','engineering','crafting','trading',
   'exploration','drones','support','salvaging','faction','empire','prestige'];
 
-const activeMainTab = ref<'control' | 'ship' | 'station'>('control');
+const activeMainTab = ref<'control' | 'ship' | 'station' | 'log' | 'profile'>('control');
 const skills = ref<any[]>([]);
 const depositPrimary = ref('station_storage');
 const depositSecondary = ref('station_storage');
@@ -314,6 +334,7 @@ const currentBot = computed(() => {
 });
 const inventory = computed(() => currentBot.value.inventory || []);
 const storage = computed(() => currentBot.value.storage || []);
+const factionStorage = computed(() => currentBot.value.factionStorage || []);
 const weaponModules = computed(() => {
   if (!shipInfo.value) return [];
   const mods = shipInfo.value.modules || [];

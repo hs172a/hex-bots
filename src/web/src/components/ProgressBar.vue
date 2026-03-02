@@ -7,7 +7,7 @@
         :style="{ width: percentage + '%' }"
       />
     </div>
-    <span class="text-[10px] text-space-text-dim tabular-nums min-w-[45px]">
+    <span class="text-[11px] text-space-text-dim tabular-nums min-w-[45px]">
       {{ current }}/{{ max }}
     </span>
   </div>

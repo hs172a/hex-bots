@@ -1,6 +1,7 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "fs";
 import { join } from "path";
 import type { SpaceMoltAPI } from "./api.js";
+import type { Database } from "bun:sqlite";
 
 // ── Data model ──────────────────────────────────────────────
 
@@ -49,14 +50,62 @@ const CATALOG_FILE = join(DATA_DIR, "catalog.json");
 const SAVE_DEBOUNCE_MS = 5000;
 const STALE_MS = 24 * 60 * 60 * 1000; // 24 hours
 
-class CatalogStore {
+export class CatalogStore {
   private data: CatalogData;
   private dirty = false;
   private saveTimer: ReturnType<typeof setTimeout> | null = null;
   private _fetchPromise: Promise<void> | null = null;
+  private _db: Database | null = null;
 
   constructor() {
     this.data = this.load();
+  }
+
+  /** Connect to SQLite backend. Loads per-item rows; migrates legacy JSON data if needed. */
+  connectToDb(db: Database): void {
+    this._db = db;
+
+    // Load lastFetched from catalog_meta
+    const metaRow = db.query("SELECT value FROM catalog_meta WHERE key = 'lastFetched'").get() as { value: string } | null;
+    const dbLastFetched = metaRow?.value ?? null;
+
+    // Count items already in DB
+    const countRow = db.query("SELECT COUNT(*) as n FROM catalog_items").get() as { n: number };
+    const dbHasData = countRow.n > 0;
+
+    if (dbHasData) {
+      // Load all rows from DB into memory
+      this._loadFromDb();
+      this.data.lastFetched = dbLastFetched;
+      console.log(`[CatalogStore] Loaded ${countRow.n} catalog items from SQLite`);
+    } else if (this.data.lastFetched) {
+      // Migrate existing JSON data to SQLite
+      this._migrateToDb();
+    }
+  }
+
+  /** Read all catalog_items rows into memory. */
+  private _loadFromDb(): void {
+    if (!this._db) return;
+    const rows = this._db.query("SELECT id, item_type, data FROM catalog_items").all() as { id: string; item_type: string; data: string }[];
+    const fresh: CatalogData = { version: 1, lastFetched: null, items: {}, ships: {}, skills: {}, recipes: {} };
+    for (const row of rows) {
+      try {
+        const obj = JSON.parse(row.data) as Record<string, unknown>;
+        if (row.item_type === "item") fresh.items[row.id] = obj as CatalogItem;
+        else if (row.item_type === "ship") fresh.ships[row.id] = obj as CatalogShip;
+        else if (row.item_type === "skill") fresh.skills[row.id] = obj as CatalogSkill;
+        else if (row.item_type === "recipe") fresh.recipes[row.id] = obj as CatalogRecipe;
+      } catch { /* corrupt row */ }
+    }
+    this.data = fresh;
+  }
+
+  /** Bulk-insert all in-memory catalog entries into DB (one-time migration). */
+  private _migrateToDb(): void {
+    if (!this._db) return;
+    this._saveToDb();
+    console.log(`[CatalogStore] Migrated catalog to SQLite (${this.getSummary()})`);
   }
 
   // ── Persistence ─────────────────────────────────────────
@@ -81,7 +130,7 @@ class CatalogStore {
     if (this.saveTimer) return;
     this.saveTimer = setTimeout(() => {
       this.saveTimer = null;
-      this.writeToDisk();
+      this.persist();
     }, SAVE_DEBOUNCE_MS);
   }
 
@@ -94,13 +143,48 @@ class CatalogStore {
     this.dirty = false;
   }
 
-  /** Flush pending writes to disk immediately. Call on shutdown. */
+  /** Write to SQLite if connected, otherwise to JSON file. */
+  private persist(): void {
+    if (this._db) {
+      this._saveToDb();
+    } else {
+      this.writeToDisk();
+    }
+  }
+
+  /** Upsert all catalog items and metadata to SQLite. */
+  private _saveToDb(): void {
+    if (!this._db) return;
+    const stmt = this._db.prepare(
+      "INSERT OR REPLACE INTO catalog_items (id, item_type, data) VALUES (?, ?, ?)"
+    );
+    const tx = this._db.transaction(() => {
+      for (const [id, item] of Object.entries(this.data.items))
+        stmt.run(id, "item", JSON.stringify(item));
+      for (const [id, ship] of Object.entries(this.data.ships))
+        stmt.run(id, "ship", JSON.stringify(ship));
+      for (const [id, skill] of Object.entries(this.data.skills))
+        stmt.run(id, "skill", JSON.stringify(skill));
+      for (const [id, recipe] of Object.entries(this.data.recipes))
+        stmt.run(id, "recipe", JSON.stringify(recipe));
+    });
+    tx();
+    if (this.data.lastFetched) {
+      this._db.run(
+        "INSERT OR REPLACE INTO catalog_meta (key, value) VALUES ('lastFetched', ?)",
+        [this.data.lastFetched]
+      );
+    }
+    this.dirty = false;
+  }
+
+  /** Flush pending writes immediately. Call on shutdown. */
   flush(): void {
     if (this.saveTimer) {
       clearTimeout(this.saveTimer);
       this.saveTimer = null;
     }
-    this.writeToDisk();
+    this.persist();
   }
 
   // ── Staleness check ───────────────────────────────────────
@@ -170,7 +254,7 @@ class CatalogStore {
     this.data.lastFetched = new Date().toISOString();
 
     this.dirty = true;
-    this.writeToDisk();
+    this.persist();
 
     const counts = [
       `${Object.keys(this.data.items).length} items`,

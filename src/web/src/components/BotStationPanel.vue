@@ -1,306 +1,281 @@
 <template>
   <div class="flex-1 overflow-auto scrollbar-dark py-2 px-0 space-y-2">
+    <!-- Not docked -->
     <div v-if="!currentBot.docked" class="flex items-center justify-center h-32 text-center">
-      <div><div class="text-3xl mb-2">🏠</div><div class="text-space-text-dim text-sm">Dock at a station to view station info</div></div>
+      <div><div class="text-3xl mb-2">🏠</div><div class="text-space-text-dim text-sm">Dock at a station to view facilities</div></div>
     </div>
+
     <template v-else>
-      <!-- Station info card from catalog -->
-      <div v-if="stationInfo" class="card py-2 px-3">
-        <div class="flex items-start justify-between gap-2 mb-2">
+      <!-- Station header from catalog -->
+      <div v-if="stationInfo" class="card py-2 px-2">
+        <div class="flex items-start justify-between gap-2 mb-1.5">
           <div>
             <div class="text-sm font-semibold text-space-text-bright">{{ stationInfo.name }}</div>
             <div class="text-xs text-space-text-dim">{{ stationInfo.empire_name }} · {{ stationInfo.system_name }}</div>
           </div>
-          <div class="text-right shrink-0">
-            <span class="text-xs px-2 py-0.5 rounded" :class="stationInfo.condition === 'operational' ? 'bg-green-900/40 text-space-green' : 'bg-yellow-900/30 text-yellow-400'">{{ stationInfo.condition }}</span>
-            <div class="text-[10px] text-space-text-dim mt-0.5">{{ stationInfo.satisfaction_pct }}% satisfaction</div>
-          </div>
+          <span class="text-xs px-2 py-0.5 rounded shrink-0"
+            :class="stationInfo.condition === 'operational' ? 'bg-green-900/40 text-space-green' : 'bg-yellow-900/30 text-yellow-400'">
+            {{ stationInfo.condition }}
+          </span>
         </div>
-        <div class="text-xs text-space-text-dim leading-relaxed mb-2">{{ stationInfo.description }}</div>
-        <div v-if="stationInfo.condition_text && stationInfo.condition !== 'operational'" class="text-xs text-yellow-400 mb-2">⚠️ {{ stationInfo.condition_text }}</div>
+        <div class="text-xs text-space-text-dim leading-relaxed mb-1.5">{{ stationInfo.description }}</div>
+        <div v-if="stationInfo.condition_text && stationInfo.condition !== 'operational'" class="text-xs text-yellow-400 mb-1.5">⚠️ {{ stationInfo.condition_text }}</div>
         <div class="flex flex-wrap gap-1">
-          <span v-for="svc in stationInfo.services" :key="svc" class="px-1.5 py-0.5 rounded text-[10px] bg-[#21262d] text-space-cyan">{{ svc }}</span>
-          <span class="px-1.5 py-0.5 rounded text-[10px] bg-[#21262d] text-space-text-dim">🏭 {{ stationInfo.facility_count }} facilities</span>
-          <span v-if="stationInfo.defense_level" class="px-1.5 py-0.5 rounded text-[10px] bg-[#21262d] text-space-text-dim">🛡️ Def {{ stationInfo.defense_level }}</span>
+          <span v-for="svc in stationInfo.services" :key="svc" class="px-1.5 py-0.5 rounded text-[11px] bg-[#21262d] text-space-cyan">{{ svc }}</span>
+          <span class="px-1.5 py-0.5 rounded text-[11px] bg-[#21262d] text-space-text-dim">🏭 {{ stationFacilities.length || stationInfo.facility_count || 0 }} facilities</span>
+          <span v-if="stationInfo.defense_level" class="px-1.5 py-0.5 rounded text-[11px] bg-[#21262d] text-space-text-dim">🛡️ Def {{ stationInfo.defense_level }}</span>
         </div>
       </div>
-      <div v-else class="card py-2 px-3 text-xs text-space-text-dim italic">Station catalog info not available for this location.</div>
+      <div v-else class="card py-2 px-2 text-xs text-space-text-dim italic">Station catalog info not available for this location.</div>
 
-      <!-- Facility panels -->
-      <div class="card py-2 px-3">
-        <div class="flex items-center justify-between border-b border-space-border pb-2 mb-2">
+      <!-- Facility panel -->
+      <div class="card py-2 px-2">
+        <!-- Tab bar -->
+        <div class="flex items-center justify-between border-b border-space-border pb-2 mb-3">
           <div class="flex gap-0.5 flex-wrap">
-            <button @click="facilitySubTab = 'station'" class="px-2 py-0.5 text-xs rounded transition-colors" :class="facilitySubTab === 'station' ? 'bg-space-accent text-white' : 'text-space-text-dim hover:text-space-text'">🏢 Station</button>
-            <button @click="facilitySubTab = 'player'" class="px-2 py-0.5 text-xs rounded transition-colors" :class="facilitySubTab === 'player' ? 'bg-space-accent text-white' : 'text-space-text-dim hover:text-space-text'">👤 Personal{{ myPlayerFacilities.length ? ' ★'+myPlayerFacilities.length : facilities.player.length ? ' ('+facilities.player.length+')' : '' }}</button>
-            <button @click="facilitySubTab = 'faction'" class="px-2 py-0.5 text-xs rounded transition-colors" :class="facilitySubTab === 'faction' ? 'bg-space-accent text-white' : 'text-space-text-dim hover:text-space-text'">⚑ Faction{{ myFactionFacilities.length ? ' ★'+myFactionFacilities.length : facilities.faction.length ? ' ('+facilities.faction.length+')' : '' }}</button>
-            <button @click="facilitySubTab = 'build'; buildableTypes.length === 0 && loadBuildableTypes()" class="px-2 py-0.5 text-xs rounded transition-colors" :class="facilitySubTab === 'build' ? 'bg-space-accent text-white' : 'text-space-text-dim hover:text-space-text'">🔨 Build</button>
+            <button @click="tab = 'station'"
+              class="px-2 py-0.5 text-xs rounded transition-colors"
+              :class="tab === 'station' ? 'bg-space-accent text-white' : 'text-space-text-dim hover:text-space-text'">
+              🏢 Station<span v-if="stationFacilities.length" class="opacity-60 ml-0.5">({{ stationFacilities.length }})</span>
+            </button>
+            <button @click="switchToMine"
+              class="px-2 py-0.5 text-xs rounded transition-colors"
+              :class="tab === 'personal' ? 'bg-space-accent text-white' : 'text-space-text-dim hover:text-space-text'">
+              👤 Mine<span v-if="myFacilities.length" class="text-space-green ml-0.5">★{{ myFacilities.length }}</span>
+            </button>
+            <button @click="switchToBuild"
+              class="px-2 py-0.5 text-xs rounded transition-colors"
+              :class="tab === 'build' ? 'bg-space-accent text-white' : 'text-space-text-dim hover:text-space-text'">
+              🔨 Build
+            </button>
           </div>
-          <button @click="loadFacilities" :disabled="facilityLoading" class="btn btn-secondary text-xs py-0 px-2">{{ facilityLoading ? '⏳' : '🔄' }}</button>
+          <button @click="reloadAll" :disabled="loading" class="btn btn-secondary text-xs py-0 px-2">{{ loading ? '⏳' : '🔄' }}</button>
         </div>
 
-        <div v-if="facilityLoading && facilitySubTab !== 'build'" class="text-xs text-space-text-dim italic py-4 text-center">Loading facilities...</div>
+        <div v-if="loading && !stationFacilities.length" class="text-xs text-space-text-dim italic py-6 text-center">Loading facilities...</div>
 
-        <!-- Station Facilities -->
-        <div v-else-if="facilitySubTab === 'station'" class="space-y-2 max-h-[28rem] overflow-auto scrollbar-dark">
-          <div v-if="!facilities.station.length" class="text-xs text-space-text-dim italic py-4 text-center">No data — click 🔄 to fetch.</div>
-          <div v-for="f in facilities.station" :key="f.facility_id" class="bg-[#21262d] rounded-md p-2 text-xs">
-            <div class="flex items-start justify-between gap-2 mb-1">
-              <div class="font-medium text-space-text flex items-center gap-1">{{ f.name }}<span class="text-space-text-dim/40 hover:text-space-text-dim cursor-help select-none text-[10px]" @mouseenter="onFacilityHover($event, f.facility_type || f.type)" @mouseleave="onFacilityLeave">ⓘ</span></div>
-              <div class="flex gap-1 shrink-0">
-                <span class="px-1.5 py-0.5 rounded text-[10px]" :class="f.category === 'service' ? 'bg-blue-900/30 text-blue-400' : f.category === 'production' ? 'bg-amber-900/30 text-amber-400' : f.category === 'infrastructure' ? 'bg-purple-900/30 text-purple-400' : 'bg-[#30363d] text-space-text-dim'">{{ f.category }}</span>
-                <span v-if="!f.maintenance_satisfied" class="px-1.5 py-0.5 rounded text-[10px] bg-yellow-900/30 text-yellow-400">⚠️ maint</span>
-                <span v-if="!f.active" class="px-1.5 py-0.5 rounded text-[10px] bg-red-900/30 text-space-red">offline</span>
-              </div>
-            </div>
-            <div class="text-space-text-dim leading-relaxed">{{ f.description }}</div>
-            <div v-if="f.service" class="text-[10px] text-space-cyan mt-1">✦ {{ f.service }}</div>
-            <div v-if="f.recipe_id" class="text-[10px] text-space-accent mt-1">⚗️ {{ f.recipe_id }}</div>
+        <!-- ── Station Tab ─────────────────────────────────── -->
+        <template v-else-if="tab === 'station'">
+          <input v-model="stationSearch" type="text" placeholder="Search facilities…"
+            class="input text-xs w-full py-1 mb-2" />
+          <div v-if="!filteredStation.length" class="text-xs text-space-text-dim italic py-4 text-center">
+            No facilities found. Click 🔄 to fetch.
           </div>
-        </div>
-
-        <!-- Player Facilities -->
-        <div v-else-if="facilitySubTab === 'player'" class="space-y-3 max-h-[28rem] overflow-auto scrollbar-dark">
-          <div v-if="!facilities.player.length" class="text-xs text-space-text-dim italic py-4 text-center">No data — click 🔄 to fetch.</div>
-          <template v-else>
-            <!-- Own facilities -->
-            <div>
-              <div class="text-[10px] font-semibold uppercase tracking-wider mb-1.5 text-space-green flex items-center gap-1">
-                ★ Your Facilities <span class="font-normal text-space-text-dim">({{ myPlayerFacilities.length }})</span>
+          <div v-else class="space-y-4 max-h-[32rem] overflow-auto scrollbar-dark pr-0.5">
+            <div v-for="(group, cat) in groupedStation" :key="cat">
+              <div class="text-[11px] font-semibold uppercase tracking-wider mb-1.5"
+                :class="catColor(String(cat))">
+                {{ catIcon(String(cat)) }} {{ cat }}
+                <span class="font-normal opacity-60 ml-1">({{ group.length }})</span>
               </div>
-              <div v-if="!myPlayerFacilities.length" class="text-xs text-space-text-dim italic py-2 px-2 bg-[#1a1f27] rounded border border-dashed border-space-border">
-                No facilities at this station — use 🔨 Build to rent your first one.
-              </div>
-              <div v-else class="space-y-1.5">
-                <div v-for="f in myPlayerFacilities" :key="f.facility_id" class="bg-[#21262d] border border-green-900/40 rounded-md p-2 text-xs">
-                  <div class="flex items-start justify-between gap-2 mb-1">
-                    <div class="font-medium text-space-text flex items-center gap-1">{{ f.name }}<span class="text-space-text-dim/40 hover:text-space-text-dim cursor-help select-none text-[10px]" @mouseenter="onFacilityHover($event, f.facility_type || f.type)" @mouseleave="onFacilityLeave">ⓘ</span></div>
-                    <span class="px-1.5 py-0.5 rounded text-[10px] shrink-0" :class="f.active && f.maintenance_satisfied ? 'bg-green-900/30 text-space-green' : !f.active ? 'bg-red-900/30 text-space-red' : 'bg-yellow-900/30 text-yellow-400'">{{ f.active ? (f.maintenance_satisfied ? 'active' : '⚠️ degraded') : 'offline' }}</span>
-                  </div>
-                  <div class="flex flex-wrap gap-3 text-[10px]">
-                    <span v-if="f.rent_per_cycle" class="text-space-yellow">💰 {{ f.rent_per_cycle }} cr/cycle</span>
-                    <span v-if="f.bonus_type" class="text-space-cyan">+{{ f.bonus_value }} {{ f.bonus_type.replace(/_/g,' ') }}</span>
-                    <span v-if="f.personal_service" class="text-space-accent">{{ f.personal_service.replace(/_/g,' ') }}</span>
-                    <span v-if="f.recipe_id" class="text-space-accent">⚗️ {{ f.recipe_id }}</span>
-                  </div>
-                </div>
-              </div>
-            </div>
-            <!-- Others' facilities -->
-            <div v-if="othersPlayerFacilities.length">
-              <div class="text-[10px] font-semibold uppercase tracking-wider mb-1.5 text-space-text-dim">
-                Others at this Station ({{ othersPlayerFacilities.length }})
-              </div>
-              <div class="space-y-1">
-                <div v-for="f in othersPlayerFacilities" :key="f.facility_id"
-                  class="bg-[#1a1f27] rounded-md p-1.5 text-xs opacity-60 flex items-center justify-between gap-2"
-                  @mouseenter="f.owner_id ? onPlayerHover($event, f.owner_id) : undefined"
-                  @mouseleave="onPlayerLeave()">
-                  <div class="font-medium text-space-text-dim flex items-center gap-1 truncate">{{ f.name }}<span class="shrink-0 text-space-text-dim/40 hover:text-space-text-dim cursor-help select-none text-[10px]" @mouseenter.stop="onFacilityHover($event, f.facility_type || f.type)" @mouseleave.stop="onFacilityLeave">ⓘ</span></div>
-                  <div class="flex gap-2 shrink-0 text-[10px]">
-                    <span v-if="f.owner_id" class="text-space-text-dim/50 cursor-help" title="Hover row for player info">👤</span>
-                    <span v-if="f.bonus_type" class="text-space-cyan">+{{ f.bonus_value }} {{ f.bonus_type.replace(/_/g,' ') }}</span>
-                    <span v-if="f.rent_per_cycle" class="text-space-yellow">{{ f.rent_per_cycle }}cr</span>
-                    <span v-if="f.recipe_id" class="text-space-accent">⚗️ {{ f.recipe_id }}</span>
-                    <span v-if="f.personal_service" class="text-space-text-dim">{{ f.personal_service.replace(/_/g,' ') }}</span>
-                  </div>
-                </div>
-              </div>
-            </div>
-          </template>
-        </div>
-
-        <!-- Faction Facilities -->
-        <div v-else-if="facilitySubTab === 'faction'" class="space-y-3 max-h-[28rem] overflow-auto scrollbar-dark">
-          <div v-if="!facilities.faction.length" class="text-xs text-space-text-dim italic py-4 text-center">No data — click 🔄 to fetch.</div>
-          <template v-else>
-            <!-- Own faction facilities -->
-            <div>
-              <div class="text-[10px] font-semibold uppercase tracking-wider mb-1.5 text-purple-400 flex items-center gap-1">
-                ⚑ Your Faction <span class="font-normal text-space-text-dim">({{ myFactionFacilities.length }})</span>
-              </div>
-              <div v-if="!myFactionFacilities.length" class="text-xs text-space-text-dim italic py-2 px-2 bg-[#1a1f27] rounded border border-dashed border-space-border">
-                {{ botFactionId ? 'Your faction has no facilities at this station.' : 'Faction unknown — fetch status first.' }}
-              </div>
-              <div v-else class="space-y-1.5">
-                <div v-for="f in myFactionFacilities" :key="f.facility_id" class="bg-[#21262d] border border-purple-900/40 rounded-md p-2 text-xs">
-                  <div class="flex items-start justify-between gap-2 mb-0.5">
-                    <div class="font-medium text-space-text flex items-center gap-1">{{ f.name }}<span class="text-space-text-dim/40 hover:text-space-text-dim cursor-help select-none text-[10px]" @mouseenter="onFacilityHover($event, f.facility_type || f.type)" @mouseleave="onFacilityLeave">ⓘ</span></div>
-                    <div class="flex gap-1 shrink-0">
-                      <span v-if="!f.maintenance_satisfied" class="px-1.5 py-0.5 rounded text-[10px] bg-yellow-900/30 text-yellow-400">⚠️ maint</span>
-                      <span class="px-1.5 py-0.5 rounded text-[10px]" :class="f.active ? 'bg-purple-900/30 text-purple-400' : 'bg-red-900/30 text-space-red'">{{ f.active ? 'active' : 'offline' }}</span>
+              <div class="space-y-1.5">
+                <div v-for="f in group" :key="f.facility_id"
+                  class="bg-[#21262d] rounded-md p-2 text-xs cursor-pointer select-none"
+                  :class="f.yours ? 'border border-green-900/40' : ''"
+                  @click="toggleExpand(f.facility_id)">
+                  <div class="flex items-start justify-between gap-2">
+                    <div class="flex items-center gap-1.5 min-w-0">
+                      <span class="font-medium text-space-text truncate">{{ f.name }}</span>
+                      <span v-if="f.yours" class="shrink-0 text-[11px] px-1 py-0.5 rounded bg-green-900/30 text-space-green">yours</span>
+                    </div>
+                    <div class="flex gap-1 shrink-0 items-center">
+                      <span v-if="f.maintenance_satisfied === false" class="text-yellow-400 text-[11px]">⚠️</span>
+                      <span class="text-[11px] px-1.5 py-0.5 rounded"
+                        :class="f.active !== false ? 'bg-green-900/20 text-space-green' : 'bg-red-900/20 text-space-red'">
+                        {{ f.active !== false ? 'on' : 'off' }}
+                      </span>
+                      <span class="text-[11px] text-space-text-dim">{{ expanded.has(f.facility_id) ? '▲' : '▼' }}</span>
                     </div>
                   </div>
-                  <div class="flex flex-wrap gap-3 text-[10px]">
-                    <span v-if="f.faction_service" class="text-space-cyan">{{ f.faction_service.replace(/_/g,' ') }}</span>
-                    <span v-if="f.capacity" class="text-space-text-dim">Cap: {{ f.capacity }}</span>
+                  <!-- Expanded details -->
+                  <div v-if="expanded.has(f.facility_id)" class="pt-1.5 mt-1.5 border-t border-[#30363d] space-y-1">
+                    <div v-if="f.description" class="text-space-text-dim leading-relaxed">{{ f.description }}</div>
+                    <div class="flex flex-wrap gap-x-4 gap-y-0.5 text-[11px] mt-0.5">
+                      <span v-if="f.level" class="text-space-text-dim">Level {{ f.level }}</span>
+                      <span v-if="f.bonus_type" class="text-space-cyan">+{{ f.bonus_value }} {{ f.bonus_type?.replace(/_/g, ' ') }}</span>
+                      <span v-if="f.service || f.personal_service" class="text-space-accent">⚙️ {{ (f.service || f.personal_service)?.replace(/_/g, ' ') }}</span>
+                      <span v-if="f.faction_service" class="text-purple-400">⚑ {{ f.faction_service.replace(/_/g, ' ') }}</span>
+                      <span v-if="f.recipe_id" class="text-space-accent">⚗️ {{ f.recipe_id }}</span>
+                      <span v-if="f.capacity" class="text-space-text-dim">Cap: {{ f.capacity }}</span>
+                      <span v-if="f.rent_per_cycle" class="text-space-yellow">💰 {{ f.rent_per_cycle }}cr/cycle</span>
+                    </div>
+                    <div v-if="f.yours" class="flex gap-2 mt-1">
+                      <button @click.stop="toggleFacility(f)"
+                        :disabled="actionLoading === f.facility_id"
+                        class="btn text-[11px] px-2 py-0.5"
+                        :class="f.active !== false ? 'btn-secondary' : 'btn-primary'">
+                        {{ actionLoading === f.facility_id ? '⏳' : (f.active !== false ? '⏹ Disable' : '▶ Enable') }}
+                      </button>
+                    </div>
                   </div>
                 </div>
-              </div>
-            </div>
-            <!-- Other factions' facilities -->
-            <div v-if="otherFactionFacilities.length">
-              <div class="text-[10px] font-semibold uppercase tracking-wider mb-1.5 text-space-text-dim">
-                Other Factions ({{ otherFactionFacilities.length }})
-              </div>
-              <div class="space-y-1">
-                <div v-for="f in otherFactionFacilities" :key="f.facility_id" class="bg-[#1a1f27] rounded-md p-1.5 text-xs opacity-60 flex items-center justify-between gap-2">
-                  <div class="font-medium text-space-text-dim flex items-center gap-1 truncate">{{ f.name }}<span class="shrink-0 text-space-text-dim/40 hover:text-space-text-dim cursor-help select-none text-[10px]" @mouseenter="onFacilityHover($event, f.facility_type || f.type)" @mouseleave="onFacilityLeave">ⓘ</span></div>
-                  <div class="flex gap-2 shrink-0 text-[10px]">
-                    <span v-if="f.faction_service" class="text-space-text-dim">{{ f.faction_service.replace(/_/g,' ') }}</span>
-                    <span v-if="f.capacity" class="text-space-text-dim">Cap:{{ f.capacity }}</span>
-                  </div>
-                </div>
-              </div>
-            </div>
-          </template>
-        </div>
-
-        <!-- Build Tab -->
-        <div v-else-if="facilitySubTab === 'build'">
-          <div class="flex gap-2 mb-2">
-            <select v-model="buildCategoryFilter" @change="loadBuildableTypes(buildCategoryFilter)" class="input text-xs py-1 flex-1">
-              <option value="">All categories</option>
-              <option value="personal">Personal</option>
-              <option value="production">Production</option>
-              <option value="faction">Faction</option>
-            </select>
-            <button @click="loadBuildableTypes(buildCategoryFilter)" :disabled="buildableLoading" class="btn btn-secondary text-xs py-0 px-2">{{ buildableLoading ? '⏳' : '🔄' }}</button>
-          </div>
-          <div v-if="buildableLoading" class="text-xs text-space-text-dim italic py-4 text-center">Loading...</div>
-          <div v-else-if="!buildableTypes.length" class="text-xs text-space-text-dim italic py-4 text-center">Click 🔄 to load buildable types.</div>
-          <div v-else class="space-y-2 max-h-[28rem] overflow-auto scrollbar-dark">
-            <div v-for="t in buildableTypes" :key="t.id" class="bg-[#21262d] rounded-md p-2 text-xs flex items-start justify-between gap-2">
-              <div class="min-w-0 flex-1">
-                <div class="font-medium text-space-text flex items-center gap-1">{{ t.name }}<span class="text-space-text-dim/40 hover:text-space-text-dim cursor-help select-none text-[10px]" @mouseenter="onFacilityHover($event, t.id)" @mouseleave="onFacilityLeave">ⓘ</span></div>
-                <div class="flex flex-wrap gap-2 mt-0.5 text-[10px]">
-                  <span class="text-space-text-dim">Lv{{ t.level }}</span>
-                  <span class="text-space-text-dim">{{ t.category }}</span>
-                  <span v-if="t.bonus_type" class="text-space-cyan">+{{ t.bonus_value }} {{ t.bonus_type.replace(/_/g,' ') }}</span>
-                  <span v-if="t.personal_service" class="text-space-accent">{{ t.personal_service.replace(/_/g,' ') }}</span>
-                </div>
-              </div>
-              <div class="text-right shrink-0">
-                <div class="text-space-yellow text-[10px] mb-1">{{ t.build_cost?.toLocaleString() }} cr</div>
-                <div class="flex flex-col gap-1 items-end">
-                  <button
-                    v-if="t.buildable !== false"
-                    @click="buildFacility(t.id)"
-                    :disabled="facilityLoading || currentGatherGoal?.target_id === t.id || getFacilityState(t) === 'built' || (!!facilityTypeCache[t.id]?.build_materials?.length && !hasMaterialsInCargo(t.id))"
-                    class="btn btn-primary text-[10px] px-2 py-0.5 disabled:opacity-50 disabled:cursor-not-allowed"
-                    :title="currentGatherGoal?.target_id === t.id ? 'Gathering materials...' : (facilityTypeCache[t.id]?.build_materials?.length && !hasMaterialsInCargo(t.id)) ? 'Gather materials first' : ''">{{ getFacilityState(t) === 'built' ? '✓ Built' : getFacilityState(t) === 'upgrade' ? '⬆ Upgrade' : 'Build' }}</button>
-                  <span v-else class="text-[10px] text-space-text-dim italic">not buildable</span>
-                  <span v-if="currentGatherGoal?.target_id === t.id" class="text-[10px] text-space-cyan whitespace-nowrap flex items-center gap-1">
-                    ⚙️ Gathering
-                    <button @click="clearGatherGoal()" class="text-space-red hover:text-red-400 text-[10px]" title="Cancel goal">✕</button>
-                  </span>
-                  <button
-                    v-else-if="t.buildable !== false && !(facilityTypeCache[t.id] && (!facilityTypeCache[t.id].build_materials?.length || hasMaterialsInCargo(t.id)))"
-                    @click="gatherFacilityMaterials(t)"
-                    class="btn btn-secondary text-[10px] px-2 py-0.5 whitespace-nowrap">📦 Gather</button>
-                </div>
-              </div>
-            </div>
-          </div>
-        </div>
-      </div>
-    </template>
-
-    <!-- Player profile tooltip -->
-    <Teleport to="body">
-      <div v-if="playerTooltipVisible"
-        class="fixed z-[9999] w-72 bg-[#0d1117] border border-space-border rounded-lg shadow-2xl pointer-events-none text-xs"
-        :style="{ top: playerTooltipPos.y + 'px', left: playerTooltipPos.x + 'px' }">
-        <div v-if="playerTooltipLoading" class="p-3 text-space-text-dim text-center">Loading...</div>
-        <template v-else-if="playerTooltipData && !playerTooltipData.error">
-          <div class="flex items-center justify-between px-3 pt-3 pb-2 border-b border-space-border">
-            <span class="font-semibold text-space-text">{{ playerTooltipData.username }}</span>
-            <span class="text-[10px]" :class="playerTooltipData.online ? 'text-space-green' : 'text-space-text-dim'">{{ playerTooltipData.online ? '● online' : '○ offline' }}</span>
-          </div>
-          <div class="p-3 space-y-1 text-[10px] text-space-text-dim">
-            <div class="flex gap-4">
-              <span><span class="text-space-text-dim/50">Empire</span> {{ playerTooltipData.empire }}</span>
-              <span><span class="text-space-text-dim/50">Credits</span> <span class="text-space-yellow">{{ playerTooltipData.credits?.toLocaleString() }}</span></span>
-            </div>
-            <div v-if="playerTooltipData.faction_name"><span class="text-space-text-dim/50">Faction</span> {{ playerTooltipData.faction_name }} <span class="text-space-accent">({{ playerTooltipData.faction_rank }})</span></div>
-            <div><span class="text-space-text-dim/50">Location</span> {{ playerTooltipData.current_system }} / {{ playerTooltipData.current_poi }}</div>
-            <div v-if="playerTooltipData.home_base"><span class="text-space-text-dim/50">Home</span> {{ playerTooltipData.home_base }}</div>
-            <div v-if="playerTooltipData.ship" class="mt-2 pt-2 border-t border-space-border">
-              <div class="text-space-text mb-1">🚀 {{ playerTooltipData.ship.name }} <span class="text-space-text-dim/60">({{ playerTooltipData.ship.class_id?.replace(/_/g,' ') }})</span></div>
-              <div class="flex gap-3">
-                <span>Hull {{ playerTooltipData.ship.hull }}/{{ playerTooltipData.ship.max_hull }}</span>
-                <span>Fuel {{ playerTooltipData.ship.fuel }}/{{ playerTooltipData.ship.max_fuel }}</span>
-              </div>
-              <div>Cargo {{ playerTooltipData.ship.cargo_used }}/{{ playerTooltipData.ship.cargo_capacity }}</div>
-            </div>
-            <div v-if="playerTooltipData.skills && Object.keys(playerTooltipData.skills).length" class="mt-2 pt-2 border-t border-space-border">
-              <div class="text-space-text mb-1">Skills</div>
-              <div class="flex flex-wrap gap-1">
-                <span v-for="(level, skill) in playerTooltipData.skills" :key="skill" class="px-1 py-0.5 rounded bg-[#21262d] text-[9px]">{{ String(skill).replace(/_/g,' ') }} <span class="text-space-yellow">{{ level }}</span></span>
               </div>
             </div>
           </div>
         </template>
-        <div v-else class="p-3 text-space-text-dim text-center text-[10px]">No profile data</div>
-      </div>
-    </Teleport>
 
-    <!-- Facility type detail tooltip -->
-    <Teleport to="body">
-      <div v-if="facilityTooltipVisible && facilityTooltip"
-        class="fixed z-[9998] w-80 bg-[#0d1117] border border-space-border rounded-lg shadow-2xl pointer-events-none text-xs"
-        :style="{ top: facilityTooltipPos.y + 'px', left: facilityTooltipPos.x + 'px' }">
-        <div class="p-3 space-y-2 max-h-[70vh] overflow-y-auto scrollbar-dark">
-          <div v-if="facilityTooltip._loading" class="text-space-text-dim italic text-center py-2">Loading...</div>
-          <template v-else>
-            <div class="flex items-start justify-between gap-2">
-              <div class="font-semibold text-space-text-bright leading-tight">{{ facilityTooltip.name }}</div>
-              <div class="flex gap-1 shrink-0">
-                <span v-if="facilityTooltip.level" class="px-1.5 py-0.5 rounded text-[10px] bg-[#21262d] text-space-text-dim">Lv{{ facilityTooltip.level }}</span>
-                <span v-if="facilityTooltip.category" class="px-1.5 py-0.5 rounded text-[10px]" :class="facilityTooltip.category === 'personal' ? 'bg-green-900/30 text-space-green' : facilityTooltip.category === 'faction' ? 'bg-purple-900/30 text-purple-400' : 'bg-amber-900/30 text-amber-400'">{{ facilityTooltip.category }}</span>
-                <span v-if="facilityTooltip.buildable === false" class="px-1.5 py-0.5 rounded text-[10px] bg-red-900/20 text-space-red">locked</span>
+        <!-- ── Mine Tab ───────────────────────────────────── -->
+        <template v-else-if="tab === 'personal'">
+          <div v-if="!myFacilities.length" class="text-xs text-space-text-dim italic py-6 text-center space-y-2">
+            <div>You have no personal facilities at this station.</div>
+            <button @click="switchToBuild" class="btn btn-primary text-xs px-3 py-1">🔨 Browse Build Options</button>
+          </div>
+          <div v-else class="space-y-2 max-h-[32rem] overflow-auto scrollbar-dark pr-0.5">
+            <div v-for="f in myFacilities" :key="f.facility_id"
+              class="bg-[#21262d] border border-green-900/40 rounded-md p-2.5 text-xs">
+              <!-- Header -->
+              <div class="flex items-start justify-between gap-2 mb-1.5">
+                <div class="min-w-0">
+                  <div class="font-medium text-space-text-bright">{{ f.name }}</div>
+                  <div v-if="f.description" class="text-[11px] text-space-text-dim mt-0.5 leading-relaxed">{{ f.description }}</div>
+                </div>
+                <span class="px-1.5 py-0.5 rounded text-[11px] shrink-0"
+                  :class="f.active !== false && f.maintenance_satisfied !== false
+                    ? 'bg-green-900/30 text-space-green'
+                    : f.active === false
+                      ? 'bg-red-900/30 text-space-red'
+                      : 'bg-yellow-900/30 text-yellow-400'">
+                  {{ f.active !== false ? (f.maintenance_satisfied !== false ? 'active' : '⚠️ degraded') : 'offline' }}
+                </span>
               </div>
-            </div>
-            <div v-if="facilityTooltip.description" class="text-space-text-dim leading-relaxed">{{ facilityTooltip.description }}</div>
-            <div v-if="facilityTooltip.hint" class="bg-blue-950/40 border border-blue-900/40 rounded px-2 py-1.5 text-blue-300 leading-relaxed">
-              💡 {{ facilityTooltip.hint }}
-            </div>
-            <div class="pt-1 border-t border-[#21262d] grid grid-cols-2 gap-x-3 gap-y-1 text-[10px]">
-              <div v-if="facilityTooltip.build_cost != null" class="text-space-yellow">🏗️ {{ facilityTooltip.build_cost?.toLocaleString() }} cr</div>
-              <div v-if="facilityTooltip.labor_cost" class="text-space-yellow">👷 {{ facilityTooltip.labor_cost }} cr labor</div>
-              <div v-if="facilityTooltip.rent_per_cycle != null" class="text-space-yellow">🔄 {{ facilityTooltip.rent_per_cycle }} cr/cycle</div>
-              <div v-if="facilityTooltip.build_time" class="text-space-text-dim">⏱️ {{ facilityTooltip.build_time }} cycles</div>
-              <div v-if="facilityTooltip.bonus_type" class="text-space-cyan col-span-2">+{{ facilityTooltip.bonus_value }} {{ facilityTooltip.bonus_type?.replace(/_/g,' ') }}</div>
-              <div v-if="facilityTooltip.personal_service" class="text-space-accent col-span-2">⚙️ {{ facilityTooltip.personal_service?.replace(/_/g,' ') }}</div>
-              <div v-if="facilityTooltip.faction_service" class="text-purple-400 col-span-2">⚑ {{ facilityTooltip.faction_service?.replace(/_/g,' ') }}</div>
-              <div v-if="facilityTooltip.recipe_id" class="text-space-accent col-span-2">⚗️ {{ facilityTooltip.recipe_id }}</div>
-              <div v-if="facilityTooltip.capacity" class="text-space-text-dim">Cap: {{ facilityTooltip.capacity }}</div>
-            </div>
-            <div v-if="facilityTooltip.build_materials?.length" class="pt-1 border-t border-[#21262d]">
-              <div class="text-[10px] text-space-text-dim uppercase tracking-wider mb-1">Build Materials</div>
-              <div class="space-y-0.5">
-                <div v-for="m in facilityTooltip.build_materials" :key="m.item_id" class="flex justify-between text-[10px]">
-                  <span class="text-space-text">{{ m.name }}</span>
-                  <span class="text-space-text-dim">×{{ m.quantity }}</span>
+              <!-- Stats -->
+              <div class="flex flex-wrap gap-x-4 gap-y-0.5 text-[11px] mb-2">
+                <span v-if="f.level" class="text-space-text-dim">Level {{ f.level }}</span>
+                <span v-if="f.rent_per_cycle" class="text-space-yellow">💰 {{ f.rent_per_cycle }}cr/cycle</span>
+                <span v-if="f.bonus_type" class="text-space-cyan">+{{ f.bonus_value }} {{ f.bonus_type?.replace(/_/g, ' ') }}</span>
+                <span v-if="f.personal_service" class="text-space-accent">⚙️ {{ f.personal_service.replace(/_/g, ' ') }}</span>
+                <span v-if="f.recipe_id" class="text-space-accent">⚗️ {{ f.recipe_id }}</span>
+              </div>
+              <!-- Actions -->
+              <div class="flex gap-2 flex-wrap">
+                <button @click="toggleFacility(f)"
+                  :disabled="actionLoading === f.facility_id"
+                  class="btn text-[11px] px-2 py-0.5"
+                  :class="f.active !== false ? 'btn-secondary' : 'btn-primary'">
+                  {{ actionLoading === f.facility_id ? '⏳' : (f.active !== false ? '⏹ Disable' : '▶ Enable') }}
+                </button>
+                <button v-if="upgradesFor(f.facility_id).length"
+                  @click="activeUpgrade = activeUpgrade === f.facility_id ? null : f.facility_id"
+                  class="btn btn-secondary text-[11px] px-2 py-0.5">
+                  ⬆ Upgrades ({{ upgradesFor(f.facility_id).length }})
+                </button>
+              </div>
+              <!-- Inline upgrade options -->
+              <div v-if="activeUpgrade === f.facility_id" class="mt-2 pt-2 border-t border-[#30363d] space-y-1.5">
+                <div class="text-[11px] font-semibold uppercase tracking-wider text-space-text-dim mb-1">Available Upgrades</div>
+                <div v-for="u in upgradesFor(f.facility_id)" :key="u.facility_type || u.id"
+                  class="flex items-center justify-between gap-2 bg-[#1a1f27] rounded px-2 py-1.5 text-[11px]">
+                  <div class="min-w-0">
+                    <div class="text-space-text font-medium">{{ u.name }}</div>
+                    <div v-if="u.description" class="text-space-text-dim mt-0.5 leading-relaxed line-clamp-2">{{ u.description }}</div>
+                    <div class="flex gap-3 mt-0.5">
+                      <span v-if="u.build_cost" class="text-space-yellow">{{ u.build_cost?.toLocaleString() }}cr</span>
+                      <span v-if="u.bonus_type" class="text-space-cyan">+{{ u.bonus_value }} {{ u.bonus_type?.replace(/_/g, ' ') }}</span>
+                    </div>
+                  </div>
+                  <button @click="upgradeFacility(f, u.facility_type || u.id)"
+                    :disabled="actionLoading === f.facility_id"
+                    class="btn btn-primary text-[11px] px-2 py-0.5 shrink-0">
+                    {{ actionLoading === f.facility_id ? '⏳' : '⬆ Upgrade' }}
+                  </button>
                 </div>
               </div>
             </div>
-            <div v-if="facilityTooltip.upgrades_from || facilityTooltip.upgrades_to" class="pt-1 border-t border-[#21262d] space-y-0.5 text-[10px]">
-              <div v-if="facilityTooltip.upgrades_from" class="text-space-text-dim">⬆ From: <span class="text-space-text">{{ facilityTooltip.upgrades_from_name || facilityTooltip.upgrades_from }}</span></div>
-              <div v-if="facilityTooltip.upgrades_to" class="text-space-cyan">→ Next: <span class="text-space-text">{{ facilityTooltip.upgrades_to_name || facilityTooltip.upgrades_to }}</span></div>
+          </div>
+        </template>
+
+        <!-- ── Build Tab ──────────────────────────────────── -->
+        <template v-else-if="tab === 'build'">
+          <div class="flex gap-2 mb-2">
+            <select v-model="buildCategory" @change="loadTypes" class="input text-xs py-1 flex-1">
+              <option value="personal">Personal facilities</option>
+              <option value="production">Production facilities</option>
+              <option value="">All categories</option>
+            </select>
+            <button @click="loadTypes" :disabled="typesLoading" class="btn btn-secondary text-xs py-0 px-2">
+              {{ typesLoading ? '...' : '↺' }}
+            </button>
+          </div>
+          <!-- Current gatherer goal banner -->
+          <div v-if="currentGathererGoal" class="mb-2 px-2 py-1.5 rounded text-[11px] bg-space-accent/10 border border-space-accent/30 flex items-start justify-between gap-2">
+            <div class="min-w-0">
+              <span class="text-space-accent font-semibold">📦 Gather goal:</span>
+              <span class="text-space-text ml-1">{{ currentGathererGoal.target_name }}</span>
+              <span class="flex flex-wrap gap-1 mt-1">
+                <span v-for="m in currentGathererGoal.materials" :key="m.item_id" class="px-1.5 py-0.5 rounded bg-[#21262d] text-space-text-dim">{{ m.quantity_needed }}× {{ m.item_name }}</span>
+              </span>
             </div>
-            <div v-if="facilityTooltip.requirements && Object.keys(facilityTooltip.requirements).length" class="pt-1 border-t border-[#21262d]">
-              <div class="text-[10px] text-space-text-dim uppercase tracking-wider mb-1">Requirements</div>
-              <div v-for="(val, key) in facilityTooltip.requirements" :key="key" class="text-[10px] text-space-text-dim">{{ String(key).replace(/_/g,' ') }}: {{ val }}</div>
+            <button @click="botStore.saveSettings(props.bot.username, { goal: null })" class="btn btn-secondary text-[11px] px-1.5 py-0.5 shrink-0">✕</button>
+          </div>
+          <div v-if="typesLoading" class="text-xs text-space-text-dim italic py-6 text-center">Loading types...</div>
+          <div v-else-if="!facilityTypes.length" class="text-xs text-space-text-dim italic py-6 text-center">No types found — click ↺ to reload.</div>
+          <div v-else class="space-y-2 max-h-[32rem] overflow-auto scrollbar-dark pr-0.5">
+            <!-- Prerequisite banner inside list so it doesn't hide the type cards -->
+            <div v-if="buildCategory === 'personal' && !hasQuarters"
+              class="mb-1 px-2 py-1.5 rounded text-[11px] bg-yellow-900/20 border border-yellow-700/30 text-yellow-400 flex items-start gap-1.5">
+              <span class="shrink-0">⚠️</span>
+              <span><strong>Crew Bunk required</strong> — build Personal Quarters first before any other personal facility.</span>
             </div>
-          </template>
-        </div>
+            <div v-for="t in facilityTypes" :key="t.id"
+              class="bg-[#21262d] rounded-md p-2 text-xs transition-opacity"
+              :class="[
+                isBuilt(t.id) ? 'border border-green-900/30' : '',
+                !t.buildable && !isBuilt(t.id) ? 'opacity-50' : ''
+              ]">
+              <div class="flex items-start justify-between gap-2 mb-1">
+                <div class="min-w-0 flex-1">
+                  <div class="flex items-center gap-1.5 flex-wrap">
+                    <span class="font-medium" :class="!t.buildable && !isBuilt(t.id) ? 'text-space-text-dim' : 'text-space-text'">{{ t.name }}</span>
+                    <span class="text-[11px] text-space-text-dim">Lv{{ t.level }}</span>
+                    <span v-if="isBuilt(t.id)" class="text-[11px] px-1 py-0.5 rounded bg-green-900/30 text-space-green">✓ built</span>
+                    <span v-else-if="!t.buildable" class="text-[11px] px-1 py-0.5 rounded bg-[#30363d] text-space-text-dim">🔒 locked</span>
+                    <span class="text-[11px] px-1 py-0.5 rounded bg-[#30363d] text-space-text-dim capitalize">{{ t.category }}</span>
+                  </div>
+                  <div v-if="t.description" class="text-[11px] text-space-text-dim mt-0.5 leading-relaxed line-clamp-2">{{ t.description }}</div>
+                  <div v-if="!t.buildable && !isBuilt(t.id)" class="text-[11px] text-yellow-600 mt-0.5">Requires prerequisite facility</div>
+                </div>
+                <div class="text-right shrink-0">
+                  <div class="text-space-yellow text-[11px] mb-1">{{ t.build_cost != null ? t.build_cost.toLocaleString() + ' cr' : '—' }}</div>
+                  <button @click="buildFacility(t)"
+                    :disabled="isBuilt(t.id) || !t.buildable || actionLoading === t.id"
+                    class="btn text-[11px] px-2 py-0.5 disabled:opacity-40 disabled:cursor-not-allowed"
+                    :class="isBuilt(t.id) ? 'btn-secondary' : t.buildable ? 'btn-primary' : 'btn-secondary'">
+                    {{ actionLoading === t.id ? '...' : isBuilt(t.id) ? '✓ Built' : !t.buildable ? '🔒 Locked' : '🔨 Build' }}
+                  </button>
+                  <div v-if="buildErrors[t.id]" class="text-[11px] text-red-400 mt-1 text-right">⚠ {{ buildErrors[t.id] }}</div>
+                </div>
+              </div>
+              <!-- Bonuses row -->
+              <div class="flex flex-wrap gap-x-3 gap-y-0.5 text-[11px]">
+                <span v-if="t.bonus_type" class="text-space-cyan">+{{ t.bonus_value }} {{ t.bonus_type?.replace(/_/g, ' ') }}</span>
+                <span v-if="t.personal_service" class="text-space-accent">⚙️ {{ t.personal_service.replace(/_/g, ' ') }}</span>
+                <span v-if="t.rent_per_cycle" class="text-space-yellow">💰 {{ t.rent_per_cycle }}cr/cycle</span>
+                <span v-if="t.build_time" class="text-space-text-dim">⏱ {{ t.build_time }} cycles</span>
+              </div>
+              <!-- Materials (populated after detail fetch) -->
+              <div v-if="buildMaterials(t).length" class="mt-1.5 pt-1.5 border-t border-[#30363d] flex items-end justify-between gap-2">
+                <div class="min-w-0">
+                  <div class="text-[11px] text-space-text-dim uppercase tracking-wider mb-0.5">Materials required</div>
+                  <div class="flex flex-wrap gap-x-3 gap-y-0.5 text-[11px] text-space-text-dim">
+                    <span v-for="m in buildMaterials(t)" :key="m.item_id">{{ m.name || m.item_name || m.item_id }} ×{{ m.quantity || m.quantity_needed }}</span>
+                  </div>
+                </div>
+                <button v-if="!isBuilt(t.id)" @click="setGathererGoal(t)"
+                  class="btn btn-secondary text-[11px] px-2 py-0.5 shrink-0 whitespace-nowrap">
+                  📦 Gather
+                </button>
+              </div>
+              <div v-else-if="!typeDetails[t.id]" class="mt-1 text-[11px] text-space-text-dim/40 italic">Loading details...</div>
+            </div>
+          </div>
+        </template>
       </div>
-    </Teleport>
+    </template>
   </div>
 </template>
 
 <script setup lang="ts">
-import { ref, computed, onMounted } from 'vue';
+import { ref, computed, watch, onMounted } from 'vue';
 import { useBotStore } from '../stores/botStore';
 
 const props = defineProps<{ bot: any }>();
@@ -310,317 +285,339 @@ const emit = defineEmits<{
 
 const botStore = useBotStore();
 
-// Facility state
-const facilitySubTab = ref<'station' | 'player' | 'faction' | 'build'>('station');
-const facilityLoading = ref(false);
-const facilities = ref<{ station: any[]; player: any[]; faction: any[] }>({ station: [], player: [], faction: [] });
-const buildableTypes = ref<any[]>([]);
-const buildableLoading = ref(false);
-const buildCategoryFilter = ref('');
-const botPlayerId = ref('');
-const botFactionId = ref('');
-const facilityTypeCache = ref<Record<string, any>>({});
-const facilityTooltip = ref<any>(null);
-const facilityTooltipPos = ref({ x: 0, y: 0 });
-const facilityTooltipVisible = ref(false);
+// ── State ─────────────────────────────────────────────────────
+const tab = ref<'station' | 'personal' | 'build'>('station');
+const loading = ref(false);
+const typesLoading = ref(false);
+const actionLoading = ref<string | null>(null);
 
-// Player tooltip state
-const playerInfoCache = ref(new Map<string, any>());
-const playerTooltipData = ref<any>(null);
-const playerTooltipPos = ref({ x: 0, y: 0 });
-const playerTooltipVisible = ref(false);
-const playerTooltipLoading = ref(false);
+const stationFacilities = ref<any[]>([]);
+const myFacilities = ref<any[]>([]);
+const upgradeMap = ref<Record<string, any[]>>({}); // facility_id → upgrade options
+const facilityTypes = ref<any[]>([]);
 
-// Computed
-const currentBot = computed(() => {
-  const bot = botStore.bots.find(b => b.username === props.bot.username);
-  return bot || props.bot;
-});
+const currentPlayerId = ref<string>(''); // fetched once via get_status; used to filter player_facilities
 
-const inventory = computed(() => currentBot.value.inventory || []);
+const buildCategory = ref('personal');
+const stationSearch = ref('');
+const expanded = ref(new Set<string>());
+const activeUpgrade = ref<string | null>(null);
+const buildErrors = ref<Record<string, string>>({});
+const typeDetails = ref<Record<string, any>>({}); // facility_type id → detailed type info (build_materials etc.)
 
-const myPlayerFacilities = computed(() =>
-  facilities.value.player.filter((f: any) =>
-    f.yours === true || (botPlayerId.value && f.owner_id === botPlayerId.value)
-  )
+// ── Computed ──────────────────────────────────────────────────
+const hasQuarters = computed(() =>
+  myFacilities.value.some((f: any) => f.personal_service === 'quarters')
 );
-
-const othersPlayerFacilities = computed(() =>
-  facilities.value.player.filter((f: any) =>
-    f.yours !== true && (!botPlayerId.value || f.owner_id !== botPlayerId.value)
-  )
+const currentBot = computed(() =>
+  botStore.bots.find(b => b.username === props.bot.username) || props.bot
 );
-
-const myFactionFacilities = computed(() => {
-  if (!botFactionId.value) return [];
-  return facilities.value.faction.filter((f: any) => f.faction_id === botFactionId.value);
-});
-
-const otherFactionFacilities = computed(() => {
-  if (!botFactionId.value) return facilities.value.faction;
-  return facilities.value.faction.filter((f: any) => f.faction_id !== botFactionId.value);
-});
-
-const currentGatherGoal = computed(() => (botStore.settings?.gatherer?.goal as any) || null);
-
-const myBuiltFacilityTypeIds = computed(() =>
-  new Set(myPlayerFacilities.value.map((f: any) => f.type).filter(Boolean))
+const currentGathererGoal = computed(() =>
+  (botStore.settings as any)?.[props.bot.username]?.goal ??
+  (botStore.settings as any)?.gatherer?.goal ?? null
 );
-
-const myBuiltServiceFacilities = computed(() => {
-  const map = new Map<string, any>();
-  myPlayerFacilities.value.forEach((f: any) => {
-    const svc = f.personal_service || f.faction_service;
-    if (svc) map.set(svc, f);
-  });
-  return map;
-});
 
 const stationInfo = computed(() => {
   const bot = currentBot.value;
-  if (!bot || !botStore.publicStations.length) return null;
-  const poi = (bot as any).poi || '';
-  const sys = (bot as any).system || (bot as any).location || '';
-  return botStore.publicStations.find((st: any) =>
-    st.id === poi || st.system_id === sys
+  if (!bot || !(botStore as any).publicStations?.length) return null;
+  return (botStore as any).publicStations.find((st: any) =>
+    st.id === (bot as any).poi || st.system_id === (bot as any).system
   ) || null;
 });
 
-// Helpers
-function getFacilityState(t: any): 'built' | 'upgrade' | 'build' {
-  if (myBuiltFacilityTypeIds.value.has(t.id)) return 'built';
-  const svc = t.personal_service || t.faction_service
-    || facilityTypeCache.value[t.id]?.personal_service
-    || facilityTypeCache.value[t.id]?.faction_service;
-  if (svc && myBuiltServiceFacilities.value.has(svc)) return 'upgrade';
-  return 'build';
+const filteredStation = computed(() => {
+  const q = stationSearch.value.toLowerCase().trim();
+  if (!q) return stationFacilities.value;
+  return stationFacilities.value.filter((f: any) =>
+    (f.name || '').toLowerCase().includes(q) ||
+    (f.description || '').toLowerCase().includes(q) ||
+    (f.category || '').toLowerCase().includes(q)
+  );
+});
+
+const groupedStation = computed(() => {
+  const order = ['service', 'production', 'personal', 'infrastructure', 'faction', 'other'];
+  const groups: Record<string, any[]> = {};
+  for (const f of filteredStation.value) {
+    const cat = f.category || 'other';
+    if (!groups[cat]) groups[cat] = [];
+    groups[cat].push(f);
+  }
+  const sorted = order.filter(k => groups[k]).map(k => [k, groups[k]] as [string, any[]]);
+  const rest = Object.entries(groups).filter(([k]) => !order.includes(k));
+  return Object.fromEntries([...sorted, ...rest]);
+});
+
+// ── Helpers ───────────────────────────────────────────────────
+function catIcon(cat: string): string {
+  const m: Record<string, string> = { production: '⚗️', service: '🔧', personal: '👤', faction: '⚑', infrastructure: '🏗️' };
+  return m[cat] ?? '🏢';
 }
 
-function hasMaterialsInCargo(typeId: string): boolean {
-  const mats = facilityTypeCache.value[typeId]?.build_materials;
-  if (!mats?.length) return true;
-  return mats.every((m: any) => {
-    const inCargo = inventory.value.find((i: any) => i.itemId === m.item_id);
-    return inCargo && inCargo.quantity >= m.quantity;
-  });
+function catColor(cat: string): string {
+  const m: Record<string, string> = { production: 'text-amber-400', service: 'text-blue-400', personal: 'text-space-green', faction: 'text-purple-400' };
+  return m[cat] ?? 'text-space-text-dim';
 }
 
-// Exec helpers
-function execCommand(command: string, params?: any) {
-  const username = currentBot.value?.username || props.bot.username;
-  if (!username) return;
-  if (command !== 'catalog')
-    botStore.logs.push({ bot: username, type: 'info', message: `Executing: ${command}${params ? ' ' + JSON.stringify(params) : ''}` });
-  botStore.sendExec(username, command, params, (result: any) => {
-    if (result.ok) {
-      if (command !== 'catalog')
-        botStore.logs.push({ bot: username, type: 'success', message: `${command}: OK` });
-      processExecResult(command, result.data);
-    } else {
-      const errMsg = result.error || 'Unknown error';
-      botStore.logs.push({ bot: username, type: 'error', message: `${command}: ${errMsg}` });
-      emit('notif', errMsg, 'error');
-    }
-  });
+// ── Helpers ──────────────────────────────────────────────────
+function buildMaterials(t: any): any[] {
+  return typeDetails.value[t.id]?.build_materials || t.build_materials || [];
 }
 
+// ── Error message parser ──────────────────────────────────────
+function parseBuildError(raw: string): string {
+  // Strip error code prefix: "build_failed: " or "error_code: "
+  const msg = raw.replace(/^[\w_]+:\s*/i, '').trim();
+  // Parse "need N x item_id, have X in storage + Y in cargo"
+  const m = msg.match(/need (\d+) x ([\w_]+),?\s*have (\d+) in storage \+ (\d+) in cargo/i);
+  if (m) {
+    const qty = m[1], itemId = m[2].replace(/_/g, ' '), inStorage = parseInt(m[3]), inCargo = parseInt(m[4]);
+    const have = inStorage + inCargo;
+    return `Missing: ${qty}\u00d7 ${itemId} (have ${have})`;
+  }
+  // Parse prerequisite errors
+  if (msg.toLowerCase().includes('personal quarters')) return 'Build Crew Bunk (Personal Quarters) first.';
+  return msg;
+}
+
+function isBuilt(typeId: string): boolean {
+  return myFacilities.value.some((f: any) => f.type === typeId);
+}
+
+function upgradesFor(facilityId: string): any[] {
+  return upgradeMap.value[facilityId] || [];
+}
+
+function toggleExpand(id: string): void {
+  if (expanded.value.has(id)) expanded.value.delete(id);
+  else expanded.value.add(id);
+}
+
+// ── Exec helper ───────────────────────────────────────────────
 function execAsync(command: string, params?: any): Promise<any> {
-  return new Promise((resolve) => {
+  return new Promise(resolve => {
     const username = currentBot.value?.username;
     if (!username) return resolve({ ok: false, error: 'No bot selected' });
-    botStore.sendExec(username, command, params, (result: any) => resolve(result));
+    botStore.sendExec(username, command, params, (r: any) => resolve(r));
   });
 }
 
-function showNotif(text: string, type: 'success' | 'warn' | 'error') {
+function notif(text: string, type: 'success' | 'warn' | 'error'): void {
   emit('notif', text, type);
 }
 
-function processExecResult(command: string, data: any) {
-  if (!data) return;
-  switch (command) {
-    case 'get_status': {
-      if (data.player_id) botPlayerId.value = data.player_id;
-      if (data.faction?.id) botFactionId.value = data.faction.id;
-      else if (data.faction_id) botFactionId.value = data.faction_id;
-      break;
-    }
-    case 'facility': {
-      if (data?.station_facilities !== undefined || data?.player_facilities !== undefined) {
-        facilities.value = {
-          station: data.station_facilities || [],
-          player: data.player_facilities || [],
-          faction: data.faction_facilities || [],
-        };
-        if (!botPlayerId.value) {
-          const mine = (data.player_facilities || []).find((f: any) => f.yours === true);
-          if (mine?.owner_id) botPlayerId.value = mine.owner_id;
-        }
-        facilityLoading.value = false;
-      } else if (data?.types !== undefined) {
-        buildableTypes.value = [...buildableTypes.value, ...(data.types || [])];
-        buildableLoading.value = false;
-        if ((data.page || 1) < (data.total_pages || 1) && data.types.length > 0) {
-          const nextParams: any = { action: 'types', page: (data.page || 1) + 1 };
-          if (buildCategoryFilter.value) nextParams.category = buildCategoryFilter.value;
-          execCommand('facility', nextParams);
-        }
-      } else if (data?.result?.facility_name) {
-        const built = data.result;
-        const xpStr = built.skill_xp
-          ? ' +' + Object.entries(built.skill_xp).map(([k, v]) => `${v} ${k}`).join(', ')
-          : '';
-        showNotif(built.hint || `✅ Built ${built.facility_name}!${xpStr}`, 'success');
-        buildableTypes.value = buildableTypes.value.filter((t: any) => t.id !== built.facility_type);
-        const builtAction = built.action as string;
-        facilitySubTab.value = builtAction === 'faction_build' ? 'faction' : 'player';
-        loadFacilities();
-      }
-      break;
-    }
+// ── Data loading ──────────────────────────────────────────────
+async function fetchPlayerId(): Promise<void> {
+  if (currentPlayerId.value) return;
+  const res = await execAsync('get_status', {});
+  if (res.ok && res.data) {
+    const pid = res.data.player?.id || res.data.player?.player_id || res.data.id || res.data.player_id || '';
+    if (pid) currentPlayerId.value = pid;
   }
 }
 
-// Facility actions
-function loadFacilities() {
-  facilityLoading.value = true;
-  execCommand('facility', { action: 'list' });
-}
-
-function loadBuildableTypes(category = '') {
-  buildableLoading.value = true;
-  buildableTypes.value = [];
-  buildCategoryFilter.value = category;
-  const params: any = { action: 'types', page: 1 };
-  if (category) params.category = category;
-  execCommand('facility', params);
-}
-
-function buildFacility(typeId: string) {
-  const info = facilityTypeCache.value[typeId] || buildableTypes.value.find((t: any) => t.id === typeId);
-  const category = info?.category || '';
-  const svc = info?.personal_service || info?.faction_service || '';
-  const existingFacility = svc ? myBuiltServiceFacilities.value.get(svc) : null;
-  if (existingFacility && !myBuiltFacilityTypeIds.value.has(typeId)) {
-    execCommand('facility', { action: 'upgrade', facility_id: existingFacility.facility_id, facility_type: typeId });
-  } else {
-    const action = category === 'personal' ? 'personal_build'
-      : category === 'faction' ? 'faction_build'
-      : 'build';
-    execCommand('facility', { action, facility_type: typeId });
-  }
-}
-
-async function onFacilityHover(e: MouseEvent, typeId: string | undefined) {
-  if (!typeId) return;
-  facilityTooltipVisible.value = true;
-  const el = (e.currentTarget as HTMLElement).getBoundingClientRect();
-  facilityTooltipPos.value = {
-    x: Math.min(el.right + 8, window.innerWidth - 328),
-    y: Math.max(4, Math.min(el.top, window.innerHeight - 280)),
-  };
-  if (facilityTypeCache.value[typeId]) {
-    facilityTooltip.value = facilityTypeCache.value[typeId];
-    return;
-  }
-  facilityTooltip.value = { _loading: true };
-  const result = await execAsync('facility', { action: 'types', facility_type: typeId });
-  if (result.ok && result.data) {
-    const info = (result.data.types || [])[0] ?? result.data;
-    facilityTypeCache.value[typeId] = info;
-    if (facilityTooltipVisible.value) facilityTooltip.value = info;
-  }
-}
-
-function onFacilityLeave() {
-  facilityTooltipVisible.value = false;
-}
-
-// Gather goal actions
-async function gatherFacilityMaterials(t: any) {
-  const username = currentBot.value?.username;
-  if (!username) return;
-
-  let mats = t.build_materials as { item_id: string; name: string; quantity: number }[] | undefined;
-
-  if (!mats?.length) {
-    if (!facilityTypeCache.value[t.id]) {
-      const result = await execAsync('facility', { action: 'types', facility_type: t.id });
-      if (result.ok && result.data) {
-        const info = (result.data.types || [])[0] ?? result.data;
-        facilityTypeCache.value[t.id] = info;
-      }
-    }
-    mats = facilityTypeCache.value[t.id]?.build_materials;
-  }
-
-  if (!mats?.length) {
-    showNotif(`No build materials defined for ${t.name}`, 'warn');
-    return;
-  }
-
-  const bot = currentBot.value;
-  botStore.saveSettings('gatherer', {
-    goal: {
-      id: `factory_${t.id}_${Date.now()}`,
-      target_id: t.id,
-      target_name: t.name,
-      target_poi: bot?.poi || '',
-      target_system: bot?.system || (bot as any)?.location || '',
-      materials: mats.map(m => ({
-        item_id: m.item_id,
-        item_name: m.name,
-        quantity_needed: m.quantity,
-      })),
-    },
-  });
-
-  showNotif(`📦 Gather goal created: ${t.name}`, 'success');
-}
-
-function clearGatherGoal() {
-  botStore.saveSettings('gatherer', { goal: null });
-  showNotif('Gather goal cleared', 'warn');
-}
-
-// Player tooltip
-async function onPlayerHover(e: MouseEvent, ownerId: string | undefined) {
-  if (!ownerId) return;
-  playerTooltipVisible.value = true;
-  playerTooltipLoading.value = true;
-  playerTooltipData.value = playerInfoCache.value.get(ownerId) || null;
-  const el = (e.currentTarget as HTMLElement).getBoundingClientRect();
-  playerTooltipPos.value = {
-    x: Math.min(el.right + 8, window.innerWidth - 308),
-    y: Math.max(4, Math.min(el.top, window.innerHeight - 360)),
-  };
-  if (playerInfoCache.value.has(ownerId)) {
-    playerTooltipLoading.value = false;
-    return;
-  }
+async function loadFacilities(): Promise<void> {
+  loading.value = true;
   try {
-    const resp = await fetch(`/api/player-info/${ownerId}`);
-    const data = await resp.json();
-    playerInfoCache.value.set(ownerId, data);
-    playerTooltipData.value = data;
-  } catch {
-    playerTooltipData.value = null;
+    await fetchPlayerId();
+    const res = await execAsync('facility', { action: 'list' });
+    if (!res.ok) { notif(res.error || 'Failed to load facilities', 'error'); return; }
+    const d = res.data || {};
+
+    const stationList: any[] = d.station_facilities || [];
+    const playerList: any[] = d.player_facilities || [];
+    const factionList: any[] = d.faction_facilities || [];
+
+    if (stationList.length || playerList.length || factionList.length) {
+      // v2 split format — player_facilities contains ALL players' personal facilities at this station
+      // filter to only current bot's by matching owner_id
+      const mine = currentPlayerId.value
+        ? playerList.filter((f: any) => f.owner_id === currentPlayerId.value)
+        : playerList;
+      stationFacilities.value = [
+        ...stationList,
+        ...mine.map((f: any) => ({ ...f, yours: true })),
+        ...factionList,
+      ];
+      myFacilities.value = mine;
+    } else {
+      // flat list fallback
+      const all: any[] = Array.isArray(d) ? d : (d.facilities || []);
+      stationFacilities.value = all;
+      myFacilities.value = all.filter((f: any) => f.yours === true);
+    }
+  } finally {
+    loading.value = false;
   }
-  playerTooltipLoading.value = false;
 }
 
-function onPlayerLeave() {
-  playerTooltipVisible.value = false;
+async function loadUpgrades(): Promise<void> {
+  if (!myFacilities.value.length) return;
+  const res = await execAsync('facility', { action: 'upgrades' });
+  if (!res.ok) return;
+  const d = res.data || {};
+  const list: any[] = d.upgrades || d.available_upgrades || (Array.isArray(d) ? d : []);
+  const map: Record<string, any[]> = {};
+  for (const entry of list) {
+    const id: string = entry.facility_id;
+    if (!id) continue;
+    const opts: any[] = entry.available_upgrades || entry.upgrades || (entry.facility_type ? [entry] : []);
+    if (opts.length) map[id] = opts;
+  }
+  upgradeMap.value = map;
 }
 
-// Called by parent when switching to station tab
-function maybeLoad() {
-  if (!facilities.value.station.length) loadFacilities();
+async function loadTypeDetails(): Promise<void> {
+  const types = facilityTypes.value;
+  if (!types.length) return;
+  await Promise.all(types.map(async (t: any) => {
+    if (typeDetails.value[t.id]) return;
+    const res = await execAsync('facility', { action: 'types', facility_type: t.id });
+    if (res.ok && res.data) {
+      const detail = res.data.types?.[0] || res.data || {};
+      typeDetails.value[t.id] = detail;
+    }
+  }));
+}
+
+function setGathererGoal(t: any): void {
+  const mats = buildMaterials(t);
+  if (!mats.length) { notif('No build materials for this facility', 'warn'); return; }
+  const bot = currentBot.value as any;
+  const goal = {
+    id: `goal_${t.id}_${Date.now()}`,
+    target_id: t.id,
+    target_name: t.name,
+    target_poi: bot?.poi || '',
+    target_system: bot?.system || '',
+    materials: mats.map((m: any) => ({
+      item_id: m.item_id || '',
+      item_name: m.name || m.item_name || (m.item_id || '').replace(/_/g, ' '),
+      quantity_needed: m.quantity || m.quantity_needed || 1,
+    })),
+  };
+  botStore.saveSettings(props.bot.username, { goal });
+  notif(`Gather goal set: ${t.name} (×${mats.length} material type${mats.length > 1 ? 's' : ''})`, 'success');
+}
+
+async function loadTypes(): Promise<void> {
+  typesLoading.value = true;
+  facilityTypes.value = [];
+  typeDetails.value = {};
+  try {
+    let page = 1;
+    while (true) {
+      const params: any = { action: 'types', page };
+      if (buildCategory.value) params.category = buildCategory.value;
+      const res = await execAsync('facility', params);
+      if (!res.ok) { notif(res.error || 'Failed to load facility types', 'error'); break; }
+      const d = res.data || {};
+      const types: any[] = d.types || (Array.isArray(d) ? d : []);
+      facilityTypes.value.push(...types);
+      if (!types.length || (d.page || 1) >= (d.total_pages || 1)) break;
+      if (++page > 15) break;
+    }
+  } finally {
+    typesLoading.value = false;
+  }
+  loadTypeDetails(); // background — fills build_materials per type
+}
+
+async function reloadAll(): Promise<void> {
+  await loadFacilities();
+  if (myFacilities.value.length) await loadUpgrades();
+}
+
+// ── Actions ───────────────────────────────────────────────────
+async function toggleFacility(f: any): Promise<void> {
+  actionLoading.value = f.facility_id;
+  try {
+    const res = await execAsync('facility', { action: 'toggle', facility_id: f.facility_id });
+    if (res.ok) {
+      f.active = !f.active;
+      notif(`${f.name} ${f.active ? 'enabled' : 'disabled'}`, 'success');
+    } else {
+      notif(res.error || 'Toggle failed', 'error');
+    }
+  } finally {
+    actionLoading.value = null;
+  }
+}
+
+async function buildFacility(t: any): Promise<void> {
+  actionLoading.value = t.id;
+  try {
+    const action = t.category === 'personal' ? 'personal_build' : 'build';
+    const res = await execAsync('facility', { action, facility_type: t.id });
+    if (res.ok) {
+      const r = res.data?.result || res.data || {};
+      const xp = r.skill_xp
+        ? ' +XP: ' + Object.entries(r.skill_xp).map(([k, v]) => `${v} ${k}`).join(', ')
+        : '';
+      notif(r.hint || `Built ${r.facility_name || t.name}!${xp}`, 'success');
+      await reloadAll();
+      tab.value = 'personal';
+    } else {
+      const cleaned = parseBuildError(res.error || 'Build failed');
+      buildErrors.value[t.id] = cleaned;
+      notif(cleaned, 'error');
+    }
+  } finally {
+    actionLoading.value = null;
+  }
+}
+
+async function upgradeFacility(f: any, toTypeId: string): Promise<void> {
+  actionLoading.value = f.facility_id;
+  try {
+    const res = await execAsync('facility', { action: 'upgrade', facility_id: f.facility_id, facility_type: toTypeId });
+    if (res.ok) {
+      notif(`Upgraded ${f.name}!`, 'success');
+      activeUpgrade.value = null;
+      await reloadAll();
+    } else {
+      notif(res.error || 'Upgrade failed', 'error');
+    }
+  } finally {
+    actionLoading.value = null;
+  }
+}
+
+// ── Tab switch helpers ────────────────────────────────────────
+function switchToMine(): void {
+  tab.value = 'personal';
+  if (!stationFacilities.value.length) reloadAll();
+  else if (myFacilities.value.length && !Object.keys(upgradeMap.value).length) loadUpgrades();
+}
+
+function switchToBuild(): void {
+  tab.value = 'build';
+  if (!facilityTypes.value.length) loadTypes();
+}
+
+// ── Lifecycle ─────────────────────────────────────────────────
+onMounted(() => {
+  if ((currentBot.value as any)?.docked) reloadAll();
+});
+
+watch(() => props.bot.username, () => {
+  currentPlayerId.value = ''; // reset when switching bots so ID is re-fetched for new character
+});
+
+watch(() => (currentBot.value as any)?.docked, (docked, prev) => {
+  if (docked && !prev) {
+    stationFacilities.value = [];
+    myFacilities.value = [];
+    upgradeMap.value = {};
+    facilityTypes.value = [];
+    expanded.value.clear();
+    reloadAll();
+  }
+});
+
+function maybeLoad(): void {
+  if (!stationFacilities.value.length) reloadAll();
 }
 
 defineExpose({ maybeLoad });
-
-onMounted(() => {
-  execCommand('get_status');
-});
 </script>

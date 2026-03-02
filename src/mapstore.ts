@@ -1,6 +1,7 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "fs";
 import { join } from "path";
 import { cachedFetch } from "./httpcache.js";
+import type { Database } from "bun:sqlite";
 
 // ── Data model ──────────────────────────────────────────────
 
@@ -109,13 +110,46 @@ const DATA_DIR = join(process.cwd(), "data");
 const MAP_FILE = join(DATA_DIR, "map.json");
 const SAVE_DEBOUNCE_MS = 5000;
 
-class MapStore {
+export class MapStore {
   private data: MapData;
   private dirty = false;
+  private dirtySystemIds = new Set<string>();
   private saveTimer: ReturnType<typeof setTimeout> | null = null;
+  private _db: Database | null = null;
+  /** Memoized BFS routes. Cleared when map topology changes. */
+  private routeCache = new Map<string, string[] | null>();
 
   constructor() {
     this.data = this.load();
+  }
+
+  /** Connect to SQLite backend. Loads per-system rows; migrates legacy JSON/blob data if needed. */
+  connectToDb(db: Database): void {
+    this._db = db;
+    const rows = db.query("SELECT id, data FROM map_systems").all() as { id: string; data: string }[];
+    if (rows.length > 0) {
+      for (const row of rows) {
+        try { this.data.systems[row.id] = JSON.parse(row.data) as StoredSystem; } catch { /* corrupt row */ }
+      }
+      console.log(`[MapStore] Loaded ${rows.length} systems from SQLite`);
+    } else if (Object.keys(this.data.systems).length > 0) {
+      this._migrateToDb();
+    }
+  }
+
+  /** Bulk-insert all in-memory systems into the DB (one-time migration). */
+  private _migrateToDb(): void {
+    if (!this._db) return;
+    const stmt = this._db.prepare(
+      "INSERT OR REPLACE INTO map_systems (id, name, security_level, data, last_updated) VALUES (?, ?, ?, ?, ?)"
+    );
+    const tx = this._db.transaction(() => {
+      for (const sys of Object.values(this.data.systems)) {
+        stmt.run(sys.id, sys.name, sys.security_level ?? null, JSON.stringify(sys), sys.last_updated);
+      }
+    });
+    tx();
+    console.log(`[MapStore] Migrated ${Object.keys(this.data.systems).length} systems to SQLite`);
   }
 
   // ── Persistence ─────────────────────────────────────────
@@ -135,12 +169,18 @@ class MapStore {
     return { version: 1, last_saved: now(), systems: {} };
   }
 
+  /** Mark a single system as dirty and schedule a debounced flush. */
+  private scheduleSystemSave(id: string): void {
+    this.dirtySystemIds.add(id);
+    this.scheduleSave();
+  }
+
   private scheduleSave(): void {
     this.dirty = true;
     if (this.saveTimer) return;
     this.saveTimer = setTimeout(() => {
       this.saveTimer = null;
-      this.writeToDisk();
+      this.persist();
     }, SAVE_DEBOUNCE_MS);
   }
 
@@ -154,13 +194,39 @@ class MapStore {
     this.dirty = false;
   }
 
-  /** Flush pending writes to disk immediately. Call on shutdown. */
+  /** Flush only dirty systems to SQLite, or fall back to JSON. */
+  private persist(): void {
+    if (this._db) {
+      this._saveToDb();
+    } else {
+      this.writeToDisk();
+    }
+  }
+
+  /** Upsert only changed system rows. */
+  private _saveToDb(): void {
+    if (!this._db || this.dirtySystemIds.size === 0) return;
+    const stmt = this._db.prepare(
+      "INSERT OR REPLACE INTO map_systems (id, name, security_level, data, last_updated) VALUES (?, ?, ?, ?, ?)"
+    );
+    const tx = this._db.transaction(() => {
+      for (const id of this.dirtySystemIds) {
+        const sys = this.data.systems[id];
+        if (sys) stmt.run(sys.id, sys.name, sys.security_level ?? null, JSON.stringify(sys), sys.last_updated);
+      }
+    });
+    tx();
+    this.dirtySystemIds.clear();
+    this.dirty = false;
+  }
+
+  /** Flush pending writes immediately. Call on shutdown. */
   flush(): void {
     if (this.saveTimer) {
       clearTimeout(this.saveTimer);
       this.saveTimer = null;
     }
-    this.writeToDisk();
+    this.persist();
   }
 
   // ── Update methods ──────────────────────────────────────
@@ -200,6 +266,8 @@ class MapStore {
         jump_cost: c.jump_cost as number | undefined,
         distance: c.distance as number | undefined,
       }));
+      // New topology — old cached routes may be stale
+      this.routeCache.clear();
     }
 
     // Merge POIs — preserve existing ore & market data
@@ -248,7 +316,7 @@ class MapStore {
     }
 
     this.data.systems[id] = sys;
-    this.scheduleSave();
+    this.scheduleSystemSave(id);
   }
 
   /** Update market prices for a station POI from view_market response. */
@@ -303,7 +371,7 @@ class MapStore {
 
     poi.market = [...existingMarket.values()];
     poi.last_updated = now();
-    this.scheduleSave();
+    this.scheduleSystemSave(systemId);
   }
 
   /** Remove an item from a station's cached market data (e.g. when buy fails with item_not_available). */
@@ -314,7 +382,7 @@ class MapStore {
     if (!poi) return;
     const before = poi.market.length;
     poi.market = poi.market.filter((m) => m.item_id !== itemId);
-    if (poi.market.length < before) this.scheduleSave();
+    if (poi.market.length < before) this.scheduleSystemSave(systemId);
   }
 
   /** Reduce cached market quantities when a bot commits to a trade route.
@@ -346,6 +414,8 @@ class MapStore {
         if (dstItem.buy_quantity === 0) dstItem.best_buy = null;
       }
     }
+    this.dirtySystemIds.add(sourceSystem);
+    this.dirtySystemIds.add(destSystem);
     this.scheduleSave();
   }
 
@@ -380,7 +450,7 @@ class MapStore {
 
     poi.orders = [...existingOrders.values()];
     poi.last_updated = now();
-    this.scheduleSave();
+    this.scheduleSystemSave(systemId);
   }
 
   /** Mark a POI as explored (sets last_explored timestamp). */
@@ -393,7 +463,7 @@ class MapStore {
 
     poi.last_explored = now();
     poi.last_updated = now();
-    this.scheduleSave();
+    this.scheduleSystemSave(systemId);
   }
 
   /** Get minutes since a POI was last explored. Returns Infinity if never explored. */
@@ -446,7 +516,7 @@ class MapStore {
     });
 
     poi.last_updated = now();
-    this.scheduleSave();
+    this.scheduleSystemSave(systemId);
   }
 
   /** Record ore mined at a POI. Increments totals. */
@@ -472,7 +542,7 @@ class MapStore {
       });
     }
 
-    this.scheduleSave();
+    this.scheduleSystemSave(systemId);
   }
 
   /** Record a pirate sighting in a system. */
@@ -497,7 +567,7 @@ class MapStore {
       });
     }
 
-    this.scheduleSave();
+    this.scheduleSystemSave(systemId);
   }
 
   /** Record a wreck in a system. */
@@ -520,7 +590,7 @@ class MapStore {
       });
     }
 
-    this.scheduleSave();
+    this.scheduleSystemSave(systemId);
   }
 
   // ── Query methods ───────────────────────────────────────
@@ -643,11 +713,15 @@ class MapStore {
   findRoute(fromSystemId: string, toSystemId: string): string[] | null {
     if (fromSystemId === toSystemId) return [fromSystemId];
 
+    const cacheKey = `${fromSystemId}→${toSystemId}`;
+    if (this.routeCache.has(cacheKey)) return this.routeCache.get(cacheKey)!;
+
     const visited = new Set<string>([fromSystemId]);
     const queue: Array<{ id: string; path: string[] }> = [
       { id: fromSystemId, path: [fromSystemId] },
     ];
 
+    let result: string[] | null = null;
     while (queue.length > 0) {
       const current = queue.shift()!;
       const conns = this.data.systems[current.id]?.connections ?? [];
@@ -657,14 +731,16 @@ class MapStore {
         if (!nextId || visited.has(nextId)) continue;
 
         const newPath = [...current.path, nextId];
-        if (nextId === toSystemId) return newPath;
+        if (nextId === toSystemId) { result = newPath; break; }
 
         visited.add(nextId);
         queue.push({ id: nextId, path: newPath });
       }
+      if (result) break;
     }
 
-    return null; // No path found in known map
+    this.routeCache.set(cacheKey, result);
+    return result;
   }
 
   /** Get all unique ores found across all systems. Returns [{item_id, name}]. */

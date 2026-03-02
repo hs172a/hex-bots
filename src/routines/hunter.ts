@@ -23,7 +23,7 @@
  */
 
 import type { Routine, RoutineContext } from "../bot.js";
-import { mapStore } from "../mapstore.js";
+import type { MapStore } from "../mapstore.js";
 import {
   findStation,
   isStationPoi,
@@ -97,18 +97,18 @@ function isHuntableSystem(securityLevel: string | undefined): boolean {
   return false;
 }
 
-function findNearestHuntableSystem(fromSystemId: string): string | null {
+function findNearestHuntableSystem(fromSystemId: string, ms: MapStore): string | null {
   // Phase 1: BFS through stored connections
   const visited = new Set<string>([fromSystemId]);
   const queue: string[] = [fromSystemId];
 
   while (queue.length > 0) {
     const current = queue.shift()!;
-    for (const conn of mapStore.getConnections(current)) {
+    for (const conn of ms.getConnections(current)) {
       if (visited.has(conn.system_id)) continue;
       visited.add(conn.system_id);
 
-      const secLevel = conn.security_level || mapStore.getSystem(conn.system_id)?.security_level;
+      const secLevel = conn.security_level || ms.getSystem(conn.system_id)?.security_level;
       if (isHuntableSystem(secLevel)) return conn.system_id;
 
       queue.push(conn.system_id);
@@ -116,11 +116,11 @@ function findNearestHuntableSystem(fromSystemId: string): string | null {
   }
 
   // Phase 2: scan all known systems
-  for (const systemId of mapStore.getAllSystemIds()) {
+  for (const systemId of ms.getAllSystemIds()) {
     if (visited.has(systemId)) continue;
-    const sys = mapStore.getSystem(systemId);
+    const sys = ms.getSystem(systemId);
     if (!sys || !isHuntableSystem(sys.security_level)) continue;
-    if (mapStore.findRoute(fromSystemId, systemId)) return systemId;
+    if (ms.findRoute(fromSystemId, systemId)) return systemId;
   }
 
   return null;
@@ -143,17 +143,17 @@ function isSafeSystem(securityLevel: string | undefined): boolean {
   return false;
 }
 
-function findNearestSafeSystem(fromSystemId: string): string | null {
+function findNearestSafeSystem(fromSystemId: string, ms: MapStore): string | null {
   const visited = new Set<string>([fromSystemId]);
   const queue: string[] = [fromSystemId];
 
   while (queue.length > 0) {
     const current = queue.shift()!;
-    for (const conn of mapStore.getConnections(current)) {
+    for (const conn of ms.getConnections(current)) {
       if (visited.has(conn.system_id)) continue;
       visited.add(conn.system_id);
 
-      const secLevel = conn.security_level || mapStore.getSystem(conn.system_id)?.security_level;
+      const secLevel = conn.security_level || ms.getSystem(conn.system_id)?.security_level;
       if (isSafeSystem(secLevel)) return conn.system_id;
 
       queue.push(conn.system_id);
@@ -296,11 +296,11 @@ async function completeActiveMissions(ctx: RoutineContext): Promise<void> {
 async function navigateToSafeStation(ctx: RoutineContext, safetyOpts: { fuelThresholdPct: number; hullThresholdPct: number }): Promise<boolean> {
   const { bot } = ctx;
 
-  const currentSec = mapStore.getSystem(bot.system)?.security_level;
+  const currentSec = ctx.mapStore.getSystem(bot.system)?.security_level;
   if (!isSafeSystem(currentSec)) {
-    const safeSystem = findNearestSafeSystem(bot.system);
+    const safeSystem = findNearestSafeSystem(bot.system, ctx.mapStore);
     if (safeSystem) {
-      const sys = mapStore.getSystem(safeSystem);
+      const sys = ctx.mapStore.getSystem(safeSystem);
       ctx.log("travel", `Heading to safe system ${sys?.name || safeSystem} (${sys?.security_level}) for repairs...`);
       const arrived = await navigateToSystem(ctx, safeSystem, safetyOpts);
       if (!arrived) {
@@ -439,13 +439,13 @@ async function engageTarget(
   return true;
 }
 
-function findNextHuntSystem(fromSystemId: string): string | null {
-  const conns = mapStore.getConnections(fromSystemId);
+function findNextHuntSystem(fromSystemId: string, ms: MapStore): string | null {
+  const conns = ms.getConnections(fromSystemId);
   if (conns.length === 0) return null;
 
   // Priority 1: adjacent lawless/null-sec system
   for (const conn of conns) {
-    const sec = (conn.security_level || mapStore.getSystem(conn.system_id)?.security_level || "").toLowerCase();
+    const sec = (conn.security_level || ms.getSystem(conn.system_id)?.security_level || "").toLowerCase();
     if (sec.includes("lawless") || sec.includes("null") || sec.includes("unregulated")) {
       return conn.system_id;
     }
@@ -453,12 +453,12 @@ function findNextHuntSystem(fromSystemId: string): string | null {
 
   // Priority 2: any adjacent huntable system
   for (const conn of conns) {
-    const sec = conn.security_level || mapStore.getSystem(conn.system_id)?.security_level;
+    const sec = conn.security_level || ms.getSystem(conn.system_id)?.security_level;
     if (isHuntableSystem(sec)) return conn.system_id;
   }
 
   // Priority 3: unmapped adjacent system
-  const unmapped = conns.find(c => !mapStore.getSystem(c.system_id)?.security_level);
+  const unmapped = conns.find(c => !ms.getSystem(c.system_id)?.security_level);
   if (unmapped) return unmapped.system_id;
 
   return null;
@@ -638,7 +638,7 @@ async function checkFactionAlerts(
     const lastMs = respondedAlerts.get(alertSystem) ?? 0;
     if (nowMs - lastMs < ALERT_RESPONSE_COOLDOWN_MS) continue;
 
-    const route = mapStore.findRoute(bot.system, alertSystem);
+    const route = ctx.mapStore.findRoute(bot.system, alertSystem);
     if (!route || route.length > responseRange) continue;
 
     return alertSystem;
@@ -727,8 +727,8 @@ export const hunterRoutine: Routine = async function* (ctx: RoutineContext) {
     yield "faction_alert_check";
     const alertTarget = await checkFactionAlerts(ctx, settings.responseRange);
     if (alertTarget) {
-      const sys = mapStore.getSystem(alertTarget);
-      const route = mapStore.findRoute(bot.system, alertTarget);
+      const sys = ctx.mapStore.getSystem(alertTarget);
+      const route = ctx.mapStore.findRoute(bot.system, alertTarget);
       const jumps = route ? route.length : "?";
       ctx.log("combat", `Faction alert! ${sys?.name || alertTarget} is under attack (${jumps} jump(s)) — diverting to assist`);
       respondedAlerts.set(alertTarget, Date.now());
@@ -755,19 +755,19 @@ export const hunterRoutine: Routine = async function* (ctx: RoutineContext) {
       }
     } else {
       await fetchSecurityLevel(ctx, bot.system);
-      const currentSec = mapStore.getSystem(bot.system)?.security_level;
+      const currentSec = ctx.mapStore.getSystem(bot.system)?.security_level;
 
       if (!isHuntableSystem(currentSec)) {
         ctx.log("travel", `${bot.system} is ${currentSec || "unknown"} security — searching for a huntable system...`);
 
-        const huntTarget = findNearestHuntableSystem(bot.system);
+        const huntTarget = findNearestHuntableSystem(bot.system, ctx.mapStore);
         if (huntTarget) {
-          const sys = mapStore.getSystem(huntTarget);
+          const sys = ctx.mapStore.getSystem(huntTarget);
           ctx.log("travel", `Found huntable system: ${sys?.name || huntTarget} (${sys?.security_level}) — navigating...`);
           await navigateToSystem(ctx, huntTarget, safetyOpts);
         } else {
-          const conns = mapStore.getConnections(bot.system);
-          const unmapped = conns.find(c => !mapStore.getSystem(c.system_id)?.security_level);
+          const conns = ctx.mapStore.getConnections(bot.system);
+          const unmapped = conns.find(c => !ctx.mapStore.getSystem(c.system_id)?.security_level);
           const target = unmapped ?? conns[0];
           if (target) {
             ctx.log("travel", `No huntable system mapped yet — scouting ${target.system_name || target.system_id}...`);
@@ -787,7 +787,7 @@ export const hunterRoutine: Routine = async function* (ctx: RoutineContext) {
 
     // ── Confirm we're actually in a huntable system ──
     await fetchSecurityLevel(ctx, bot.system);
-    const confirmedSec = mapStore.getSystem(bot.system)?.security_level;
+    const confirmedSec = ctx.mapStore.getSystem(bot.system)?.security_level;
     if (!isHuntableSystem(confirmedSec)) {
       ctx.log("info", `${bot.system} is ${confirmedSec || "unknown"} security — no pirates here. Will search again next cycle`);
       await sleep(3000);
@@ -982,9 +982,9 @@ export const hunterRoutine: Routine = async function* (ctx: RoutineContext) {
       ctx.log("system", `Patrol sweep done — ${patrolKills} kill(s). Hull: ${postHull}% | Fuel: ${postFuel}% — continuing hunt...`);
 
       if (!patrolSystem) {
-        const nextSystem = findNextHuntSystem(bot.system);
+        const nextSystem = findNextHuntSystem(bot.system, ctx.mapStore);
         if (nextSystem) {
-          const sys = mapStore.getSystem(nextSystem);
+          const sys = ctx.mapStore.getSystem(nextSystem);
           ctx.log("travel", `Moving to ${sys?.name || nextSystem} (${sys?.security_level || "unknown"}) to continue hunt...`);
           await navigateToSystem(ctx, nextSystem, safetyOpts);
           await getSystemInfo(ctx);

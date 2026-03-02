@@ -16,18 +16,71 @@ import { aiRoutine } from "./routines/ai.js";
 import { factionTraderRoutine } from "./routines/faction_trader.js";
 import { cleanupRoutine } from "./routines/cleanup.js";
 import { gathererRoutine } from "./routines/gatherer.js";
+import { scoutRoutine } from "./routines/scout.js";
+import { returnHomeRoutine } from "./routines/return_home.js";
+import { quartermasterRoutine } from "./routines/quartermaster.js";
+import { missionRunnerRoutine } from "./routines/mission_runner.js";
+import { shipUpgradeRoutine } from "./routines/ship_upgrade.js";
+import { scavengerRoutine } from "./routines/scavenger.js";
 import { mapStore } from "./mapstore.js";
 import { catalogStore } from "./catalogstore.js";
 import { publicCatalog } from "./publicCatalog.js";
 import { WebServer, type WebAction, type WebActionResult } from "./web/server.js";
-import { setLogSink } from "./ui.js";
-import { debugLog } from "./debug.js";
 import { version } from "../package.json";
 import { logApiRunStart, setApiLoggingEnabled } from "./apilogger.js";
+import { setIpBlockHandler } from "./api.js";
+import { logNotifications } from "./ui.js";
+import { loadConfig } from "./config.js";
+import { createDatabase } from "./data/database.js";
+import { SessionStore } from "./data/session-store.js";
+import { TrainingLogger } from "./data/training-logger.js";
+import { RetentionManager } from "./data/retention.js";
+import { EconomyEngine } from "./commander/economy-engine.js";
+import type { FleetSummary } from "./commander/types.js";
+import { GoalsStore } from "./data/goals-store.js";
+import { GoalSchema } from "./types/config.js";
+import { AdvisoryCommander } from "./commander/advisory-commander.js";
 
 const BASE_DIR = process.cwd();
 const SESSIONS_DIR = join(BASE_DIR, "sessions");
+const FILE_LOG_DIR = join(BASE_DIR, "logs");
 const VERSION = version;
+
+// ── File Logging (daily rotating console tee) ────────────────
+// Tees all console output to logs/hex-bots-{date}.log with timestamps.
+{
+  mkdirSync(FILE_LOG_DIR, { recursive: true });
+  const date = new Date().toISOString().slice(0, 10);
+  const logPath = join(FILE_LOG_DIR, `hex-bots-${date}.log`);
+
+  const ts = () => new Date().toISOString();
+  const origLog = console.log;
+  const origWarn = console.warn;
+  const origError = console.error;
+
+  const writeLine = (line: string) => {
+    try { 
+      appendFileSync(logPath, line + "\n"); 
+    } catch (err) { 
+      origError(`[FileLog] Error writing to ${logPath}:`, err);
+    }
+  };
+
+  console.log = (...args: unknown[]) => {
+    writeLine(`[${ts()}] ${args.map(String).join(" ")}`);
+    origLog.apply(console, args);
+  };
+  console.warn = (...args: unknown[]) => {
+    writeLine(`[${ts()}] WARN ${args.map(String).join(" ")}`);
+    origWarn.apply(console, args);
+  };
+  console.error = (...args: unknown[]) => {
+    writeLine(`[${ts()}] ERROR ${args.map(String).join(" ")}`);
+    origError.apply(console, args);
+  };
+
+  origLog(`[FileLog] Logging to ${logPath}`);
+}
 
 const TABLE_STATUS_REFRESH_INTERVAL = 5000; // 5s, periodic live refresh of tables
 const BOT_STATUS_REFRESH_INTERVAL = 30000; // 30s, periodic bots status check
@@ -35,6 +88,7 @@ const MAP_STATUS_REFRESH_INTERVAL = 30000; // 30s, periodic map status check
 
 const bots: Map<string, Bot> = new Map();
 let server: WebServer;
+let sessionStore: SessionStore;
 
 const ROUTINES: Record<string, { name: string; fn: Routine }> = {
   ai: { name: "AI", fn: aiRoutine },
@@ -49,8 +103,14 @@ const ROUTINES: Record<string, { name: string; fn: Routine }> = {
   hunter: { name: "Hunter", fn: hunterRoutine },
   ice_harvester: { name: "IceHarvester", fn: iceHarvesterRoutine },
   miner: { name: "Miner", fn: minerRoutineV2 },
+  quartermaster: { name: "Quartermaster", fn: quartermasterRoutine },
+  return_home: { name: "ReturnHome", fn: returnHomeRoutine },
+  scout: { name: "Scout", fn: scoutRoutine },
   trader: { name: "Trader", fn: traderRoutine },
   salvager: { name: "Salvager", fn: salvagerRoutine },
+  mission_runner: { name: "MissionRunner", fn: missionRunnerRoutine },
+  ship_upgrade: { name: "ShipUpgrade", fn: shipUpgradeRoutine },
+  scavenger: { name: "Scavenger", fn: scavengerRoutine },
 };
 
 // ── Auto-discover existing sessions ─────────────────────────
@@ -71,6 +131,17 @@ function discoverBots(): void {
   }
 }
 
+/** Discover bots from SQLite session store (supplements file-based discovery). */
+function discoverBotsFromDB(sessionStore: SessionStore): void {
+  const allCreds = sessionStore.listBots();
+  for (const creds of allCreds) {
+    if (bots.has(creds.username)) continue;
+    const bot = new Bot(creds.username, BASE_DIR);
+    setupBotLogging(bot);
+    bots.set(creds.username, bot);
+  }
+}
+
 /** Categories that go to the broadcast panel instead of bot log. */
 const BROADCAST_CATEGORIES = new Set(["broadcast", "chat", "dm"]);
 
@@ -81,16 +152,18 @@ function appendBotLog(username: string, line: string): void {
   try {
     if (!existsSync(LOGS_DIR)) mkdirSync(LOGS_DIR, { recursive: true });
     appendFileSync(join(LOGS_DIR, `${username}.log`), line + "\n");
-  } catch { /* ignore write errors */ }
+  } catch (err) {
+    console.error(`[FileLog] Error writing bot log for ${username}:`, err);
+  }
 }
 
 function setupBotLogging(bot: Bot): void {
   logApiRunStart(bot.api.label);
-  bot.onLog = (username, category, message) => {
+  
+  bot.on("log", (username: string, category: string, message: string) => {
     const timestamp = new Date().toLocaleTimeString("en-US", { hour12: false });
     const datestamp = new Date().toISOString().slice(0, 10);
     const line = `${timestamp} [${username}] [${category}] ${message}`;
-    debugLog("bot:onLog", `${username} cat=${category}`, message);
     if (category === "system" || category === "error") {
       server.logSystem(line);
     }
@@ -100,10 +173,19 @@ function setupBotLogging(bot: Bot): void {
     server.logBot(username, botLine);
     // Persistent per-bot log file
     appendBotLog(username, `${datestamp} ${botLine}`);
-  };
-  bot.onFactionLog = (_username, line) => {
+  });
+
+  bot.on("stateChange", (_username: string, _newState: string) => {
+    refreshStatusTable();
+  });
+
+  bot.on("factionLog", (_username: string, line: string) => {
     server.logFaction(line);
-  };
+  });
+
+  bot.on("notifications", (notifications: unknown[], username: string) => {
+    logNotifications(notifications, username);
+  });
 }
 
 function refreshStatusTable(): void {
@@ -227,8 +309,9 @@ async function handleRemove(action: WebAction): Promise<WebActionResult> {
   bots.delete(botName);
   server.clearBotAssignment(botName);
   server.removePerBotSettings(botName);
+  sessionStore.removeBot(botName);
 
-  // Delete session directory
+  // Delete legacy session directory
   const sessionDir = join(SESSIONS_DIR, botName);
   try {
     rmSync(sessionDir, { recursive: true, force: true });
@@ -245,8 +328,10 @@ async function handleAdd(action: WebAction): Promise<WebActionResult> {
 
   if (bots.has(username)) return { ok: false, error: `Bot already exists: ${username}` };
 
+  // Save to both file-based session (for backward compat) and SQLite
   const session = new SessionManager(username, BASE_DIR);
   session.saveCredentials({ username, password, empire: "", playerId: "" });
+  sessionStore.upsertBot({ username, password, empire: "", playerId: "" });
 
   const bot = new Bot(username, BASE_DIR);
   setupBotLogging(bot);
@@ -291,8 +376,10 @@ async function handleRegister(action: WebAction): Promise<WebActionResult> {
 
   server.logSystem(`Registration successful for ${username} — password returned to dashboard only.`);
 
+  // Save to both file-based session (for backward compat) and SQLite
   const session = new SessionManager(username, BASE_DIR);
   session.saveCredentials({ username, password, empire: selectedEmpire, playerId });
+  sessionStore.upsertBot({ username, password, empire: selectedEmpire, playerId });
 
   const bot = new Bot(username, BASE_DIR);
   setupBotLogging(bot);
@@ -334,7 +421,6 @@ async function handleExec(action: WebAction): Promise<WebActionResult> {
     await bot.login();
   }
 
-  debugLog("exec:handler", `${botName} > ${command}`, params);
   let resp = await bot.exec(command, params);
 
   // If still getting auth errors after API's internal recovery, do a full re-login and retry once
@@ -411,18 +497,83 @@ async function handleExec(action: WebAction): Promise<WebActionResult> {
   }
 
   if (resp.error) {
-    debugLog("exec:result", `${botName} > ${command} ERROR`, { error: resp.error.message, hasResult: resp.result !== undefined });
     return { ok: false, error: resp.error.message, data: resp.result };
   }
 
-  debugLog("exec:result", `${botName} > ${command} OK`, { hasResult: resp.result !== undefined, resultType: typeof resp.result });
   return { ok: true, message: `${command} executed`, data: resp.result };
 }
 
 // ── Main ────────────────────────────────────────────────────
 
 async function main(): Promise<void> {
-  const port = parseInt(process.env.PORT || "3000", 10);
+  const config = loadConfig();
+
+  // Initialize SQLite database
+  const db = createDatabase();
+  sessionStore = new SessionStore(db);
+
+  // Migrate file-based sessions to SQLite (one-time)
+  const migrated = sessionStore.migrateFromFiles(SESSIONS_DIR);
+  if (migrated > 0) {
+    console.log(`[DB] Migrated ${migrated} bot session(s) from files to SQLite`);
+  }
+
+  catalogStore.connectToDb(db);
+  mapStore.connectToDb(db);
+
+  // Training logger + data retention
+  const logger = new TrainingLogger(db);
+  logger.startSnapshotFlush();
+
+  const retention = new RetentionManager(db);
+  const retResult = retention.run();
+  const totalCleaned = retResult.decisionLogDeleted + retResult.snapshotsDeleted
+    + retResult.marketHistoryDeleted + retResult.commanderLogDeleted;
+  if (totalCleaned > 0) console.log(`[Retention] Cleaned ${totalCleaned} old records`);
+
+  // Daily retention cleanup
+  const retentionTimer = setInterval(() => {
+    const r = retention.run();
+    const total = r.decisionLogDeleted + r.snapshotsDeleted + r.marketHistoryDeleted + r.commanderLogDeleted;
+    if (total > 0) console.log(`[Retention] Cleaned ${total} records`);
+  }, 86_400_000);
+
+  // Economy engine
+  const economy = new EconomyEngine();
+  if (config.inventory_targets.length > 0) {
+    economy.setStockTargets(config.inventory_targets);
+    console.log(`[Economy] ${config.inventory_targets.length} stock target(s) loaded`);
+  }
+
+  /** Build FleetSummary from current bot states (for economy analysis) */
+  function buildFleetSummary(): FleetSummary {
+    const statuses = [...bots.values()].map(b => b.status());
+    return {
+      bots: statuses.map(s => ({
+        username: s.username,
+        state: s.state,
+        routine: s.routine || null,
+        credits: s.credits || 0,
+        fuelPct: s.maxFuel > 0 ? (s.fuel / s.maxFuel) * 100 : 0,
+        cargoPct: s.cargoMax > 0 ? (s.cargo / s.cargoMax) * 100 : 0,
+      })),
+      totalCredits: statuses.reduce((sum, s) => sum + (s.credits || 0), 0),
+      activeBots: statuses.filter(s => s.state === "running").length,
+    };
+  }
+
+  // Goals persistence
+  const goalsStore = new GoalsStore(db);
+  if (goalsStore.count === 0 && config.goals.length > 0) {
+    goalsStore.saveGoals(config.goals);
+    console.log(`[Goals] Seeded ${config.goals.length} goal(s) from config.toml`);
+  }
+
+  // Advisory Commander (scoring brain — suggests but doesn't auto-apply)
+  const commander = new AdvisoryCommander();
+  commander.setRoutines(Object.keys(ROUTINES));
+
+  const port = parseInt(process.env.PORT || String(config.server.port), 10);
   server = new WebServer(port);
   server.routines = Object.keys(ROUTINES);
   server.onAction = handleAction;
@@ -431,43 +582,58 @@ async function main(): Promise<void> {
     if (!bot) throw new Error("No bot available");
     return await bot.api.getPlayerProfile(playerId);
   };
+  server.onEconomyData = () => economy.getSummary(buildFleetSummary());
+  server.onCreditHistory = (sinceMs: number) => logger.getCreditHistory(sinceMs);
+  server.onCommanderData = () => commander.getLastResult();
+  server.onGetGoals = () => goalsStore.loadGoals();
+  server.onSaveGoals = (goals: unknown[]) => {
+    try {
+      const parsed = goals.map((g: unknown) => GoalSchema.parse(g));
+      goalsStore.saveGoals(parsed);
+      console.log(`[Goals] Saved ${parsed.length} goal(s)`);
+    } catch (err) {
+      console.error("[Goals] Invalid goal data:", err);
+    }
+  };
 
-  // Apply persisted API logging setting immediately at startup
+  server.onRefreshCatalog = async (): Promise<string> => {
+    const bot = [...bots.values()][0];
+    if (!bot) throw new Error("No bots available");
+    await catalogStore.fetchAll(bot.api);
+    server.logSystem(`[Admin] Catalog refreshed: ${catalogStore.getSummary()}`);
+    return catalogStore.getSummary();
+  };
+
+  server.onRefreshMap = async (): Promise<string> => {
+    const { seeded, known, failed } = await mapStore.seedFromMapAPI();
+    if (failed) throw new Error("Map seed failed");
+    const msg = `${seeded} new system(s), ${known} already known`;
+    server.logSystem(`[Admin] Galaxy map refreshed: ${msg}`);
+    server.updateMapData();
+    return msg;
+  };
+
+  setIpBlockHandler((secs: number) => {
+    server.logSystem(`[Rate Limit] IP blocked — retry after ${secs}s`);
+    server.broadcastRateLimit(true, secs);
+    // Automatically clear block flag after the timeout expires
+    setTimeout(() => server.broadcastRateLimit(false), secs * 1000);
+  });
+
+  // Apply API logging: config.toml first, then persisted settings override
+  if (config.logging.api_logging) {
+    setApiLoggingEnabled(true);
+  }
   const startupApiLogging = server.settings?.general?.enableApiLogging;
   if (typeof startupApiLogging === "boolean") {
     setApiLoggingEnabled(startupApiLogging);
   }
 
-  // Route global ui.log() calls through the web server
-  setLogSink((category, message) => {
-    const timestamp = new Date().toLocaleTimeString("en-US", { hour12: false });
-    debugLog("sink:route", `category=${category}`, message);
-    if (BROADCAST_CATEGORIES.has(category)) {
-      const tagMatch = message.match(/^\[([^\]]+)\]\s*(.*)/s);
-      if (tagMatch) {
-        const [, tag, content] = tagMatch;
-        debugLog("sink:broadcast", `tag=${tag}`, content);
-        server.logBroadcast(`${tag} ${timestamp}`);
-        server.logBroadcast(content);
-        server.logBroadcast("");
-      } else {
-        server.logBroadcast(`${timestamp} ${message}`);
-      }
-      return;
-    }
-    const line = `${timestamp} [${category}] ${message}`;
-    if (category === "error") {
-      debugLog("sink:system", "error routed to system panel", line);
-      server.logSystem(line);
-    }
-    debugLog("sink:activity", "routed to bot log", line);
-    server.logActivity(line);
-  });
-
   server.logSystem(`Hex-Bots v${VERSION}`);
   server.logSystem("Loading saved sessions...");
 
   discoverBots();
+  discoverBotsFromDB(sessionStore);
 
   // Seed public catalog (ships + stations) from public API
   publicCatalog.refreshIfStale().then(({ ships, stations }) => {
@@ -497,7 +663,7 @@ async function main(): Promise<void> {
     server.logSystem(`Found ${bots.size} saved bot(s): ${[...bots.keys()].join(", ")}`);
 
     // Stagger logins to avoid spamming the API
-    const LOGIN_DELAY_MS = 5000;
+    const LOGIN_DELAY_MS = config.fleet.login_stagger_ms;
     let loginIndex = 0;
     for (const [name, bot] of bots) {
       const delay = loginIndex * LOGIN_DELAY_MS;
@@ -548,7 +714,9 @@ async function main(): Promise<void> {
     for (const [, bot] of bots) {
       // Only refresh running bots to avoid API spam
       if (bot.state === "running" && bot.api.getSession()) {
-        await bot.refreshStatus().catch(() => {});
+        await bot.refreshStatus().catch((err: unknown) => {
+          process.stderr.write(`[${bot.username}] refreshStatus failed: ${err instanceof Error ? err.message : String(err)}\n`);
+        });
       }
     }
     refreshStatusTable();
@@ -559,10 +727,33 @@ async function main(): Promise<void> {
     server.updateMapData();
   }, MAP_STATUS_REFRESH_INTERVAL));
 
-  // Periodic stats flush (every 60s)
+  // Periodic commander advisory evaluation (every 3 minutes)
+  intervals.push(setInterval(() => {
+    const statuses = [...bots.values()].map(b => b.status());
+    const runningCount = statuses.filter(s => s.state === "running").length;
+    if (runningCount === 0) return; // Skip if no bots are running
+    const goals = goalsStore.loadGoals();
+    const fleet = buildFleetSummary();
+    const econSnapshot = economy.analyze(fleet);
+    const result = commander.evaluate(statuses, goals, econSnapshot);
+    if (result.suggestions.length > 0) {
+      server.logSystem(`[Commander] ${result.suggestions.length} suggestion(s):`);
+      for (const s of result.suggestions) {
+        server.logSystem(`  ${s.username}: ${s.currentRoutine || "idle"} → ${s.suggestedRoutine} (score ${s.score})`);
+      }
+    }
+  }, config.commander.evaluation_interval * 1000));
+
+  // Periodic stats flush (every 60s) + credit history logging
   intervals.push(setInterval(() => {
     const statuses = [...bots.values()].map(b => b.status());
     server.flushBotStats(statuses);
+    // Log credit history for charting
+    const activeBots = statuses.filter(s => s.state === "running").length;
+    const totalCredits = statuses.reduce((sum, s) => sum + (s.credits || 0), 0);
+    if (activeBots > 0) {
+      logger.logCreditHistory(totalCredits, activeBots);
+    }
   }, 60000));
 
   // Daily public catalog refresh (24h)
@@ -600,6 +791,7 @@ async function main(): Promise<void> {
     console.log("\nShutting down...");
     // Clear intervals
     for (const id of intervals) clearInterval(id);
+    clearInterval(retentionTimer);
     // Flush stats before stopping bots
     const statuses = [...bots.values()].map(b => b.status());
     server.flushBotStats(statuses);
@@ -608,6 +800,8 @@ async function main(): Promise<void> {
     }
     mapStore.flush();
     catalogStore.flush();
+    logger.destroy();
+    db.close();
     server.stop();
     process.exit(0);
   });

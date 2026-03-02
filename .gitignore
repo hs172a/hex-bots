@@ -1,7 +1,9 @@
 node_modules/
 dist/
 sessions/
+logs/
 commander
 *.log
 .env
 .env.local
+config.toml

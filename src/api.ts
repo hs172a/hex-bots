@@ -12,10 +12,16 @@ export interface ApiResponse {
   result?: unknown;
   notifications?: unknown[];
   session?: ApiSession;
-  error?: { code: string; message: string; wait_seconds?: number } | null;
+  error?: { code: string; message: string; wait_seconds?: number; retry_after?: number } | null;
 }
 
 const DEFAULT_BASE_URL = "https://game.spacemolt.com/api/v1";
+
+// ── IP-block event (module-level so botmanager can subscribe) ──
+let _ipBlockHandler: ((retryAfterSecs: number) => void) | null = null;
+export function setIpBlockHandler(fn: (retryAfterSecs: number) => void): void {
+  _ipBlockHandler = fn;
+}
 
 // ── Response cache ────────────────────────────────────────────
 
@@ -222,8 +228,16 @@ export class SpaceMoltAPI {
     if (resp.error) {
       const code = resp.error.code;
 
+      if (code === "ip_blocked" || code === "blocked" || code === "rate_blocked") {
+        const secs = resp.error.retry_after ?? resp.error.wait_seconds ?? 120;
+        log("error", `IP blocked by server — retry after ${secs}s`);
+        _ipBlockHandler?.(secs);
+        await sleep(Math.ceil(secs * 1000));
+        return this.execute(command, payload);
+      }
+
       if (code === "rate_limited" || code === "rate_limit") {
-        const secs = resp.error.wait_seconds || 10;
+        const secs = resp.error.retry_after ?? resp.error.wait_seconds ?? 10;
         this._rateLimitRetries++;
         if (this._rateLimitRetries >= 5) {
           log("error", `Rate limited ${this._rateLimitRetries} times, giving up on ${command}`);
@@ -536,13 +550,28 @@ export class SpaceMoltAPI {
 
     // fetch() only throws on network errors (DNS, connection refused, etc.)
     // Any HTTP response — even 4xx/5xx — means the server is reachable.
-    const startTime = Date.now();
-    const resp = await fetch(url, {
-      method: "POST",
-      headers,
-      body: body ? JSON.stringify(body) : undefined,
-    });
-    const duration = Date.now() - startTime;
+    let resp!: Response;
+    let duration = 0;
+
+    for (let attempt = 0; attempt < 3; attempt++) {
+      const startTime = Date.now();
+      resp = await fetch(url, {
+        method: "POST",
+        headers,
+        body: body ? JSON.stringify(body) : undefined,
+      });
+      duration = Date.now() - startTime;
+
+      // Retry on 502 Bad Gateway, 503 Service Unavailable, 504 Gateway Timeout
+      if (resp.status === 502 || resp.status === 503 || resp.status === 504) {
+        const delay = 5000 * Math.pow(2, attempt); // 5s, 10s, 20s
+        console.warn(`[${timestamp}] ← HTTP ${resp.status} ${resp.statusText} (${duration}ms) — retrying in ${delay / 1000}s...`);
+        if (attempt < 2) await sleep(delay);
+        continue;
+      }
+      break;
+    }
+
     // Log HTTP response
     console.log(`[${timestamp}] ← HTTP ${resp.status} ${resp.statusText} (${duration}ms)`);
 

@@ -1,6 +1,5 @@
 import type { Bot, Routine, RoutineContext } from "../bot.js";
-import { mapStore } from "../mapstore.js";
-import { catalogStore } from "../catalogstore.js";
+import type { MapStore } from "../mapstore.js";
 import {
   ensureDocked,
   ensureUndocked,
@@ -83,17 +82,17 @@ interface TradeRoute {
 // ── Trade route discovery ────────────────────────────────────
 
 /** Estimate fuel cost between two systems using mapStore route data. */
-function estimateFuelCost(fromSystem: string, toSystem: string, costPerJump: number): { jumps: number; cost: number } {
+function estimateFuelCost(fromSystem: string, toSystem: string, ms: MapStore, costPerJump: number): { jumps: number; cost: number } {
   if (fromSystem === toSystem) return { jumps: 0, cost: 0 };
-  const route = mapStore.findRoute(fromSystem, toSystem);
+  const route = ms.findRoute(fromSystem, toSystem);
   if (!route) return { jumps: 999, cost: 999 * costPerJump };
   const jumps = route.length - 1;
   return { jumps, cost: jumps * costPerJump };
 }
 
 /** Find profitable trade routes from mapStore price spreads. */
-function findTradeOpportunities(settings: ReturnType<typeof getTraderSettings>, currentSystem: string, cargoCapacity: number = 999): TradeRoute[] {
-  const spreads = mapStore.findPriceSpreads();
+function findTradeOpportunities(settings: ReturnType<typeof getTraderSettings>, currentSystem: string, ms: MapStore, cargoCapacity: number = 999): TradeRoute[] {
+  const spreads = ms.findPriceSpreads();
   const routes: TradeRoute[] = [];
 
   for (const sp of spreads) {
@@ -107,8 +106,8 @@ function findTradeOpportunities(settings: ReturnType<typeof getTraderSettings>, 
     }
 
     // Calculate route: current → source → dest
-    const toSource = estimateFuelCost(currentSystem, sp.sourceSystem, settings.fuelCostPerJump);
-    const sourceToDest = estimateFuelCost(sp.sourceSystem, sp.destSystem, settings.fuelCostPerJump);
+    const toSource = estimateFuelCost(currentSystem, sp.sourceSystem, ms, settings.fuelCostPerJump);
+    const sourceToDest = estimateFuelCost(sp.sourceSystem, sp.destSystem, ms, settings.fuelCostPerJump);
     const totalJumps = toSource.jumps + sourceToDest.jumps;
     const totalFuelCost = toSource.cost + sourceToDest.cost;
 
@@ -146,9 +145,9 @@ function findTradeOpportunities(settings: ReturnType<typeof getTraderSettings>, 
 }
 
 /** Find the cheapest known market sell price for an item (replacement/acquisition cost). */
-function getItemMarketCost(itemId: string): number {
+function getItemMarketCost(itemId: string, ms: MapStore): number {
   let cheapest = Infinity;
-  const systems = mapStore.getAllSystems();
+  const systems = ms.getAllSystems();
   for (const sys of Object.values(systems)) {
     for (const poi of sys.pois) {
       for (const m of poi.market) {
@@ -177,14 +176,14 @@ function findFactionStorageRoutes(
   const routes: TradeRoute[] = [];
   if (bot.factionStorage.length === 0) return routes;
 
-  const allBuys = mapStore.getAllBuyDemand();
+  const allBuys = ctx.mapStore.getAllBuyDemand();
   if (allBuys.length === 0) return routes;
 
   for (const item of bot.factionStorage) {
     const lower = item.itemId.toLowerCase();
     if (lower.includes("fuel") || lower.includes("energy_cell")) continue;
     // Never trade raw ores, ice, or gas — those are crafting inputs
-    const catItem = catalogStore.getItem(item.itemId);
+    const catItem = ctx.catalogStore.getItem(item.itemId);
     if (catItem?.category === "ore") continue;
     if (item.quantity <= 0) continue;
 
@@ -198,7 +197,7 @@ function findFactionStorageRoutes(
     }
 
     // Material cost = cheapest known market price for this item
-    const itemCost = getItemMarketCost(item.itemId);
+    const itemCost = getItemMarketCost(item.itemId, ctx.mapStore);
 
     // Find best buy order for this item across all known stations
     const itemBuys = allBuys
@@ -209,7 +208,7 @@ function findFactionStorageRoutes(
       // Skip if sell price doesn't beat material cost
       if (buy.price <= itemCost) continue;
 
-      const { jumps, cost: fuelCost } = estimateFuelCost(currentSystem, buy.systemId, settings.fuelCostPerJump);
+      const { jumps, cost: fuelCost } = estimateFuelCost(currentSystem, buy.systemId, ctx.mapStore, settings.fuelCostPerJump);
       if (jumps >= 999) continue;
 
       const sellQty = Math.min(item.quantity, buy.quantity, maxItemsForCargo(cargoCapacity, item.itemId));
@@ -263,7 +262,7 @@ function findCargoSellRoutes(
   });
   if (cargoItems.length === 0) return routes;
 
-  const allBuys = mapStore.getAllBuyDemand();
+  const allBuys = ctx.mapStore.getAllBuyDemand();
   if (allBuys.length === 0) return routes;
 
   for (const item of cargoItems) {
@@ -274,7 +273,7 @@ function findCargoSellRoutes(
       .sort((a, b) => b.price - a.price);
 
     for (const buy of buyers) {
-      const { jumps, cost: fuelCost } = estimateFuelCost(currentSystem, buy.systemId, settings.fuelCostPerJump);
+      const { jumps, cost: fuelCost } = estimateFuelCost(currentSystem, buy.systemId, ctx.mapStore, settings.fuelCostPerJump);
       if (jumps >= 999) continue;
 
       const sellQty = Math.min(item.quantity, buy.quantity);
@@ -477,7 +476,7 @@ async function sellFactionStorageItems(ctx: RoutineContext): Promise<{ count: nu
     const lower = item.itemId.toLowerCase();
     if (lower.includes("fuel") || lower.includes("energy_cell")) continue;
     // Never sell raw ores, ice, or gas — those are crafting inputs
-    const catItem = catalogStore.getItem(item.itemId);
+    const catItem = ctx.catalogStore.getItem(item.itemId);
     if (catItem?.category === "ore") continue;
     if (!buyableItems.has(item.itemId)) continue;
     toSell.push({ itemId: item.itemId, name: item.name, qty: item.quantity });
@@ -683,7 +682,7 @@ export const traderRoutine: Routine = async function* (ctx: RoutineContext) {
     }
     const cargoCapacity = Math.max(0, (bot.cargoMax > 0 ? bot.cargoMax : 50) - fuelCellWeight);
     const cargoRoutes = findCargoSellRoutes(ctx, settings, bot.system);
-    const marketRoutes = findTradeOpportunities(settings, bot.system, cargoCapacity);
+    const marketRoutes = findTradeOpportunities(settings, bot.system, ctx.mapStore, cargoCapacity);
     const factionRoutes = findFactionStorageRoutes(ctx, settings, bot.system, cargoCapacity);
     // Filter out routes that sell items we just sold at the current station (demand already filled)
     const currentPoi = bot.poi;
@@ -711,7 +710,7 @@ export const traderRoutine: Routine = async function* (ctx: RoutineContext) {
 
     // Station priority: put routes whose destination is the home station first
     if (settings.stationPriority && settings.homeSystem) {
-      const homeStation = mapStore.findNearestStation(settings.homeSystem);
+      const homeStation = ctx.mapStore.findNearestStation(settings.homeSystem);
       if (homeStation) {
         const homeRoutes = routes.filter(r => r.destSystem === settings.homeSystem && r.destPoi === homeStation.id);
         const otherRoutes = routes.filter(r => !(r.destSystem === settings.homeSystem && r.destPoi === homeStation.id));
@@ -869,7 +868,7 @@ export const traderRoutine: Routine = async function* (ctx: RoutineContext) {
           buyQty = totalSold;
           investedCredits = 0; // faction storage items are free
           alreadySold = true; // items already sold in batch loop
-          mapStore.reserveTradeQuantity("", "", candidate.destSystem, candidate.destPoi, candidate.itemId, totalSold);
+          ctx.mapStore.reserveTradeQuantity("", "", candidate.destSystem, candidate.destPoi, candidate.itemId, totalSold);
           ctx.log("trade", `In-station faction sale complete: ${totalSold}x ${candidate.itemName}`);
           break;
         }
@@ -904,7 +903,7 @@ export const traderRoutine: Routine = async function* (ctx: RoutineContext) {
         route = candidate;
         buyQty = qty;
         investedCredits = 0; // faction storage items are free — all revenue is profit
-        mapStore.reserveTradeQuantity("", "", candidate.destSystem, candidate.destPoi, candidate.itemId, qty);
+        ctx.mapStore.reserveTradeQuantity("", "", candidate.destSystem, candidate.destPoi, candidate.itemId, qty);
         ctx.log("trade", `Withdrew ${qty}x ${candidate.itemName} from faction storage`);
         break;
       }
@@ -967,7 +966,7 @@ export const traderRoutine: Routine = async function* (ctx: RoutineContext) {
       const estResp = await bot.exec("estimate_purchase", { item_id: candidate.itemId, quantity: 1 });
       if (estResp.error) {
         failedSources.add(sourceKey);
-        mapStore.removeMarketItem(candidate.sourceSystem, candidate.sourcePoi, candidate.itemId);
+        ctx.mapStore.removeMarketItem(candidate.sourceSystem, candidate.sourcePoi, candidate.itemId);
         ctx.log("trade", `${candidate.itemName} not available at ${candidate.sourcePoiName} (stale data) — trying next route`);
         continue;
       }
@@ -1080,7 +1079,7 @@ export const traderRoutine: Routine = async function* (ctx: RoutineContext) {
         if (buyResp.error) {
           failedSources.add(sourceKey);
           if (buyResp.error.message.includes("item_not_available") || buyResp.error.message.includes("not_available")) {
-            mapStore.removeMarketItem(candidate.sourceSystem, candidate.sourcePoi, candidate.itemId);
+            ctx.mapStore.removeMarketItem(candidate.sourceSystem, candidate.sourcePoi, candidate.itemId);
           }
           if (alreadyHave <= 0) {
             ctx.log("error", `Buy failed: ${buyResp.error.message} — trying next route`);
@@ -1115,7 +1114,7 @@ export const traderRoutine: Routine = async function* (ctx: RoutineContext) {
       }
 
       // Reserve this trade in cached market data so other bots don't chase the same route
-      mapStore.reserveTradeQuantity(
+      ctx.mapStore.reserveTradeQuantity(
         candidate.sourceSystem, candidate.sourcePoi,
         candidate.destSystem, candidate.destPoi,
         candidate.itemId, buyQty,
@@ -1127,7 +1126,7 @@ export const traderRoutine: Routine = async function* (ctx: RoutineContext) {
     if (route && buyQty > 0) {
       await bot.refreshStorage();
       if (bot.storage.length > 0) {
-        const destSys = mapStore.getSystem(route.destSystem);
+        const destSys = ctx.mapStore.getSystem(route.destSystem);
         const destStation = destSys?.pois.find(p => p.id === route.destPoi);
         const destMarket = destStation?.market || [];
 
@@ -1228,7 +1227,7 @@ export const traderRoutine: Routine = async function* (ctx: RoutineContext) {
         ...cargoSafetyOpts,
         onJump: async (jumpNum) => {
           if (jumpNum % 3 !== 0) return true; // validate every 3 jumps
-          const buys = mapStore.getAllBuyDemand();
+          const buys = ctx.mapStore.getAllBuyDemand();
           const destBuyer = buys.find(b =>
             b.itemId === route!.itemId && b.systemId === route!.destSystem && b.poiId === route!.destPoi
           );
@@ -1323,7 +1322,7 @@ export const traderRoutine: Routine = async function* (ctx: RoutineContext) {
     // If unsold items remain, find another buyer from mapStore
     if (remaining > 0) {
       yield "find_next_buyer";
-      const allBuys = mapStore.getAllBuyDemand();
+      const allBuys = ctx.mapStore.getAllBuyDemand();
       const buyers = allBuys
         .filter(b => b.itemId === route.itemId && b.price > 0)
         .filter(b => !(b.systemId === bot.system && b.poiId === bot.poi)) // skip current station
@@ -1331,7 +1330,7 @@ export const traderRoutine: Routine = async function* (ctx: RoutineContext) {
 
       for (const buyer of buyers) {
         if (remaining <= 0 || bot.state !== "running") break;
-        const { jumps } = estimateFuelCost(bot.system, buyer.systemId, settings.fuelCostPerJump);
+        const { jumps } = estimateFuelCost(bot.system, buyer.systemId, ctx.mapStore, settings.fuelCostPerJump);
         if (jumps >= 999) continue;
 
         ctx.log("trade", `${remaining}x ${route.itemName} unsold — trying ${buyer.poiName} in ${buyer.systemId} (${buyer.price}cr/ea, ${jumps} jumps)`);
@@ -1465,7 +1464,7 @@ export const traderRoutine: Routine = async function* (ctx: RoutineContext) {
     }
     const nextCargoCapacity = Math.max(0, (bot.cargoMax > 0 ? bot.cargoMax : 50) - nextFuelWeight);
     const nextCargoRoutes = findCargoSellRoutes(ctx, settings, bot.system);
-    const nextMarketRoutes = findTradeOpportunities(settings, bot.system, nextCargoCapacity);
+    const nextMarketRoutes = findTradeOpportunities(settings, bot.system, ctx.mapStore, nextCargoCapacity);
     const nextFactionRoutes = findFactionStorageRoutes(ctx, settings, bot.system, nextCargoCapacity);
     const nextRoutes = [...nextCargoRoutes, ...nextMarketRoutes, ...nextFactionRoutes].sort((a, b) => b.totalProfit - a.totalProfit);
 

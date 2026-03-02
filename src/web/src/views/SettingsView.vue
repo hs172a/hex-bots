@@ -12,7 +12,7 @@
           @click="activeTab = tab.id"
           class="px-3 py-2 text-sm cursor-pointer border-b border-[#21262d] transition-colors"
           :class="activeTab === tab.id 
-            ? 'bg-space-row-hover text-space-accent border-l-2 border-l-space-accent pl-[10px]' 
+            ? 'bg-space-row-hover text-space-accent border-l-2 border-l-space-accent pl-[11px]' 
             : 'text-space-text-dim hover:bg-space-row-hover hover:text-space-text'"
         >
           {{ tab.name }}
@@ -196,8 +196,8 @@
           <div v-for="(qty, id) in crafterForm.craftLimits" :key="id" class="flex items-center justify-between py-1.5 border-b border-[#21262d]">
             <div>
               <span class="text-xs text-space-text font-medium">{{ recipeDisplayName(String(id)) }}</span>
-              <span v-if="recipeCategoryById(String(id))" class="ml-2 text-[10px] px-1.5 py-0.5 bg-[#21262d] rounded text-space-text-dim">{{ recipeCategoryById(String(id)) }}</span>
-              <div class="text-[10px] text-space-text-dim">{{ recipeComponentsStr(String(id)) }}</div>
+              <span v-if="recipeCategoryById(String(id))" class="ml-2 text-[11px] px-1.5 py-0.5 bg-[#21262d] rounded text-space-text-dim">{{ recipeCategoryById(String(id)) }}</span>
+              <div class="text-[11px] text-space-text-dim">{{ recipeComponentsStr(String(id)) }}</div>
             </div>
             <div class="flex items-center gap-2 flex-shrink-0">
               <input type="number" :value="qty" min="1" @change="crafterForm.craftLimits[String(id)] = Number(($event.target as HTMLInputElement).value)" class="input text-xs w-[70px]" />
@@ -222,7 +222,7 @@
               <input v-model.number="crafterAddQty" type="number" min="1" class="input text-xs w-[70px]" />
               <button @click="addCraftLimit" :disabled="!crafterAddId" class="btn text-xs px-2 py-1">+ Add</button>
             </div>
-            <div v-if="crafterAddId && selectedRecipeDetail" class="text-[10px] text-space-text-dim mt-1">{{ selectedRecipeDetail }}</div>
+            <div v-if="crafterAddId && selectedRecipeDetail" class="text-[11px] text-space-text-dim mt-1">{{ selectedRecipeDetail }}</div>
           </div>
         </div>
 
@@ -233,6 +233,10 @@
         <div class="setting-row">
           <div><div class="text-sm text-space-text">Repair Threshold</div><div class="text-xs text-space-text-dim mt-0.5">Repair hull when HP drops below this %.</div></div>
           <input type="number" v-model.number="crafterForm.repairThreshold" min="20" max="80" class="input text-sm w-24" />
+        </div>
+        <div class="setting-row">
+          <div><div class="text-sm text-space-text">Cycle Delay (ms)</div><div class="text-xs text-space-text-dim mt-0.5">Wait after a successful craft cycle. Automatically extended (3–6×) when idle or materials are missing.</div></div>
+          <input type="number" v-model.number="crafterForm.cycleDelayMs" min="2000" max="120000" step="1000" class="input text-sm w-28" />
         </div>
         <div class="save-bar"><button @click="saveCrafter" class="btn btn-primary">Save Settings</button></div>
       </div>
@@ -365,24 +369,28 @@
         <h3 class="text-[15px] font-semibold text-space-text-bright mb-1">Gatherer Settings</h3>
         <p class="text-xs text-space-text-dim mb-5">Collects build materials for a facility. Goal is assigned from the Station → Build tab.</p>
 
-        <!-- Current goal (read-only) -->
-        <div class="mb-4 p-3 rounded-md border border-space-border bg-space-bg">
-          <div class="text-xs font-semibold text-space-text-dim uppercase mb-2">Current Goal</div>
-          <template v-if="gathererGoal">
+        <!-- Per-bot goals (read-only) -->
+        <div class="mb-4">
+          <div class="text-xs font-semibold text-space-text-dim uppercase mb-2">Active Goals</div>
+          <div v-if="!botGathererGoals.length" class="p-3 rounded-md border border-space-border bg-space-bg text-xs text-space-text-dim italic">No goals set. Click 📦 Gather on a facility in the Station → Build tab.</div>
+          <div v-for="entry in botGathererGoals" :key="entry.username"
+            class="p-3 rounded-md border border-space-border bg-space-bg mb-2">
             <div class="flex items-start justify-between gap-2">
-              <div>
-                <div class="text-sm text-space-text-bright font-medium">{{ gathererGoal.target_name }}</div>
-                <div class="text-[10px] text-space-text-dim mt-0.5">{{ gathererGoal.target_system }} · {{ gathererGoal.target_poi }}</div>
+              <div class="min-w-0">
+                <div class="flex items-center gap-2 mb-1">
+                  <span class="text-[11px] px-1.5 py-0.5 rounded bg-[#21262d] text-space-accent font-mono">{{ entry.username }}</span>
+                  <span class="text-sm text-space-text-bright font-medium truncate">{{ entry.goal.target_name }}</span>
+                </div>
+                <div class="text-[11px] text-space-text-dim">{{ entry.goal.target_system || '—' }} · {{ entry.goal.target_poi || '—' }}</div>
                 <div class="flex flex-wrap gap-1 mt-1.5">
-                  <span v-for="m in gathererGoal.materials" :key="m.item_id" class="px-1.5 py-0.5 rounded text-[10px] bg-[#21262d] text-space-text">
-                    {{ m.quantity_needed }}x {{ m.item_name }}
+                  <span v-for="m in entry.goal.materials" :key="m.item_id" class="px-1.5 py-0.5 rounded text-[11px] bg-[#21262d] text-space-text">
+                    {{ m.quantity_needed }}× {{ m.item_name }}
                   </span>
                 </div>
               </div>
-              <button @click="clearGathererGoal" class="btn btn-secondary text-xs px-2 py-0.5 shrink-0">✕ Clear</button>
+              <button @click="clearGathererGoal(entry.username)" class="btn btn-secondary text-xs px-2 py-0.5 shrink-0">✕</button>
             </div>
-          </template>
-          <div v-else class="text-xs text-space-text-dim italic">No goal set. Click 📦 Gather on a facility in the Station → Build tab.</div>
+          </div>
         </div>
 
         <div class="setting-row">
@@ -596,6 +604,169 @@
         <div class="save-bar"><button @click="saveHunter" class="btn btn-primary">Save Settings</button></div>
       </div>
 
+      <!-- Scout Settings -->
+      <div v-else-if="activeTab === 'scout'">
+        <h3 class="text-[15px] font-semibold text-space-text-bright mb-1">Scout Settings</h3>
+        <p class="text-xs text-space-text-dim mb-5">Visits systems and scans markets to gather intel. Prefers unvisited systems.</p>
+
+        <div class="setting-row">
+          <div><div class="text-sm text-space-text">Max Jumps per Run</div><div class="text-xs text-space-text-dim mt-0.5">Maximum system jumps before returning home.</div></div>
+          <input type="number" v-model.number="scoutForm.maxJumps" min="1" max="100" class="input text-sm w-24" />
+        </div>
+        <div class="setting-row">
+          <div><div class="text-sm text-space-text">Scan Delay (ms)</div><div class="text-xs text-space-text-dim mt-0.5">Delay between scanning actions in each system.</div></div>
+          <input type="number" v-model.number="scoutForm.scanDelayMs" min="1000" max="30000" step="1000" class="input text-sm w-24" />
+        </div>
+        <div class="setting-row">
+          <div><div class="text-sm text-space-text">Refuel Threshold (%)</div><div class="text-xs text-space-text-dim mt-0.5">Return home when fuel drops below this %.</div></div>
+          <input type="number" v-model.number="scoutForm.refuelThreshold" min="20" max="80" class="input text-sm w-24" />
+        </div>
+        <div class="save-bar"><button @click="saveScout" class="btn btn-primary">Save Settings</button></div>
+      </div>
+
+      <!-- ReturnHome Settings -->
+      <div v-else-if="activeTab === 'return_home'">
+        <h3 class="text-[15px] font-semibold text-space-text-bright mb-1">ReturnHome Settings</h3>
+        <p class="text-xs text-space-text-dim mb-5">Navigates a bot back to its home system, docks, refuels, and idles.</p>
+
+        <div class="setting-row">
+          <div><div class="text-sm text-space-text">Home System</div><div class="text-xs text-space-text-dim mt-0.5">System to return to. Leave empty to use the bot's current system at start.</div></div>
+          <select v-model="returnHomeForm.homeSystem" class="input text-sm min-w-[200px]">
+            <option value="">(current system at start)</option>
+            <option v-for="sys in botStore.knownSystems" :key="sys.id" :value="sys.id">{{ sys.name || sys.id }}</option>
+          </select>
+        </div>
+        <div class="setting-row">
+          <div><div class="text-sm text-space-text">Refuel Threshold (%)</div><div class="text-xs text-space-text-dim mt-0.5">Refuel along the way when fuel drops below this %.</div></div>
+          <input type="number" v-model.number="returnHomeForm.refuelThreshold" min="20" max="80" class="input text-sm w-24" />
+        </div>
+        <div class="save-bar"><button @click="saveReturnHome" class="btn btn-primary">Save Settings</button></div>
+      </div>
+
+      <!-- Quartermaster Settings -->
+      <div v-else-if="activeTab === 'quartermaster'">
+        <h3 class="text-[15px] font-semibold text-space-text-bright mb-1">Quartermaster Settings</h3>
+        <p class="text-xs text-space-text-dim mb-5">Manages faction storage — withdraws refined goods to sell on market, deposits raw ores back.</p>
+
+        <div class="setting-row">
+          <div><div class="text-sm text-space-text">Sell Threshold</div><div class="text-xs text-space-text-dim mt-0.5">Minimum quantity of an item before selling it on the market.</div></div>
+          <input type="number" v-model.number="quartermasterForm.sellThreshold" min="1" max="100" class="input text-sm w-24" />
+        </div>
+        <div class="setting-row">
+          <div><div class="text-sm text-space-text">Cycle Delay (ms)</div><div class="text-xs text-space-text-dim mt-0.5">Delay between inventory management cycles.</div></div>
+          <input type="number" v-model.number="quartermasterForm.cycleDelayMs" min="10000" max="300000" step="10000" class="input text-sm w-28" />
+        </div>
+        <div class="setting-row">
+          <div><div class="text-sm text-space-text">Refuel Threshold (%)</div><div class="text-xs text-space-text-dim mt-0.5">Refuel when fuel drops below this %.</div></div>
+          <input type="number" v-model.number="quartermasterForm.refuelThreshold" min="20" max="80" class="input text-sm w-24" />
+        </div>
+        <div class="save-bar"><button @click="saveQuartermaster" class="btn btn-primary">Save Settings</button></div>
+      </div>
+
+      <!-- MissionRunner Settings -->
+      <div v-else-if="activeTab === 'mission_runner'">
+        <h3 class="text-[15px] font-semibold text-space-text-bright mb-1">MissionRunner Settings</h3>
+        <p class="text-xs text-space-text-dim mb-5">Accepts and completes NPC missions for credits and XP. Supports deliver, mine, buy, sell, visit, and dock objective types.</p>
+
+        <div class="setting-row items-start">
+          <div><div class="text-sm text-space-text">Mission Types</div><div class="text-xs text-space-text-dim mt-0.5">Select mission types to accept. Leave all unchecked to accept any type.</div></div>
+          <div class="flex flex-wrap gap-x-4 gap-y-2 pt-0.5">
+            <label v-for="t in MISSION_TYPES" :key="t" class="flex items-center gap-1.5 cursor-pointer">
+              <input type="checkbox" :value="t" v-model="missionRunnerForm.missionTypes" class="accent-space-accent" />
+              <span class="text-sm text-space-text capitalize">{{ t }}</span>
+            </label>
+          </div>
+        </div>
+
+        <div class="setting-row">
+          <div><div class="text-sm text-space-text">Difficulty Range</div><div class="text-xs text-space-text-dim mt-0.5">Filter by mission difficulty/level. 0 = no limit.</div></div>
+          <div class="flex items-center gap-2">
+            <input type="number" v-model.number="missionRunnerForm.minDifficulty" min="0" max="20" placeholder="Min" class="input text-sm w-20" />
+            <span class="text-space-text-dim text-xs">–</span>
+            <input type="number" v-model.number="missionRunnerForm.maxDifficulty" min="0" max="20" placeholder="Max" class="input text-sm w-20" />
+          </div>
+        </div>
+
+        <div class="setting-row">
+          <div><div class="text-sm text-space-text">Min Reward (credits)</div><div class="text-xs text-space-text-dim mt-0.5">Only accept missions with at least this credit reward. 0 = accept all.</div></div>
+          <input type="number" v-model.number="missionRunnerForm.minReward" min="0" class="input text-sm w-28" />
+        </div>
+
+        <div class="setting-row">
+          <div><div class="text-sm text-space-text">Prefer Buying Resources</div><div class="text-xs text-space-text-dim mt-0.5">Try to buy delivery items from market before mining them.</div></div>
+          <input type="checkbox" v-model="missionRunnerForm.preferBuying" class="w-4 h-4 accent-space-accent" />
+        </div>
+
+        <div class="setting-row">
+          <div><div class="text-sm text-space-text">Prefer Mining Resources</div><div class="text-xs text-space-text-dim mt-0.5">Mine resources when buying is unavailable or disabled.</div></div>
+          <input type="checkbox" v-model="missionRunnerForm.preferMining" class="w-4 h-4 accent-space-accent" />
+        </div>
+
+        <div class="setting-row">
+          <div><div class="text-sm text-space-text">Max Buy Price (per unit)</div><div class="text-xs text-space-text-dim mt-0.5">Skip buying if unit price exceeds this. 0 = no limit.</div></div>
+          <input type="number" v-model.number="missionRunnerForm.maxBuyPrice" min="0" class="input text-sm w-28" />
+        </div>
+
+        <div class="setting-row">
+          <div><div class="text-sm text-space-text">Refuel Threshold (%)</div><div class="text-xs text-space-text-dim mt-0.5">Refuel when fuel drops below this %.</div></div>
+          <input type="number" v-model.number="missionRunnerForm.refuelThreshold" min="20" max="80" class="input text-sm w-24" />
+        </div>
+
+        <div class="setting-row">
+          <div><div class="text-sm text-space-text">Cycle Delay (ms)</div><div class="text-xs text-space-text-dim mt-0.5">Wait time between mission cycles.</div></div>
+          <input type="number" v-model.number="missionRunnerForm.cycleDelayMs" min="10000" max="300000" step="5000" class="input text-sm w-28" />
+        </div>
+
+        <div class="save-bar"><button @click="saveMissionRunner" class="btn btn-primary">Save Settings</button></div>
+      </div>
+
+      <!-- ShipUpgrade Settings -->
+      <div v-else-if="activeTab === 'ship_upgrade'">
+        <h3 class="text-[15px] font-semibold text-space-text-bright mb-1">ShipUpgrade Settings</h3>
+        <p class="text-xs text-space-text-dim mb-5">One-shot routine: buys or switches to a target ship class, then idles. Empties cargo, checks owned ships first, then checks shipyard.</p>
+
+        <div class="setting-row">
+          <div><div class="text-sm text-space-text">Target Ship Class</div><div class="text-xs text-space-text-dim mt-0.5">The ship class ID to buy/switch to (e.g. "heavy_freighter").</div></div>
+          <input type="text" v-model="shipUpgradeForm.targetShipClass" placeholder="ship_class_id" class="input text-sm min-w-[200px]" />
+        </div>
+        <div class="setting-row">
+          <div><div class="text-sm text-space-text">Sell Old Ship</div><div class="text-xs text-space-text-dim mt-0.5">Sell the previous ship after switching.</div></div>
+          <input type="checkbox" v-model="shipUpgradeForm.sellOldShip" class="w-4 h-4" />
+        </div>
+        <div class="save-bar"><button @click="saveShipUpgrade" class="btn btn-primary">Save Settings</button></div>
+      </div>
+
+      <!-- Scavenger Settings -->
+      <div v-else-if="activeTab === 'scavenger'">
+        <h3 class="text-[15px] font-semibold text-space-text-bright mb-1">Scavenger Settings</h3>
+        <p class="text-xs text-space-text-dim mb-5">Roams between systems looting wrecks and jettisoned cargo. Deposits or sells when cargo is full.</p>
+
+        <div class="setting-row">
+          <div><div class="text-sm text-space-text">Deposit Mode</div><div class="text-xs text-space-text-dim mt-0.5">What to do with looted goods.</div></div>
+          <select v-model="scavengerForm.depositMode" class="input text-sm min-w-[160px]">
+            <option value="sell">Sell at market</option>
+            <option value="faction">Faction storage</option>
+            <option value="storage">Station storage</option>
+          </select>
+        </div>
+        <div class="setting-row">
+          <div><div class="text-sm text-space-text">Cargo Threshold (%)</div><div class="text-xs text-space-text-dim mt-0.5">Dock to deposit when cargo exceeds this %.</div></div>
+          <input type="number" v-model.number="scavengerForm.cargoThreshold" min="50" max="95" class="input text-sm w-24" />
+        </div>
+        <div class="setting-row">
+          <div><div class="text-sm text-space-text">Refuel Threshold (%)</div><div class="text-xs text-space-text-dim mt-0.5">Dock to refuel when fuel drops below this %.</div></div>
+          <input type="number" v-model.number="scavengerForm.refuelThreshold" min="20" max="80" class="input text-sm w-24" />
+        </div>
+        <div class="setting-row">
+          <div><div class="text-sm text-space-text">Home System</div><div class="text-xs text-space-text-dim mt-0.5">Optional home system to return to. Leave empty for free roaming.</div></div>
+          <select v-model="scavengerForm.homeSystem" class="input text-sm min-w-[200px]">
+            <option value="">(free roam)</option>
+            <option v-for="sys in botStore.knownSystems" :key="sys.id" :value="sys.id">{{ sys.name || sys.id }}</option>
+          </select>
+        </div>
+        <div class="save-bar"><button @click="saveScavenger" class="btn btn-primary">Save Settings</button></div>
+      </div>
+
       <!-- AI Settings -->
       <div v-else-if="activeTab === 'ai'">
         <h3 class="text-[15px] font-semibold text-space-text-bright mb-1">AI Settings</h3>
@@ -652,6 +823,12 @@ const settingsTabs = [
   { id: 'hunter', name: 'Hunter' },
   { id: 'gatherer', name: 'Gatherer' },
   { id: 'cleanup', name: 'Cleanup' },
+  { id: 'scout', name: 'Scout' },
+  { id: 'return_home', name: 'ReturnHome' },
+  { id: 'quartermaster', name: 'Quartermaster' },
+  { id: 'mission_runner', name: 'MissionRunner' },
+  { id: 'ship_upgrade', name: 'ShipUpgrade' },
+  { id: 'scavenger', name: 'Scavenger' },
   { id: 'ai', name: 'AI' },
 ];
 
@@ -708,10 +885,11 @@ function addOreQuota() {
 }
 
 // ── Crafter form ────────────────────────────────────────────
-const crafterForm = ref<{ craftLimits: Record<string, number>; refuelThreshold: number; repairThreshold: number }>({
+const crafterForm = ref<{ craftLimits: Record<string, number>; refuelThreshold: number; repairThreshold: number; cycleDelayMs: number }>({
   craftLimits: {},
   refuelThreshold: 50,
   repairThreshold: 40,
+  cycleDelayMs: 10000,
 });
 const crafterAddId = ref('');
 const crafterAddQty = ref(10);
@@ -815,10 +993,14 @@ const traderForm = ref({
 // ── Gatherer form ───────────────────────────────────────────
 const gathererForm = ref({ refuelThreshold: 30, repairThreshold: 40 });
 
-const gathererGoal = computed(() => (botStore.settings?.gatherer?.goal as any) || null);
+const botGathererGoals = computed(() =>
+  botStore.bots
+    .map(b => ({ username: b.username, goal: (botStore.settings as any)?.[b.username]?.goal ?? null }))
+    .filter(e => e.goal != null)
+);
 
-function clearGathererGoal() {
-  botStore.saveSettings('gatherer', { goal: null });
+function clearGathererGoal(username: string) {
+  botStore.saveSettings(username, { goal: null });
 }
 
 // ── Cleanup form ────────────────────────────────────────────
@@ -880,6 +1062,54 @@ const salvagerForm = ref({
   repairThreshold: 40,
 });
 
+// ── Scout form ──────────────────────────────────────────────
+const scoutForm = ref({
+  refuelThreshold: 60,
+  scanDelayMs: 3000,
+  maxJumps: 20,
+});
+
+// ── ReturnHome form ─────────────────────────────────────────
+const returnHomeForm = ref({
+  homeSystem: '',
+  refuelThreshold: 60,
+});
+
+// ── Quartermaster form ──────────────────────────────────────
+const quartermasterForm = ref({
+  refuelThreshold: 60,
+  sellThreshold: 5,
+  cycleDelayMs: 60000,
+});
+
+// ── MissionRunner form ──────────────────────────────────────
+const MISSION_TYPES = ['delivery', 'mining', 'exploration', 'bounty', 'trade', 'craft', 'fetch'];
+const missionRunnerForm = ref({
+  missionTypes: [] as string[],
+  minDifficulty: 0,
+  maxDifficulty: 0,
+  minReward: 0,
+  preferBuying: true,
+  preferMining: true,
+  maxBuyPrice: 0,
+  refuelThreshold: 50,
+  cycleDelayMs: 30000,
+});
+
+// ── ShipUpgrade form ────────────────────────────────────────
+const shipUpgradeForm = ref({
+  targetShipClass: '',
+  sellOldShip: true,
+});
+
+// ── Scavenger form ──────────────────────────────────────────
+const scavengerForm = ref({
+  depositMode: 'sell',
+  refuelThreshold: 60,
+  cargoThreshold: 80,
+  homeSystem: '',
+});
+
 // ── Station options (from mapData) ──────────────────────────
 const stationOptions = computed(() => {
   const opts: { value: string; label: string }[] = [];
@@ -921,6 +1151,7 @@ watch(() => botStore.settings, (s) => {
     crafterForm.value.craftLimits = { ...(s.crafter.craftLimits || {}) };
     crafterForm.value.refuelThreshold = s.crafter.refuelThreshold ?? 50;
     crafterForm.value.repairThreshold = s.crafter.repairThreshold ?? 40;
+    crafterForm.value.cycleDelayMs = s.crafter.cycleDelayMs ?? 10000;
   }
   if (s.rescue) {
     const r = s.rescue;
@@ -1007,6 +1238,47 @@ watch(() => botStore.settings, (s) => {
     hunterForm.value.onlyNPCs = h.onlyNPCs !== false;
     hunterForm.value.autoCloak = h.autoCloak === true;
   }
+  if (s.scout) {
+    const sc = s.scout;
+    scoutForm.value.refuelThreshold = sc.refuelThreshold ?? 60;
+    scoutForm.value.scanDelayMs = sc.scanDelayMs ?? 3000;
+    scoutForm.value.maxJumps = sc.maxJumps ?? 20;
+  }
+  if (s.return_home) {
+    const rh = s.return_home;
+    returnHomeForm.value.homeSystem = rh.homeSystem || '';
+    returnHomeForm.value.refuelThreshold = rh.refuelThreshold ?? 60;
+  }
+  if (s.quartermaster) {
+    const qm = s.quartermaster;
+    quartermasterForm.value.refuelThreshold = qm.refuelThreshold ?? 60;
+    quartermasterForm.value.sellThreshold = qm.sellThreshold ?? 5;
+    quartermasterForm.value.cycleDelayMs = qm.cycleDelayMs ?? 60000;
+  }
+  if (s.mission_runner) {
+    const mr = s.mission_runner;
+    missionRunnerForm.value.missionTypes = Array.isArray(mr.missionTypes) ? mr.missionTypes : (mr.missionTypes ? String(mr.missionTypes).split(',').map((t: string) => t.trim()).filter(Boolean) : []);
+    missionRunnerForm.value.minDifficulty = mr.minDifficulty ?? 0;
+    missionRunnerForm.value.maxDifficulty = mr.maxDifficulty ?? 0;
+    missionRunnerForm.value.minReward = mr.minReward ?? 0;
+    missionRunnerForm.value.preferBuying = mr.preferBuying !== false;
+    missionRunnerForm.value.preferMining = mr.preferMining !== false;
+    missionRunnerForm.value.maxBuyPrice = mr.maxBuyPrice ?? 0;
+    missionRunnerForm.value.refuelThreshold = mr.refuelThreshold ?? 50;
+    missionRunnerForm.value.cycleDelayMs = mr.cycleDelayMs ?? 30000;
+  }
+  if (s.ship_upgrade) {
+    const su = s.ship_upgrade;
+    shipUpgradeForm.value.targetShipClass = su.targetShipClass || '';
+    shipUpgradeForm.value.sellOldShip = su.sellOldShip !== false;
+  }
+  if (s.scavenger) {
+    const sv = s.scavenger;
+    scavengerForm.value.depositMode = sv.depositMode || 'sell';
+    scavengerForm.value.refuelThreshold = sv.refuelThreshold ?? 60;
+    scavengerForm.value.cargoThreshold = sv.cargoThreshold ?? 80;
+    scavengerForm.value.homeSystem = sv.homeSystem || '';
+  }
   if (s.ai) {
     const a = s.ai;
     aiForm.value.baseUrl = a.baseUrl || '';
@@ -1070,6 +1342,7 @@ function saveCrafter() {
     craftLimits: { ...crafterForm.value.craftLimits },
     refuelThreshold: crafterForm.value.refuelThreshold,
     repairThreshold: crafterForm.value.repairThreshold,
+    cycleDelayMs: crafterForm.value.cycleDelayMs,
   });
 }
 
@@ -1138,6 +1411,25 @@ function saveSalvager() {
 function saveHunter() {
   botStore.saveSettings('hunter', { ...hunterForm.value });
 }
+
+function saveScout() { botStore.saveSettings('scout', { ...scoutForm.value }); }
+function saveReturnHome() { botStore.saveSettings('return_home', { ...returnHomeForm.value }); }
+function saveQuartermaster() { botStore.saveSettings('quartermaster', { ...quartermasterForm.value }); }
+function saveMissionRunner() {
+  botStore.saveSettings('mission_runner', {
+    missionTypes: missionRunnerForm.value.missionTypes,
+    minDifficulty: missionRunnerForm.value.minDifficulty,
+    maxDifficulty: missionRunnerForm.value.maxDifficulty,
+    minReward: missionRunnerForm.value.minReward,
+    preferBuying: missionRunnerForm.value.preferBuying,
+    preferMining: missionRunnerForm.value.preferMining,
+    maxBuyPrice: missionRunnerForm.value.maxBuyPrice,
+    refuelThreshold: missionRunnerForm.value.refuelThreshold,
+    cycleDelayMs: missionRunnerForm.value.cycleDelayMs,
+  });
+}
+function saveShipUpgrade() { botStore.saveSettings('ship_upgrade', { ...shipUpgradeForm.value }); }
+function saveScavenger() { botStore.saveSettings('scavenger', { ...scavengerForm.value }); }
 
 function saveAi() {
   botStore.saveSettings('ai', { ...aiForm.value });

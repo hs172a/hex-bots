@@ -1,5 +1,5 @@
 import type { Routine, RoutineContext } from "../bot.js";
-import { mapStore } from "../mapstore.js";
+import type { MapStore } from "../mapstore.js";
 import {
   type SystemPOI,
   type Connection,
@@ -347,14 +347,14 @@ export const explorerRoutine: Routine = async function* (ctx: RoutineContext) {
       const isStation = isStationPoi(poi);
       const isMinable = isMinablePoi(poi.type);
       const isScenic = isScenicPoi(poi.type);
-      const minutesAgo = mapStore.minutesSinceExplored(systemId, poi.id);
+      const minutesAgo = ctx.mapStore.minutesSinceExplored(systemId, poi.id);
 
       if (isStation) {
         if (minutesAgo < STATION_REFRESH_MINS) { skippedCount++; continue; }
         toVisit.push({ poi, reason: minutesAgo === Infinity ? "new" : "refresh" });
       } else if (isMinable) {
         // Always re-visit if explored but no ores were recorded
-        const storedPoi = mapStore.getSystem(systemId)?.pois.find(p => p.id === poi.id);
+        const storedPoi = ctx.mapStore.getSystem(systemId)?.pois.find(p => p.id === poi.id);
         const hasOreData = (storedPoi?.ores_found?.length ?? 0) > 0;
         if (minutesAgo < RESOURCE_REFRESH_MINS && hasOreData) { skippedCount++; continue; }
         toVisit.push({ poi, reason: minutesAgo === Infinity ? "new" : (hasOreData ? "re-sample" : "no-data") });
@@ -481,7 +481,7 @@ export const explorerRoutine: Routine = async function* (ctx: RoutineContext) {
     }
 
     const validConns = connections.filter(c => c.id);
-    const nextSystem = pickNextSystem(validConns, visitedSystems);
+    const nextSystem = pickNextSystem(validConns, visitedSystems, ctx.mapStore);
     if (!nextSystem) {
       ctx.log("info", "All connected systems explored! Picking a random connection...");
       if (validConns.length > 0) {
@@ -562,7 +562,7 @@ async function* sampleResourcePoi(
       if (msg.includes("cargo") && msg.includes("full")) break;
       // Missing module — mark as explored to avoid revisiting, but don't sample
       if (msg.includes("gas harvester") || msg.includes("ice harvester")) {
-        mapStore.markExplored(systemId, poi.id);
+        ctx.mapStore.markExplored(systemId, poi.id);
         return;
       }
       if (mined === 0) cantMine = true;
@@ -572,7 +572,7 @@ async function* sampleResourcePoi(
     mined++;
     const { oreId, oreName } = parseOreFromMineResult(mineResp.result);
     if (oreId) {
-      mapStore.recordMiningYield(systemId, poi.id, { item_id: oreId, name: oreName });
+      ctx.mapStore.recordMiningYield(systemId, poi.id, { item_id: oreId, name: oreName });
       oresFound.add(oreName);
     }
 
@@ -585,7 +585,7 @@ async function* sampleResourcePoi(
   }
 
   if (!cantMine) {
-    mapStore.markExplored(systemId, poi.id);
+    ctx.mapStore.markExplored(systemId, poi.id);
   }
 }
 
@@ -622,7 +622,7 @@ async function* scanStation(
   const marketResp = await bot.exec("view_market");
   let marketItemsList: Array<Record<string, unknown>> = [];
   if (marketResp.result && typeof marketResp.result === "object") {
-    mapStore.updateMarket(systemId, poi.id, marketResp.result as Record<string, unknown>);
+    ctx.mapStore.updateMarket(systemId, poi.id, marketResp.result as Record<string, unknown>);
     const result = marketResp.result as Record<string, unknown>;
     marketItemsList = (
       Array.isArray(result) ? result :
@@ -648,7 +648,7 @@ async function* scanStation(
       []
     ) as Array<Record<string, unknown>>;
     if (missions.length > 0) {
-      mapStore.updateMissions(systemId, poi.id, missions);
+      ctx.mapStore.updateMissions(systemId, poi.id, missions);
       missionCount = missions.length;
     }
   }
@@ -721,7 +721,7 @@ async function* scanStation(
   await bot.exec("undock");
   bot.docked = false;
 
-  mapStore.markExplored(systemId, poi.id);
+  ctx.mapStore.markExplored(systemId, poi.id);
 }
 
 /** Visit a non-minable, non-station POI — check what's nearby. */
@@ -742,7 +742,7 @@ async function* visitOtherPoi(
     }
   }
 
-  mapStore.markExplored(systemId, poi.id);
+  ctx.mapStore.markExplored(systemId, poi.id);
 }
 
 // ── Trade Update routine ─────────────────────────────────────
@@ -788,7 +788,7 @@ async function* tradeUpdateRoutine(ctx: RoutineContext): AsyncGenerator<string, 
 
     // ── Build list of known systems with stations, sorted by stalest market data ──
     yield "plan_route";
-    const allSystems = mapStore.getAllSystems();
+    const allSystems = ctx.mapStore.getAllSystems();
     const stationSystems: Array<{ systemId: string; systemName: string; stationPoi: string; stationName: string; staleMins: number }> = [];
 
     for (const [sysId, sys] of Object.entries(allSystems)) {
@@ -837,7 +837,7 @@ async function* tradeUpdateRoutine(ctx: RoutineContext): AsyncGenerator<string, 
       }
 
       // Skip if recently updated (< 15 mins)
-      const freshCheck = mapStore.minutesSinceExplored(target.systemId, target.stationPoi);
+      const freshCheck = ctx.mapStore.minutesSinceExplored(target.systemId, target.stationPoi);
       if (freshCheck < 15) {
         continue;
       }
@@ -892,7 +892,7 @@ async function* tradeUpdateRoutine(ctx: RoutineContext): AsyncGenerator<string, 
 
           const marketResp = await bot.exec("view_market");
           if (marketResp.result && typeof marketResp.result === "object") {
-            mapStore.updateMarket(target.systemId, target.stationPoi, marketResp.result as Record<string, unknown>);
+            ctx.mapStore.updateMarket(target.systemId, target.stationPoi, marketResp.result as Record<string, unknown>);
           }
 
           const missResp = await bot.exec("get_missions");
@@ -904,13 +904,13 @@ async function* tradeUpdateRoutine(ctx: RoutineContext): AsyncGenerator<string, 
               Array.isArray(mData.available) ? mData.available :
               []
             ) as Array<Record<string, unknown>>;
-            if (missions.length > 0) mapStore.updateMissions(target.systemId, target.stationPoi, missions);
+            if (missions.length > 0) ctx.mapStore.updateMissions(target.systemId, target.stationPoi, missions);
           }
 
           await tryRefuel(ctx);
           await bot.exec("undock");
           bot.docked = false;
-          mapStore.markExplored(target.systemId, target.stationPoi);
+          ctx.mapStore.markExplored(target.systemId, target.stationPoi);
           ctx.log("info", `Updated ${target.stationName} in ${target.systemName}`);
         }
       }
@@ -940,15 +940,15 @@ async function* tradeUpdateRoutine(ctx: RoutineContext): AsyncGenerator<string, 
 // ── Helpers ──────────────────────────────────────────────────
 
 /** Pick the best next system: prefer unvisited, then least-explored in mapStore. */
-function pickNextSystem(connections: Connection[], visited: Set<string>): Connection | null {
+function pickNextSystem(connections: Connection[], visited: Set<string>, ms: MapStore): Connection | null {
   const unvisited = connections.filter(c => !visited.has(c.id));
   if (unvisited.length > 0) {
-    const unmapped = unvisited.filter(c => !mapStore.getSystem(c.id));
+    const unmapped = unvisited.filter(c => !ms.getSystem(c.id));
     if (unmapped.length > 0) return unmapped[0];
 
     unvisited.sort((a, b) => {
-      const aPois = mapStore.getSystem(a.id)?.pois?.length ?? 0;
-      const bPois = mapStore.getSystem(b.id)?.pois?.length ?? 0;
+      const aPois = ms.getSystem(a.id)?.pois?.length ?? 0;
+      const bPois = ms.getSystem(b.id)?.pois?.length ?? 0;
       return aPois - bPois;
     });
     return unvisited[0];

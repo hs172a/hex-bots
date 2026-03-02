@@ -15,7 +15,7 @@
  *   repairThreshold: number (default 40) — hull % below which we repair.
  */
 import type { Routine, RoutineContext } from "../bot.js";
-import { mapStore } from "../mapstore.js";
+import type { MapStore } from "../mapstore.js";
 import {
   ensureDocked,
   ensureUndocked,
@@ -80,10 +80,10 @@ function getSettings(username?: string): {
 // ── Market helpers ────────────────────────────────────────────
 
 /** Find the cheapest market source (where we can BUY an item from NPCs). */
-function findCheapestBuySource(itemId: string): MarketSource | null {
+function findCheapestBuySource(itemId: string, ms: MapStore): MarketSource | null {
   let best: MarketSource | null = null;
-  for (const sysId of mapStore.getAllSystemIds()) {
-    const sys = mapStore.getSystem(sysId);
+  for (const sysId of ms.getAllSystemIds()) {
+    const sys = ms.getSystem(sysId);
     if (!sys) continue;
     for (const poi of sys.pois) {
       for (const m of poi.market) {
@@ -105,9 +105,9 @@ function findCheapestBuySource(itemId: string): MarketSource | null {
 }
 
 /** Find a known minable POI for an item (by recorded ores_found). */
-function findMineSource(itemId: string): { system_id: string; poi_id: string; poi_name: string } | null {
-  for (const sysId of mapStore.getAllSystemIds()) {
-    const sys = mapStore.getSystem(sysId);
+function findMineSource(itemId: string, ms: MapStore): { system_id: string; poi_id: string; poi_name: string } | null {
+  for (const sysId of ms.getAllSystemIds()) {
+    const sys = ms.getSystem(sysId);
     if (!sys) continue;
     for (const poi of sys.pois) {
       if (!isMinablePoi(poi.type)) continue;
@@ -280,7 +280,7 @@ async function buyItem(
   if (resp.error) {
     const msg = resp.error.message.toLowerCase();
     if (msg.includes("not_available") || msg.includes("no_stock") || msg.includes("out of stock")) {
-      mapStore.removeMarketItem(bot.system, bot.poi, itemId);
+      ctx.mapStore.removeMarketItem(bot.system, bot.poi, itemId);
       ctx.log("warn", `${itemName} not available here — removing from market cache`);
     } else {
       ctx.log("error", `Buy failed for ${itemName}: ${resp.error.message}`);
@@ -429,14 +429,14 @@ export const gathererRoutine: Routine = async function* (ctx: RoutineContext) {
 
     ctx.log("system", `${mat.item_name}: need ${remaining} more (${inStorage} already stored)`);
 
-    const buySource = findCheapestBuySource(mat.item_id);
+    const buySource = findCheapestBuySource(mat.item_id, ctx.mapStore);
     if (buySource) {
       ctx.log("system", `  → Buy @ ${buySource.poi_name}: ${buySource.price} cr/unit (stock: ${buySource.stock})`);
       tasks.push({ mat, remaining, source: "buy", buySource });
       continue;
     }
 
-    const mineSource = findMineSource(mat.item_id);
+    const mineSource = findMineSource(mat.item_id, ctx.mapStore);
     if (mineSource) {
       ctx.log("system", `  → Mine @ ${mineSource.poi_name} (${mineSource.system_id})`);
       tasks.push({ mat, remaining, source: "mine", minePoi: { system_id: mineSource.system_id, poi_id: mineSource.poi_id, poi_name: mineSource.poi_name } });
@@ -480,16 +480,16 @@ export const gathererRoutine: Routine = async function* (ctx: RoutineContext) {
 
         if (!src) {
           // Try to find a source now — refresh market data
-          src = findCheapestBuySource(task.mat.item_id) ?? undefined;
+          src = findCheapestBuySource(task.mat.item_id, ctx.mapStore) ?? undefined;
         }
 
         if (!src) {
           ctx.log("warn", `No market source for ${task.mat.item_name} — checking nearby stations...`);
           // Scan a few known stations
-          const sysIds = mapStore.getAllSystemIds().slice(0, 15);
+          const sysIds = ctx.mapStore.getAllSystemIds().slice(0, 15);
           for (const sysId of sysIds) {
             if (bot.state !== "running") break;
-            const sys = mapStore.getSystem(sysId);
+            const sys = ctx.mapStore.getSystem(sysId);
             if (!sys) continue;
             const hasStation = sys.pois.some(p => p.has_base);
             if (!hasStation) continue;
@@ -509,7 +509,7 @@ export const gathererRoutine: Routine = async function* (ctx: RoutineContext) {
             await recordMarketData(ctx);
             await ensureUndocked(ctx);
 
-            src = findCheapestBuySource(task.mat.item_id) ?? undefined;
+            src = findCheapestBuySource(task.mat.item_id, ctx.mapStore) ?? undefined;
             if (src) {
               ctx.log("trade", `Found ${task.mat.item_name} at ${src.poi_name} (${src.price} cr)`);
               break;

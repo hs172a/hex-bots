@@ -1,6 +1,5 @@
 import type { Routine, RoutineContext } from "../bot.js";
-import { mapStore } from "../mapstore.js";
-import { catalogStore } from "../catalogstore.js";
+import type { MapStore } from "../mapstore.js";
 import { cachedFetch } from "../httpcache.js";
 import {
   ensureDocked,
@@ -193,7 +192,7 @@ function parseRecipes(data: unknown): Recipe[] {
 
 /** Return recipes from the catalogStore cache; fetch from API only when cache is empty. */
 async function fetchAllRecipes(ctx: RoutineContext): Promise<Recipe[]> {
-  const cached = Object.values(catalogStore.getAll().recipes);
+  const cached = Object.values(ctx.catalogStore.getAll().recipes);
   if (cached.length > 0) {
     const recipes = parseRecipes(cached);
     ctx.log("info", `${recipes.length} recipes loaded from cache`);
@@ -203,12 +202,12 @@ async function fetchAllRecipes(ctx: RoutineContext): Promise<Recipe[]> {
   // Cache empty — populate catalogStore (handles all 4 types + disk persistence)
   ctx.log("info", "Recipe cache empty, fetching from API...");
   try {
-    await catalogStore.fetchAll(ctx.api);
+    await ctx.catalogStore.fetchAll(ctx.api);
   } catch (err) {
     ctx.log("error", `Catalog fetch failed: ${err}`);
     return [];
   }
-  const fresh = Object.values(catalogStore.getAll().recipes);
+  const fresh = Object.values(ctx.catalogStore.getAll().recipes);
   const recipes = parseRecipes(fresh);
   ctx.log("info", `${recipes.length} recipes fetched and cached`);
   return recipes;
@@ -217,9 +216,9 @@ async function fetchAllRecipes(ctx: RoutineContext): Promise<Recipe[]> {
 // ── Demand analysis helpers ──────────────────────────────────
 
 /** Build a map of items with buy orders across all known markets. */
-function buildDemandMap(global?: GlobalMarketData): Map<string, DemandEntry> {
+function buildDemandMap(ms: MapStore, global?: GlobalMarketData): Map<string, DemandEntry> {
   const demand = new Map<string, DemandEntry>();
-  const allBuys = mapStore.getAllBuyDemand();
+  const allBuys = ms.getAllBuyDemand();
 
   for (const buy of allBuys) {
     const existing = demand.get(buy.itemId);
@@ -265,13 +264,14 @@ function buildDemandMap(global?: GlobalMarketData): Map<string, DemandEntry> {
 function calculateCraftProfit(
   recipe: Recipe,
   demandPrice: number,
+  ms: MapStore,
   globalAskMap?: Map<string, number>,
   baseValues?: Map<string, number>,
 ): { profitPct: number; materialCost: number } {
   let materialCost = 0;
 
   for (const comp of recipe.components) {
-    const bestSell = mapStore.findBestSellPrice(comp.item_id);
+    const bestSell = ms.findBestSellPrice(comp.item_id);
     let unitPrice: number | null = null;
 
     if (bestSell) {
@@ -301,6 +301,7 @@ function calculateCraftProfit(
 function findMostNeededOre(
   recipes: Recipe[],
   craftLimits: Record<string, number>,
+  ms: MapStore,
 ): string {
   const oreConsumption = new Map<string, number>();
 
@@ -311,7 +312,7 @@ function findMostNeededOre(
 
     for (const comp of recipe.components) {
       // Check if this component is a raw ore (exists in mapStore ore data)
-      const oreLocations = mapStore.findOreLocations(comp.item_id);
+      const oreLocations = ms.findOreLocations(comp.item_id);
       if (oreLocations.length > 0) {
         oreConsumption.set(
           comp.item_id,
@@ -421,6 +422,7 @@ function computeOreQuotas(
   recipes: Recipe[],
   recipeIndex: Map<string, Recipe>,
   craftLimits: Record<string, number>,
+  ms: MapStore,
 ): Record<string, number> {
   const oreNeeds: Record<string, number> = {};
 
@@ -432,9 +434,9 @@ function computeOreQuotas(
     const rawMaterials = flattenToRawMaterials(recipe, recipeIndex);
     for (const [itemId, qtyPerBatch] of rawMaterials) {
       // Only include items that are minable at ore belts (not ice fields or gas clouds)
-      const oreLocations = mapStore.findOreLocations(itemId);
-      const oreBeltLocations = oreLocations.filter(loc => {
-        const sys = mapStore.getSystem(loc.systemId);
+      const oreLocations = ms.findOreLocations(itemId);
+      const oreBeltLocations = oreLocations.filter((loc: { systemId: string; poiId: string }) => {
+        const sys = ms.getSystem(loc.systemId);
         const poi = sys?.pois.find(p => p.id === loc.poiId);
         return poi ? isOreBeltPoi(poi.type) : false;
       });
@@ -639,7 +641,7 @@ async function placeMarketOrders(
     if (lower.includes("fuel") || lower.includes("energy_cell")) continue;
 
     // Find best known sell price
-    const bestSell = mapStore.findBestSellPrice(item.itemId);
+    const bestSell = ctx.mapStore.findBestSellPrice(item.itemId);
     const globalAsk = globalMarket?.askByItem.get(item.itemId);
     const basePrice = bestSell?.price || globalAsk || 0;
     if (basePrice <= 0) continue;
@@ -701,7 +703,7 @@ export const coordinatorRoutine: Routine = async function* (ctx: RoutineContext)
     if (bot.docked) {
       const marketResp = await bot.exec("view_market");
       if (marketResp.result && typeof marketResp.result === "object" && bot.system && bot.poi) {
-        mapStore.updateMarket(bot.system, bot.poi, marketResp.result as Record<string, unknown>);
+        ctx.mapStore.updateMarket(bot.system, bot.poi, marketResp.result as Record<string, unknown>);
       }
     }
 
@@ -714,7 +716,7 @@ export const coordinatorRoutine: Routine = async function* (ctx: RoutineContext)
 
     // ── Build demand map ──
     yield "analyze_demand";
-    const demandMap = buildDemandMap(globalMarket);
+    const demandMap = buildDemandMap(ctx.mapStore, globalMarket);
 
     if (demandMap.size === 0) {
       ctx.log("coord", "No buy demand found on any known market — waiting for explorer/market data");
@@ -722,7 +724,7 @@ export const coordinatorRoutine: Routine = async function* (ctx: RoutineContext)
       continue;
     }
 
-    const localCount = mapStore.getAllBuyDemand().length;
+    const localCount = ctx.mapStore.getAllBuyDemand().length;
     const globalCount = demandMap.size - localCount;
     ctx.log("coord", `Found demand for ${demandMap.size} item(s) (${localCount} local, ${globalCount > 0 ? `+${globalCount} from global API` : "0 global supplement"})`);
 
@@ -755,12 +757,12 @@ export const coordinatorRoutine: Routine = async function* (ctx: RoutineContext)
       }
 
       // First try without fallback (fully locally-priced)
-      const { profitPct: localProfitPct } = calculateCraftProfit(recipe, demand.bestPrice);
+      const { profitPct: localProfitPct } = calculateCraftProfit(recipe, demand.bestPrice, ctx.mapStore);
       const usedFallback = localProfitPct < 0;
 
       // If local data is incomplete, retry with global fallbacks
       const { profitPct } = usedFallback
-        ? calculateCraftProfit(recipe, demand.bestPrice, globalMarket?.askByItem, globalMarket?.baseValues)
+        ? calculateCraftProfit(recipe, demand.bestPrice, ctx.mapStore, globalMarket?.askByItem, globalMarket?.baseValues)
         : { profitPct: localProfitPct };
 
       if (profitPct >= settings.minProfitMargin) {
@@ -874,10 +876,10 @@ export const coordinatorRoutine: Routine = async function* (ctx: RoutineContext)
       yield "update_ore_target";
       const allSettings = readSettings();
       const crafterLimits = ((allSettings.crafter || {}).craftLimits as Record<string, number>) || {};
-      const bestOre = findMostNeededOre(recipes, crafterLimits);
+      const bestOre = findMostNeededOre(recipes, crafterLimits, ctx.mapStore);
 
       // Compute ore quotas from active craft limits
-      const oreQuotas = computeOreQuotas(recipes, recipeIndex, crafterLimits);
+      const oreQuotas = computeOreQuotas(recipes, recipeIndex, crafterLimits, ctx.mapStore);
       const currentQuotas = ((allSettings.miner || {}).oreQuotas as Record<string, number>) || {};
       const quotasChanged = JSON.stringify(oreQuotas) !== JSON.stringify(currentQuotas);
 
@@ -894,7 +896,7 @@ export const coordinatorRoutine: Routine = async function* (ctx: RoutineContext)
       if (quotasChanged) {
         minerUpdates.oreQuotas = oreQuotas;
         const quotaList = Object.entries(oreQuotas)
-          .map(([id, qty]) => `${catalogStore.resolveItemName(id)}: ${qty}`)
+          .map(([id, qty]) => `${ctx.catalogStore.resolveItemName(id)}: ${qty}`)
           .join(", ");
         ctx.log("coord", `Miner ore quotas: ${quotaList || "(cleared)"}`);
       }

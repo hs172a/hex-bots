@@ -7,7 +7,7 @@
       <!-- Ship Stats + Modules side by side -->
       <div class="flex gap-2 items-start">
         <!-- Ship Stats -->
-        <div class="card py-2 px-3 flex-1 min-w-0">
+        <div class="card py-2 px-2 flex-1 min-w-0">
           <div class="flex items-center justify-between border-b border-space-border pb-1 mb-2">
             <h3 class="text-xs font-semibold text-space-text-dim uppercase">🛸 Ship</h3>
             <button @click="loadShipData()" :disabled="shipActionLoading" class="btn btn-secondary text-xs py-0 px-2">🔄</button>
@@ -41,7 +41,7 @@
         </div>
 
         <!-- Installed Modules -->
-        <div class="card py-2 px-3 flex-1 min-w-0">
+        <div class="card py-2 px-2 flex-1 min-w-0">
           <h3 class="text-xs font-semibold text-space-text-dim uppercase border-b border-space-border pb-1 mb-2">⚙️ Installed Modules</h3>
           <div v-if="installedModules.length === 0" class="text-xs text-space-text-dim text-center py-2">{{ shipInfo ? 'No modules installed' : 'Load ship data first' }}</div>
           <div v-else class="space-y-1.5 max-h-56 overflow-auto scrollbar-dark">
@@ -52,7 +52,7 @@
                     <span class="text-sm">{{ moduleTypeIcon(mod.type || mod.slot_type) }}</span>
                     <span class="text-xs text-space-text-bright truncate">{{ mod.name || mod.module_id || mod.id }}</span>
                   </div>
-                  <div class="flex flex-wrap gap-x-2.5 gap-y-0 mt-1 text-[10px]">
+                  <div class="flex flex-wrap gap-x-2.5 gap-y-0 mt-1 text-[11px]">
                     <span v-if="mod.quality_grade" class="text-yellow-400">⭐ {{ mod.quality_grade }}</span>
                     <span v-if="mod.wear_status" :class="wearColor(mod.wear)">{{ mod.wear_status }}{{ mod.wear > 0 ? ` (${mod.wear}%)` : '' }}</span>
                     <span v-if="mod.cpu_usage != null" class="text-green-400">CPU: {{ mod.cpu_usage }}</span>
@@ -73,19 +73,19 @@
       </div><!-- /side-by-side row -->
 
       <!-- Install from Cargo -->
-      <div class="card py-2 px-3">
+      <div class="card py-2 px-2">
         <h3 class="text-xs font-semibold text-space-text-dim uppercase border-b border-space-border pb-1 mb-2">📦 Install from Cargo</h3>
         <div v-if="inventory.length === 0" class="text-xs text-space-text-dim text-center py-2">Cargo is empty</div>
         <div v-else class="space-y-1 max-h-36 overflow-auto scrollbar-dark">
           <div v-for="item in inventory" :key="item.itemId" class="flex items-center justify-between bg-[#21262d] rounded py-0.5 px-2">
-            <div class="min-w-0 flex-1"><div class="text-[10px] text-space-text-bright truncate">{{ item.name }}</div><div class="text-[10px] text-space-text-dim">x{{ item.quantity }}</div></div>
+            <div class="min-w-0 flex-1"><div class="text-[11px] text-space-text-bright truncate">{{ item.name }}</div><div class="text-[11px] text-space-text-dim">x{{ item.quantity }}</div></div>
             <button @click="installModule(item.itemId)" :disabled="shipActionLoading" class="ml-2 text-xs px-2 py-0.5 bg-green-600/40 hover:bg-green-600 rounded transition-colors disabled:opacity-50 shrink-0">Install</button>
           </div>
         </div>
       </div>
 
       <!-- Buy from Market -->
-      <div class="card py-2 px-3">
+      <div class="card py-2 px-2">
         <div class="flex items-center justify-between border-b border-space-border pb-1 mb-2">
           <h3 class="text-xs font-semibold text-space-text-dim uppercase">🛒 Station Shop</h3>
           <div class="flex gap-1.5 items-center">
@@ -115,7 +115,7 @@
                   <span class="text-sm flex-shrink-0">{{ shopCatIcon(item.category) }}</span>
                   <span class="text-xs text-space-text-bright truncate">{{ item.item_name || item.name }}</span>
                 </div>
-                <div class="flex flex-wrap gap-x-2.5 gap-y-0 mt-0.5 text-[10px] text-space-text-dim">
+                <div class="flex flex-wrap gap-x-2.5 gap-y-0 mt-0.5 text-[11px] text-space-text-dim">
                   <span v-if="item.sell_quantity > 0" class="text-green-400">📦 {{ item.sell_quantity.toLocaleString() }} in stock</span>
                   <span v-if="item.buy_quantity > 0" class="text-blue-400">🏷️ Station buys: {{ item.buy_price?.toLocaleString() }}₡ ×{{ item.buy_quantity.toLocaleString() }}</span>
                   <span v-if="item.spread > 0" class="text-purple-400">📈 Spread: {{ item.spread.toLocaleString() }}₡</span>
@@ -126,7 +126,7 @@
                   <span class="text-xs text-space-yellow font-semibold">{{ item.sell_price.toLocaleString() }}₡</span>
                   <button @click="buyModuleItem(item.item_id, 1)" :disabled="shipActionLoading" class="text-xs px-2 py-0.5 bg-blue-600 hover:bg-blue-700 rounded transition-colors disabled:opacity-50">Buy</button>
                 </div>
-                <div v-else class="text-[10px] text-space-text-dim italic">no sell orders</div>
+                <div v-else class="text-[11px] text-space-text-dim italic">no sell orders</div>
               </div>
             </div>
           </div>
@@ -144,12 +144,12 @@
           <div class="flex justify-between items-start">
             <div>
               <div class="text-xs font-semibold text-space-text-bright">{{ shipCatalogEntry?.name || shipInfo?.class_id }}</div>
-              <div v-if="shipCatalogEntry" class="text-[10px] text-space-text-dim">{{ shipCatalogEntry.empire_name }} · Tier {{ shipCatalogEntry.tier }} · Scale {{ shipCatalogEntry.scale }}</div>
+              <div v-if="shipCatalogEntry" class="text-[11px] text-space-text-dim">{{ shipCatalogEntry.empire_name }} · Tier {{ shipCatalogEntry.tier }} · Scale {{ shipCatalogEntry.scale }}</div>
             </div>
             <div v-if="shipCatalogEntry" class="text-space-yellow text-xs font-semibold shrink-0">{{ shipCatalogEntry.price?.toLocaleString() }} cr</div>
           </div>
-          <div v-if="shipCatalogEntry?.description" class="text-[10px] text-space-text-dim leading-relaxed line-clamp-2">{{ shipCatalogEntry.description }}</div>
-          <div class="grid grid-cols-3 gap-x-3 gap-y-0.5 text-[10px] pt-1 border-t border-[#21262d]">
+          <div v-if="shipCatalogEntry?.description" class="text-[11px] text-space-text-dim leading-relaxed line-clamp-2">{{ shipCatalogEntry.description }}</div>
+          <div class="grid grid-cols-3 gap-x-3 gap-y-0.5 text-[11px] pt-1 border-t border-[#21262d]">
             <div class="text-space-text-dim">❤️ Hull <span class="text-space-text">{{ shipCatalogEntry?.base_hull ?? shipInfo?.hull ?? '?' }}</span></div>
             <div class="text-space-text-dim">🔵 Shield <span class="text-space-text">{{ shipCatalogEntry?.base_shield ?? '?' }}</span></div>
             <div class="text-space-text-dim">💨 Speed <span class="text-space-text">{{ shipCatalogEntry?.base_speed ?? shipInfo?.speed ?? '?' }}</span></div>
@@ -161,7 +161,7 @@
             <div class="text-space-text-dim">🔧 <span class="text-space-text">{{ shipCatalogEntry?.utility_slots ?? shipInfo?.utility_slots ?? '?' }} util</span></div>
           </div>
           <div v-if="shipCatalogEntry?.flavor_tags?.length" class="flex flex-wrap gap-1 pt-1 border-t border-[#21262d]">
-            <span v-for="tag in shipCatalogEntry.flavor_tags" :key="tag" class="px-1.5 py-0.5 rounded bg-[#21262d] text-space-text-dim text-[10px]">{{ tag }}</span>
+            <span v-for="tag in shipCatalogEntry.flavor_tags" :key="tag" class="px-1.5 py-0.5 rounded bg-[#21262d] text-space-text-dim text-[11px]">{{ tag }}</span>
           </div>
         </div>
       </div>

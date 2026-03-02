@@ -2,17 +2,19 @@
 
 > **This is a fork of [spacemolt_botrunner](https://github.com/humbrol2/spacemolt_botrunner) by humbrol2@gmail.com.**
 > The original project is a great foundation — this fork replaces the vanilla-JS frontend with a full **Vue 3 SPA** and adds many new UI and automation features described below.
+>
+> **Repository:** https://github.com/hs172a/hex-bots
 
 A web-based bot fleet manager for [SpaceMolt](https://www.spacemolt.com) — run multiple bots with automated routines, monitor and control everything from a reactive live dashboard.
 
-![Dashboard](https://img.shields.io/badge/interface-vue3_spa-blue) ![Runtime](https://img.shields.io/badge/runtime-bun-black) ![No Dependencies](https://img.shields.io/badge/deps-zero_runtime-green) ![Version](https://img.shields.io/badge/version-1.3.0-purple)
+![Dashboard](https://img.shields.io/badge/interface-vue3_spa-blue) ![Runtime](https://img.shields.io/badge/runtime-bun-black) ![No Dependencies](https://img.shields.io/badge/deps-zero_runtime-green) ![Version](https://img.shields.io/badge/version-1.4.0-purple)
 
 ## What It Does
 
 Bot Runner manages a fleet of SpaceMolt bots from a single web dashboard. Each bot runs an automated routine (mining, exploring, crafting, salvaging, hunting, or full AI control) while you monitor from your browser.
 
-- **Vue 3 SPA Dashboard** — reactive real-time UI at `http://localhost:3000`
-- **13 Routines** — Miner, Explorer, Crafter, Coordinator, Fuel Rescue, Salvager, Trader, Gas Harvester, Ice Harvester, Gatherer, Faction Trader, Hunter, AI
+- **Vue 3 SPA Dashboard** — reactive real-time UI at `http://localhost:5173`
+- **19 Routines** — Miner, Explorer, Crafter, Coordinator, Fuel Rescue, Salvager, Trader, Gas Harvester, Ice Harvester, Gatherer, Faction Trader, Hunter, AI, Scout, Return Home, Quartermaster, Mission Runner, Ship Upgrade, Scavenger
 - **Faction Management** — members, storage, facilities, diplomacy, intel
 - **Galaxy Map** — auto-built from explorer data
 - **Manual Control** — full command panel per bot with detailed live log output, craft filter, and execution lock
@@ -56,9 +58,30 @@ Bot Runner manages a fleet of SpaceMolt bots from a single web dashboard. Each b
 - **Commission Ship** — full ship catalog browser with filters (empire, tier, search), ship card with image + stats + build materials, commission quote + order flow
 - **Module Management** — install from cargo, uninstall installed modules
 
-### Missions View (redesigned)
-- Mission cards with icon + title, difficulty badge, objectives list, overall progress bar
-- Larger prominent action buttons (Accept, Complete, Abandon)
+### Missions View (tab-based redesign)
+- **Three-tab layout** — Active Missions, Available Missions, Completed Missions with live counts in badges
+- Active tab has a green pulse dot when any mission is ready to claim
+- Switching to Completed tab auto-loads mission history
+- Mission cards: icon + title, difficulty/type badges, full objectives with progress bars, rewards, NPC giver
+- **Active:** Claim Rewards (green, enabled only when complete) + Abandon (red hover) buttons
+- **Available:** grouped by System → Station with Accept button (blue); shows cap warning at 5/5
+- **Completed:** "View Details" opens a modal with NPC dialog chain, objectives, rewards
+
+### Header Admin Controls
+- **Force Refresh Map** 🗺️ — button calls `POST /api/admin/refresh-map` to re-seed the galaxy map from the public API without restarting the server
+- **Force Refresh Catalog** 📦 — button calls `POST /api/admin/refresh-catalog` to re-fetch the item catalog via the first available bot session
+- Buttons show a spinner while the operation is in flight
+
+### Rate-Limit IP Blocking
+- API now blocks IPs with 50+ violations/min with escalating timeouts (2 min → 30 min max)
+- `api.ts` detects `ip_blocked`/`blocked`/`rate_blocked` error codes and calls a module-level handler
+- The server broadcasts a `rateLimitBlock` WebSocket message to all connected clients
+- Header shows an orange pulsing **⛔ IP Blocked M:SS** badge with a live countdown timer
+- Block is automatically cleared on both backend (via timeout) and frontend (via the timer)
+
+### Action Log View
+- New **Action Log** tab showing per-bot action history from the backend database
+- Bot selector, category filters, pagination, detailed log entry display
 
 ### API Request Logging
 - Optional file logging of all game API requests and responses to `data/api-logs/`
@@ -66,8 +89,8 @@ Bot Runner manages a fleet of SpaceMolt bots from a single web dashboard. Each b
 - Setting persists across restarts and takes effect immediately
 
 ### Catalog Caching
-- Game catalog (items, ships, skills, recipes) is fetched once on first bot login and cached to `data/catalog.json`
-- Cached data is reused for 24 hours — routines (Crafter, Coordinator) read from cache instead of calling `/api/v1/catalog` on every cycle
+- Game catalog (items, ships, skills, recipes) is fetched once on first bot login and stored in SQLite (`data/db.sqlite`)
+- Cached data is reused for 24 hours — routines (Crafter, Coordinator) read from the database instead of calling `/api/v1/catalog` on every cycle
 - Dramatically reduces catalog API traffic for long-running bots
 
 ## Quick Start
@@ -81,32 +104,36 @@ Bot Runner manages a fleet of SpaceMolt bots from a single web dashboard. Each b
 ### Install
 
 ```bash
-git clone https://github.com/humbrol2/spacemolt_botrunner.git
-cd spacemolt_botrunner
+git clone https://github.com/hs172a/hex-bots.git
+cd hex-bots
 bun install
 ```
 
 ### Development mode (two terminals)
 
-The new Vue 3 SPA requires Vite to compile TypeScript and Vue files. Run the backend and frontend separately:
+The Vue 3 SPA requires Vite to compile TypeScript and Vue files. Run the backend and frontend separately:
 
-**Terminal 1 — Backend + WebSocket server:**
+Copy and edit the server configuration file:
+```bash
+cp config.toml.example config.toml
+# edit config.toml — set your credentials, ports, LLM endpoint, etc.
+```
+
+**Terminal 1 — Backend + WebSocket server (port 3210):**
 ```bash
 bun start
 ```
 
-**Terminal 2 — Vue SPA (new UI, with hot-reload):**
+**Terminal 2 — Vue SPA (hot-reload, port 5173):**
 ```bash
 bun run dev:web
 ```
 
 | URL | What you get |
 |-----|--------------|
-| `http://localhost:5173` | ✅ New Vue 3 UI (hot-reload) |
-| `http://localhost:3000` | Legacy UI (original vanilla JS) |
-| `http://localhost:3000/legacy` | Legacy UI (always available) |
+| `http://localhost:5173` | Vue 3 UI (hot-reload, proxies to :3210) |
 
-Vite automatically proxies `/ws` and `/api` requests to the Bun backend on port 3000.
+Vite automatically proxies `/ws` and `/api` requests to the Bun backend on port 3210.
 
 ### Production mode (single command)
 
@@ -114,13 +141,8 @@ Build the Vue SPA once, then run a single server that serves everything:
 
 ```bash
 bun run build:web   # compile Vue SPA → dist/web/
-bun start           # serves new UI at port 3000
+bun start           # serves UI at http://localhost:3210
 ```
-
-| URL | What you get |
-|-----|--------------|
-| `http://localhost:3000` | ✅ New Vue 3 UI (built) |
-| `http://localhost:3000/legacy` | Legacy UI |
 
 Use `PORT=8080 bun start` for a different port.
 
@@ -156,6 +178,12 @@ Full manual control panel for any bot:
 | **Gatherer** | Collects build materials for a faction facility. Goal assigned from Station → Build tab. |
 | **Faction Trader** | Runs faction sell routes, deposits items to faction storage. Returns home when storage is empty. |
 | **Hunter** | Patrols lawless systems, engages NPC/player targets, monitors ammo/hull thresholds. Responds to faction combat alerts within a configurable jump range. |
+| **Scout** | Surveys a list of systems for resources, deposits findings. |
+| **Return Home** | Returns bot to home station, deposits cargo to faction storage. |
+| **Quartermaster** | Manages faction storage supply — buys needed items, sells surplus. |
+| **Mission Runner** | Accepts and completes NPC missions automatically. |
+| **Ship Upgrade** | Saves credits and purchases the next configured ship upgrade. |
+| **Scavenger** | Loots abandoned POIs and derelict ships across explored systems. |
 | **AI** | Uses an LLM (Ollama or any OpenAI-compatible endpoint) to play SpaceMolt autonomously. Maintains persistent memory, uses map/catalog tools, and writes captain's log entries. |
 
 All routines include:
@@ -175,7 +203,7 @@ Full faction management from the browser:
 - **Intel** — query intel by system/player, view intel status, trade intel
 
 ### Settings
-Configuration saved to `data/settings.json`. Changes apply immediately (no restart needed).
+Configuration saved to the SQLite database (`data/db.sqlite`). Changes apply immediately (no restart needed).
 
 - **General** — faction storage system/station, faction donate %, enable API request logging
 - **Miner** — target ore, mining system, deposit bot, sell ore, cargo/refuel/repair thresholds, per-bot ore quotas
@@ -190,8 +218,9 @@ Configuration saved to `data/settings.json`. Changes apply immediately (no resta
 
 ### Other Tabs
 - **Map** — galaxy map built from explorer data, filterable by security level and resources
-- **Missions** — browse available missions per system, view/claim/complete active missions per bot
+- **Missions** — three-tab layout (Active / Available / Completed) per bot; claim/abandon/accept with live progress tracking
 - **Shipyard** — fleet management, ship showroom, commission new ships, module management
+- **Action Log** — per-bot action history with category filters and pagination
 
 ## Adding Bots
 
@@ -238,27 +267,25 @@ src/
     legacy_ui.html     Legacy vanilla-JS UI (always at /legacy)
     src/               Vue 3 SPA (Vite + TailwindCSS + Pinia)
       App.vue          Root layout — sidebar navigation
-      components/
-        Dashboard.vue         Fleet table, auto-scroll logs, extended fleet stats bar
+      views/
+        DashboardView.vue     Fleet table, auto-scroll logs, extended fleet stats bar
         BotProfile.vue        Bot profile tabs (Ship, Skills, Travel, Station, Control)
         BotControlPanel.vue   Manual control panel — full log output, craft filter, execution lock
         ShipyardView.vue      Fleet, showroom, commission ship, module management
-        MissionsView.vue      Mission browser and active mission tracker
+        MissionsView.vue      Three-tab mission browser (Active/Available/Completed) per bot
         FactionView.vue       Faction management (overview, members, storage, facilities, diplomacy, intel)
-        SettingsView.vue      Per-routine settings — all 13 routines + General
+        SettingsView.vue      Per-routine settings — all 19 routines + General
         MapView.vue           Interactive galaxy map
         StatsView.vue         Per-bot stats + faction activity log
+        ActionLogView.vue     Per-bot action history with filters and pagination
       stores/
-        botStore.ts           Pinia store — bots, catalog, settings, sendExec, wsSend
+        botStore.ts           Pinia store — bots, catalog, settings, sendExec, wsSend, ipBlocked/ipBlockEndsAt
 data/
-  settings.json      Persisted routine settings
-  catalog.json       Cached game catalog (refreshed every 24h)
-  map.json           Galaxy map data
-  ai_memory.json     AI routine persistent memory (goals, insights, decisions)
-  api-logs/          API request/response logs (when enabled)
+  db.sqlite          SQLite database — settings, catalog, map, sessions, logs, goals, stats
+  api-logs/          API request/response logs (when enabled, opt-in)
 sessions/
   <username>/
-    credentials.json
+    credentials.json   Bot login credentials (auto-discovered on startup)
 ```
 
 ## Environment Variables (AI Routine)

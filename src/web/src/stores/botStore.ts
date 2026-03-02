@@ -96,6 +96,10 @@ export const useBotStore = defineStore('bots', () => {
   const mapData = ref<Record<string, any>>({});
   const statsDaily = ref<Record<string, any>>({});
 
+  // ── Rate-limit block state ──
+  const ipBlocked = ref(false);
+  const ipBlockEndsAt = ref(0); // ms timestamp
+
   // ── Log state ──
   const activityLogs = ref<string[]>([]);
   const broadcastLogs = ref<string[]>([]);
@@ -198,6 +202,13 @@ export const useBotStore = defineStore('bots', () => {
 
       case 'statsUpdate':
         if (data.statsDaily) statsDaily.value = data.statsDaily;
+        break;
+
+      case 'rateLimitBlock':
+        ipBlocked.value = data.blocked === true;
+        ipBlockEndsAt.value = (data.blocked && data.retryAfterSecs)
+          ? Date.now() + data.retryAfterSecs * 1000
+          : 0;
         break;
     }
   }
@@ -324,6 +335,9 @@ export const useBotStore = defineStore('bots', () => {
     registerBot,
     saveSettings,
     sendChat,
+    // Rate-limit state
+    ipBlocked,
+    ipBlockEndsAt,
     // Helpers
     resolveLocation,
     catalogName,

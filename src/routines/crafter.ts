@@ -1,5 +1,4 @@
 import type { Routine, RoutineContext } from "../bot.js";
-import { catalogStore } from "../catalogstore.js";
 import {
   ensureDocked,
   tryRefuel,
@@ -23,6 +22,7 @@ function getCrafterSettings(): {
   craftLimits: CraftLimit[];
   refuelThreshold: number;
   repairThreshold: number;
+  cycleDelayMs: number;
 } {
   const all = readSettings();
   const c = all.crafter || {};
@@ -37,6 +37,7 @@ function getCrafterSettings(): {
     craftLimits,
     refuelThreshold: (c.refuelThreshold as number) || 50,
     repairThreshold: (c.repairThreshold as number) || 40,
+    cycleDelayMs: (c.cycleDelayMs as number) || 10000,
   };
 }
 
@@ -126,7 +127,7 @@ function parseRecipes(data: unknown): Recipe[] {
 
 /** Return recipes from the catalogStore cache; fetch from API only when cache is empty. */
 async function fetchAllRecipes(ctx: RoutineContext): Promise<Recipe[]> {
-  const cached = Object.values(catalogStore.getAll().recipes);
+  const cached = Object.values(ctx.catalogStore.getAll().recipes);
   if (cached.length > 0) {
     const recipes = parseRecipes(cached);
     ctx.log("info", `${recipes.length} recipes loaded from cache`);
@@ -136,12 +137,12 @@ async function fetchAllRecipes(ctx: RoutineContext): Promise<Recipe[]> {
   // Cache empty — populate catalogStore (handles all 4 types + disk persistence)
   ctx.log("info", "Recipe cache empty, fetching from API...");
   try {
-    await catalogStore.fetchAll(ctx.api);
+    await ctx.catalogStore.fetchAll(ctx.api);
   } catch (err) {
     ctx.log("error", `Catalog fetch failed: ${err}`);
     return [];
   }
-  const fresh = Object.values(catalogStore.getAll().recipes);
+  const fresh = Object.values(ctx.catalogStore.getAll().recipes);
   const recipes = parseRecipes(fresh);
   ctx.log("info", `${recipes.length} recipes fetched and cached`);
   return recipes;
@@ -640,7 +641,7 @@ export const crafterRoutine: Routine = async function* (ctx: RoutineContext) {
         const batchSize = Math.min(remaining, 10);
 
         yield `craft_${recipeId}`;
-        const craftResp = await bot.exec("craft", { recipe_id: recipeId, count: batchSize });
+        const craftResp = await bot.exec("craft", { recipe_id: recipe.recipe_id, count: batchSize });
 
         if (craftResp.error) {
           const msg = craftResp.error.message.toLowerCase();
@@ -732,8 +733,16 @@ export const crafterRoutine: Routine = async function* (ctx: RoutineContext) {
     yield "check_skills";
     await bot.checkSkills();
 
-    // ── Wait before next cycle ──
-    ctx.log("info", "Waiting 60s before next crafting cycle...");
-    await sleep(60000);
+    // ── Adaptive cycle delay ──
+    // Short delay after productive work; longer when idle or materials are missing
+    const productive = totalCrafted > 0 || prereqSummary.length > 0;
+    const materialsShortage = missingSummary.length > 0;
+    const delayMs = productive
+      ? settings.cycleDelayMs
+      : materialsShortage
+        ? Math.max(settings.cycleDelayMs * 6, 60000)   // Wait longer when materials missing
+        : settings.cycleDelayMs * 3;                   // Moderate wait when nothing to craft
+    ctx.log("info", `Waiting ${Math.round(delayMs / 1000)}s before next cycle...`);
+    await sleep(delayMs);
   }
 };
