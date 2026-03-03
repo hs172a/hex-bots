@@ -164,7 +164,69 @@ function parseAvailableMissions(data: unknown): Mission[] {
   return arr.map(parseMission).filter((m): m is Mission => m !== null);
 }
 
-/** Apply settings filters and sort available missions by reward (desc). */
+/**
+ * Estimate relative completion effort for scoring (lower = faster).
+ * Used to rank missions by reward-per-effort rather than raw reward.
+ */
+function estimateMissionEffort(mission: Mission): number {
+  let effort = 0;
+  for (const obj of mission.objectives) {
+    if (obj.complete) continue;
+    switch (obj.type) {
+      case "visit": effort += 1; break;
+      case "dock":  effort += 1; break;
+      case "buy":   effort += 2; break;
+      case "sell":  effort += 2; break;
+      case "deliver": effort += 3; break;
+      case "craft": effort += 4; break;
+      case "mine":  effort += Math.max(2, Math.ceil((obj.quantity || 1) / 5)); break;
+      case "kill":  effort += 6 * Math.max(1, obj.quantity || 1); break;
+      default:      effort += 2; break;
+    }
+  }
+  return Math.max(1, effort);
+}
+
+/** Score = reward_credits / estimated_effort. Higher is better. */
+function scoreMission(mission: Mission): number {
+  return mission.reward_credits / estimateMissionEffort(mission);
+}
+
+/**
+ * Pre-flight checks before accepting a mission:
+ * - kill: requires at least one weapon module installed
+ * - deliver/buy: skip if maxBuyPrice is set and bot cannot afford item at that cap
+ * Returns true if the mission is safe to accept.
+ */
+function canAcceptMission(
+  mission: Mission,
+  installedMods: string[],
+  credits: number,
+  settings: MissionRunnerSettings,
+): boolean {
+  for (const obj of mission.objectives) {
+    if (obj.complete) continue;
+
+    if (obj.type === "kill") {
+      const hasWeapon = installedMods.some(id => {
+        const lower = id.toLowerCase();
+        return lower.includes("cannon") || lower.includes("laser") ||
+               lower.includes("weapon") || lower.includes("gun") ||
+               lower.includes("torpedo") || lower.includes("missile") ||
+               lower.includes("blaster") || lower.includes("railgun");
+      });
+      if (!hasWeapon) return false;
+    }
+
+    if ((obj.type === "buy" || obj.type === "deliver") && settings.maxBuyPrice > 0) {
+      const estimatedCost = obj.quantity * settings.maxBuyPrice;
+      if (estimatedCost > credits) return false;
+    }
+  }
+  return true;
+}
+
+/** Apply settings filters and sort available missions by reward/effort score (desc). */
 function filterMissions(missions: Mission[], settings: MissionRunnerSettings): Mission[] {
   let candidates = [...missions];
   if (settings.missionTypes.length > 0) {
@@ -175,7 +237,7 @@ function filterMissions(missions: Mission[], settings: MissionRunnerSettings): M
   if (settings.minReward > 0) candidates = candidates.filter(m => m.reward_credits >= settings.minReward);
   if (settings.minDifficulty > 0) candidates = candidates.filter(m => m.difficulty >= settings.minDifficulty);
   if (settings.maxDifficulty > 0) candidates = candidates.filter(m => m.difficulty === 0 || m.difficulty <= settings.maxDifficulty);
-  return candidates.sort((a, b) => b.reward_credits - a.reward_credits);
+  return candidates.sort((a, b) => scoreMission(b) - scoreMission(a));
 }
 
 /**
@@ -597,8 +659,11 @@ export const missionRunnerRoutine: Routine = async function* (ctx: RoutineContex
         const availableMissions = parseAvailableMissions(boardResp.result);
         ctx.log("info", `Available on board: ${availableMissions.length}`);
         const candidates = filterMissions(availableMissions, settings);
-        if (candidates.length > 0) {
-          const toAccept = candidates[0];
+        const feasible = candidates.filter(m =>
+          canAcceptMission(m, bot.installedMods, bot.credits, settings)
+        );
+        if (feasible.length > 0) {
+          const toAccept = feasible[0];
           ctx.log("info", `Best: "${toAccept.title}" (${toAccept.type}, diff: ${toAccept.difficulty || "?"}, +${toAccept.reward_credits}cr)`);
           yield "accept_mission";
           const acceptResp = await bot.exec("accept_mission", { mission_id: toAccept.id });
@@ -609,6 +674,8 @@ export const missionRunnerRoutine: Routine = async function* (ctx: RoutineContex
           } else {
             ctx.log("warn", `Accept failed: ${acceptResp.error.message}`);
           }
+        } else if (candidates.length > 0) {
+          ctx.log("info", `${candidates.length} mission(s) filtered — none feasible (missing weapons or insufficient credits)`);
         } else if (availableMissions.length > 0) {
           ctx.log("info", `${availableMissions.length} mission(s) on board but none match filters`);
         } else {

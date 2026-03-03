@@ -105,8 +105,8 @@
                 :key="m.mission_id || m.id"
                 class="flex flex-col rounded-lg border transition-colors"
                 :class="m.is_complete
-                  ? 'bg-[#0f1f0f] border-green-600/40 hover:border-green-500/60'
-                  : 'bg-[#161b22] border-[#30363d] hover:border-[#484f58]'"
+                  ? 'bg-green-950/15 border-green-800/30 hover:border-green-700/50'
+                  : 'bg-orange-950/20 border-orange-800/40 hover:border-[#30363d]'"
               >
                 <!-- Card header -->
                 <div class="flex items-start justify-between gap-2 p-3 pb-2">
@@ -216,7 +216,7 @@
                       <div
                         v-for="m in mList"
                         :key="m.mission_id"
-                        class="flex flex-col bg-[#161b22] border border-[#30363d] rounded-lg hover:border-[#484f58] transition-colors"
+                        class="flex flex-col bg-orange-950/20 border border-orange-800/40 rounded-lg hover:border-[#30363d] transition-colors"
                       >
                         <!-- Card header -->
                         <div class="flex items-start justify-between gap-2 p-3 pb-2">
@@ -300,7 +300,7 @@
                 <div
                   v-for="m in completedMissions"
                   :key="m.template_id || m.mission_id || m.id"
-                  class="flex flex-col bg-[#0f1b0f] border border-green-900/40 rounded-lg hover:border-green-700/50 transition-colors"
+                  class="flex flex-col bg-indigo-990/20 border border-green-900/40 rounded-lg hover:border-green-700/50 transition-colors"
                 >
                   <div class="p-3 pb-2 flex-1">
                     <div class="flex items-start justify-between gap-2 mb-1">
@@ -490,7 +490,7 @@ function loadCompleted() {
 
 function viewCompleted(templateId: string) {
   if (!selectedBot.value || !templateId) return;
-  botStore.sendExec(selectedBot.value, 'view_completed_mission', { id: templateId }, (res: any) => {
+  botStore.sendExec(selectedBot.value, 'view_completed_mission', { template_id: templateId }, (res: any) => {
     if (res.ok && res.data) {
       completedDetail.value = res.data;
     }

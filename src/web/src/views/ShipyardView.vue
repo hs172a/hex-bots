@@ -550,7 +550,7 @@
             <div class="flex items-center justify-between mb-1.5">
               <span class="text-space-text font-semibold">{{ c.ship_class_name || c.ship_class || c.class_id || '?' }}</span>
               <span class="px-2 py-0.5 rounded text-[11px] font-medium"
-                :class="c.status === 'ready' ? 'bg-green-900/40 text-space-green' : c.status === 'building' ? 'bg-blue-900/30 text-space-cyan' : 'bg-[#21262d] text-space-text-dim'">
+                :class="c.status === 'ready' ? 'bg-green-900/40 text-space-green' : c.status === 'building' ? 'bg-blue-900/30 text-space-cyan' : c.status === 'sourcing' ? 'bg-yellow-900/40 text-yellow-300' : 'bg-[#21262d] text-space-text-dim'">
                 {{ c.status || 'pending' }}
               </span>
             </div>
@@ -565,6 +565,20 @@
             </div>
             <div v-if="c.status === 'ready'" class="mt-2 pt-2 border-t border-[#21262d]">
               <span class="text-space-green text-[11px] font-semibold">✅ Your ship is ready for pickup!</span>
+            </div>
+            <div v-if="c.status === 'sourcing'" class="mt-2 pt-2 border-t border-[#21262d] space-y-2">
+              <div class="text-yellow-300 text-[11px] font-semibold">⏳ Shipyard is sourcing materials — you can donate to speed it up</div>
+              <div v-if="supplyTarget === (c.commission_id || c.id)" class="flex gap-2 items-center flex-wrap">
+                <input v-model="supplyItemId" placeholder="item_id" class="input text-xs flex-1 min-w-[120px]" />
+                <input v-model.number="supplyQty" type="number" min="1" placeholder="qty" class="input text-xs w-20" />
+                <button @click="submitSupply(c.commission_id || c.id)" :disabled="!supplyItemId.trim() || supplyLoading" class="btn btn-primary text-xs px-3">
+                  {{ supplyLoading ? '⏳' : '📦 Supply' }}
+                </button>
+                <button @click="supplyTarget = ''" class="btn btn-secondary text-xs px-2">✗</button>
+              </div>
+              <button v-else @click="supplyTarget = c.commission_id || c.id; supplyItemId = ''; supplyQty = 1" class="btn btn-secondary text-xs px-3">
+                📦 Supply Materials
+              </button>
             </div>
             <div v-if="c.materials_needed?.length" class="mt-1.5 pt-1.5 border-t border-[#21262d]">
               <div class="text-[11px] uppercase tracking-wider text-space-text-dim mb-1">Materials needed</div>
@@ -618,6 +632,27 @@ const commissionStatuses = ref<any[]>([]);
 const statusLoading = ref(false);
 const commissionResult = ref<{ ok: boolean; message: string } | null>(null);
 const showCommissionConfirm = ref(false);
+const supplyTarget = ref('');
+const supplyItemId = ref('');
+const supplyQty = ref(1);
+const supplyLoading = ref(false);
+
+function submitSupply(commissionId: string) {
+  if (!supplyItemId.value.trim() || !selectedBot.value) return;
+  supplyLoading.value = true;
+  botStore.sendExec(selectedBot.value, 'supply_commission', {
+    commission_id: commissionId,
+    item_id: supplyItemId.value.trim(),
+    quantity: supplyQty.value,
+  }, (data: unknown) => {
+    supplyLoading.value = false;
+    const d = data as Record<string, unknown>;
+    if (d?.error) { setStatus(`Supply failed: ${d.error}`, false); return; }
+    setStatus(`Supplied ${supplyQty.value}× ${supplyItemId.value} to commission`, true);
+    supplyTarget.value = '';
+    loadCommissionStatus();
+  });
+}
 
 const panels = [
   { id: 'overview', label: '📊 Overview' },

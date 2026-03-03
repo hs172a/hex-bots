@@ -154,6 +154,10 @@ export class WebServer {
   // Commander advisory data — set by botmanager
   onCommanderData: (() => unknown) | null = null;
 
+  // PI Commander TODO read/write — set by botmanager
+  onGetPiTodo: ((session: string) => string) | null = null;
+  onSavePiTodo: ((session: string, content: string) => void) | null = null;
+
   // Admin force-refresh — set by botmanager
   onRefreshCatalog: (() => Promise<string>) | null = null;
   onRefreshMap: (() => Promise<string>) | null = null;
@@ -172,7 +176,7 @@ export class WebServer {
   }
 
   saveRoutineSettings(routine: string, s: Record<string, unknown>): void {
-    this.settings[routine] = s;
+    this.settings[routine] = { ...this.settings[routine], ...s };
     saveSettings(this.settings);
   }
 
@@ -259,6 +263,20 @@ export class WebServer {
           if (this.onCommanderData) return Response.json(this.onCommanderData());
           return Response.json(null);
         }
+        if (url.pathname === "/api/pi-todo") {
+          const session = url.searchParams.get("session") || "default";
+          if (req.method === "POST") {
+            try {
+              const { content } = await req.json() as { content: string };
+              if (this.onSavePiTodo) this.onSavePiTodo(session, content || "");
+              return Response.json({ ok: true });
+            } catch (e) {
+              return Response.json({ error: String(e) }, { status: 400 });
+            }
+          }
+          const todo = this.onGetPiTodo ? this.onGetPiTodo(session) : "";
+          return Response.json({ session, content: todo });
+        }
         if (url.pathname === "/api/goals") {
           if (req.method === "POST") {
             try {
@@ -297,6 +315,17 @@ export class WebServer {
           const allLines = content.split("\n").filter(l => l);
           const lines = allLines.slice(-tail);
           return Response.json({ lines, total: allLines.length });
+        }
+
+        // Webhook test endpoint
+        if (url.pathname === "/api/admin/test-webhook" && req.method === "POST") {
+          try {
+            const { url: wUrl, type } = await req.json() as { url: string; type: string };
+            await this.sendWebhook(wUrl, type, "\uD83E\uDDEA Hex-Bots test alert — webhook is working!");
+            return Response.json({ ok: true });
+          } catch (e) {
+            return Response.json({ ok: false, error: String(e) }, { status: 500 });
+          }
         }
 
         // Admin force-refresh endpoints
@@ -478,6 +507,40 @@ export class WebServer {
       mapData: mapStore.getAllSystems(),
       knownOres: mapStore.getAllKnownOres(),
     });
+  }
+
+  async sendWebhook(webhookUrl: string, type: string, text: string): Promise<void> {
+    if (!webhookUrl) return;
+    let body: string;
+    if (type === "telegram") {
+      body = JSON.stringify({ text });
+    } else if (type === "discord") {
+      body = JSON.stringify({ content: text });
+    } else {
+      body = JSON.stringify({ text });
+    }
+    try {
+      await fetch(webhookUrl, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body,
+        signal: AbortSignal.timeout(8000),
+      });
+    } catch (err) {
+      console.error("[Webhook] Failed to send alert:", err);
+    }
+  }
+
+  fireAlert(trigger: string, message: string): void {
+    const alerts = this.settings?.alerts as Record<string, unknown> | undefined;
+    if (!alerts?.webhookUrl) return;
+    const triggers = (alerts.triggers || {}) as Record<string, boolean>;
+    if (!triggers[trigger]) return;
+    this.sendWebhook(
+      alerts.webhookUrl as string,
+      (alerts.webhookType as string) || "discord",
+      message,
+    ).catch(() => {});
   }
 
   broadcastRateLimit(blocked: boolean, retryAfterSecs?: number): void {

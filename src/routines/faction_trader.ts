@@ -345,6 +345,10 @@ export const factionTraderRoutine: Routine = async function* (ctx: RoutineContex
           wResp = await bot.exec("faction_withdraw_items", { item_id: route.itemId, quantity: wQty });
         }
         if (wResp.error) {
+          if (wResp.error.code === "not_docked" || wResp.error.message?.includes("not_docked")) {
+            bot.docked = false;
+            break;
+          }
           if (totalSold > 0) break;
           ctx.log("error", `Withdraw failed: ${wResp.error.message}`);
           break;

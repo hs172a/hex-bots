@@ -498,7 +498,13 @@ async function sellFactionStorageItems(ctx: RoutineContext): Promise<{ count: nu
 
     // Withdraw from faction storage
     const wResp = await bot.exec("faction_withdraw_items", { item_id: item.itemId, quantity: qty });
-    if (wResp.error) continue;
+    if (wResp.error) {
+      if (wResp.error.code === "not_docked" || wResp.error.message?.includes("not_docked")) {
+        bot.docked = false;
+        break;
+      }
+      continue;
+    }
 
     // Sell immediately
     const sResp = await bot.exec("sell", { item_id: item.itemId, quantity: qty });
@@ -647,7 +653,13 @@ export const traderRoutine: Routine = async function* (ctx: RoutineContext) {
             const qty = Math.min(item.quantity, maxItemsForCargo(freeSpace, item.itemId));
             if (qty <= 0) continue;
             const wResp = await bot.exec("withdraw_items", { item_id: item.itemId, quantity: qty });
-            if (wResp.error) continue;
+            if (wResp.error) {
+              if (wResp.error.code === "not_docked" || wResp.error.message?.includes("not_docked")) {
+                bot.docked = false;
+                break;
+              }
+              continue;
+            }
             const sResp = await bot.exec("sell", { item_id: item.itemId, quantity: qty });
             if (!sResp.error) {
               soldFromStorage.push(`${qty}x ${item.name}`);
@@ -845,7 +857,11 @@ export const traderRoutine: Routine = async function* (ctx: RoutineContext) {
             }
 
             if (wResp.error) {
-              if (totalSold > 0) break; // sold some already, good enough
+              if (wResp.error.code === "not_docked" || wResp.error.message?.includes("not_docked")) {
+                bot.docked = false;
+                break;
+              }
+              if (totalSold > 0) break;
               ctx.log("error", `Withdraw from faction storage failed: ${wResp.error.message} — trying next route`);
               break;
             }
@@ -896,6 +912,10 @@ export const traderRoutine: Routine = async function* (ctx: RoutineContext) {
         }
 
         if (wResp.error) {
+          if (wResp.error.code === "not_docked" || wResp.error.message?.includes("not_docked")) {
+            bot.docked = false;
+            break;
+          }
           ctx.log("error", `Withdraw from faction storage failed: ${wResp.error.message} — trying next route`);
           continue;
         }
@@ -1151,7 +1171,12 @@ export const traderRoutine: Routine = async function* (ctx: RoutineContext) {
             const wQty = Math.min(si.qty, maxItemsForCargo(freeSpace, si.itemId));
             if (wQty <= 0) continue;
             const wResp = await bot.exec("withdraw_items", { item_id: si.itemId, quantity: wQty });
-            if (!wResp.error) {
+            if (wResp.error) {
+              if (wResp.error.code === "not_docked" || wResp.error.message?.includes("not_docked")) {
+                bot.docked = false;
+                break;
+              }
+            } else {
               withdrawnItems.push(`${wQty}x ${si.name}`);
             }
           }

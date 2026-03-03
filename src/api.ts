@@ -23,6 +23,83 @@ export function setIpBlockHandler(fn: (retryAfterSecs: number) => void): void {
   _ipBlockHandler = fn;
 }
 
+// ── Per-session action throttler ────────────────────────────
+// Each SpaceMoltAPI instance (= one bot session) gets its own throttler.
+// Server rate limits (as of the latest update):
+//   Actions (mine, travel, craft, sell, …): 30/min per session
+//   Queries (get_status, get_ship, …):    300/min per session
+// We only throttle action commands — queries have a generous budget we'll never hit.
+
+const THROTTLE_WINDOW_MS = 60_000;
+const THROTTLE_SOFT_CAP  = 28;   // stay below server's 30 actions/min per session
+const THROTTLE_LOG_COOLDOWN_MS = 15_000;
+
+/** Commands that count toward the 30 actions/min per-session rate limit. */
+const ACTION_COMMANDS = new Set([
+  "travel", "jump", "dock", "undock",
+  "attack", "cloak",
+  "mine", "loot", "salvage",
+  "sell", "buy", "jettison", "craft",
+  "create_sell_order", "create_buy_order", "cancel_order",
+  "refuel", "repair",
+  "deposit_items", "withdraw_items",
+  "faction_deposit_items", "faction_withdraw_items",
+  "faction_deposit_credits", "faction_withdraw_credits",
+  "install_mod", "uninstall_mod", "buy_ship", "sell_ship", "switch_ship", "set_colors",
+  "accept_mission", "complete_mission", "decline_mission", "abandon_mission",
+  "chat", "send_gift", "trade_offer",
+  "facility",
+  "register",
+]);
+
+class RequestThrottler {
+  private timestamps: number[] = [];
+  private lastLogMs = 0;
+  /** Serializes all throttle() calls — each waits for the previous to fully complete
+   *  (including the timestamp write) before reading state. This prevents concurrent
+   *  callers from all seeing timestamps.length < cap simultaneously and bypassing it. */
+  private _queue: Promise<void> = Promise.resolve();
+
+  throttle(): Promise<void> {
+    // Chain onto the queue; keep queue alive even if a call somehow rejects
+    const slot = this._queue.then(() => this._doThrottle());
+    this._queue = slot.catch(() => {});
+    return slot;
+  }
+
+  private async _doThrottle(): Promise<void> {
+    const now = Date.now();
+    // Drop timestamps outside the sliding window
+    this.timestamps = this.timestamps.filter(t => now - t < THROTTLE_WINDOW_MS);
+
+    if (this.timestamps.length >= THROTTLE_SOFT_CAP) {
+      // Wait until the oldest request exits the window, plus a small buffer
+      const oldest = this.timestamps[0];
+      const waitMs = THROTTLE_WINDOW_MS - (now - oldest) + 250;
+      if (waitMs > 0) {
+        if (now - this.lastLogMs > THROTTLE_LOG_COOLDOWN_MS) {
+          log("wait", `Throttle: ${this.timestamps.length} req/60s — waiting ${Math.round(waitMs / 1000)}s`);
+          this.lastLogMs = now;
+        }
+        await sleep(waitMs);
+        // Re-prune after sleeping
+        const after = Date.now();
+        this.timestamps = this.timestamps.filter(t => after - t < THROTTLE_WINDOW_MS);
+      }
+    }
+
+    this.timestamps.push(Date.now());
+  }
+
+  /** Current request count in the last 60 seconds (for diagnostics). */
+  get count(): number {
+    const now = Date.now();
+    return this.timestamps.filter(t => now - t < THROTTLE_WINDOW_MS).length;
+  }
+}
+
+// (throttler is now per-instance inside SpaceMoltAPI — see _throttler field)
+
 // ── Response cache ────────────────────────────────────────────
 
 interface CacheEntry {
@@ -157,6 +234,10 @@ export class SpaceMoltAPI {
   /** Mutex: prevents concurrent ensureSession() calls from each creating a session. */
   private _sessionLock: Promise<void> | null = null;
   private _v2SessionLock: Promise<void> | null = null;
+  /** Per-session action throttler (30 actions/min server limit). */
+  private _throttler = new RequestThrottler();
+  /** Random jitter (0–300 s) so bots don't all renew sessions at the same second. */
+  private readonly _sessionJitterMs = Math.floor(Math.random() * 300_000);
 
   constructor(baseUrl?: string) {
     this.baseUrl = baseUrl || process.env.SPACEMOLT_URL || DEFAULT_BASE_URL;
@@ -380,14 +461,15 @@ export class SpaceMoltAPI {
     if (!this.session) return true;
     const expiresAt = new Date(this.session.expiresAt).getTime();
     const now = Date.now();
-    return expiresAt - now < 60_000; // Less than 60s remaining
+    // Jitter spreads hourly renewals across 0–300 s so all bots don't reconnect at once
+    return expiresAt - now < (60_000 + this._sessionJitterMs);
   }
 
   private isV2SessionExpiring(): boolean {
     if (!this.v2Session) return true;
     const expiresAt = new Date(this.v2Session.expiresAt).getTime();
     const now = Date.now();
-    return expiresAt - now < 60_000;
+    return expiresAt - now < (60_000 + this._sessionJitterMs);
   }
 
   /** Create and authenticate a v2 session (separate session store from v1). */
@@ -540,12 +622,18 @@ export class SpaceMoltAPI {
 
     headers["User-Agent"] = USER_AGENT;
 
+    // Pre-emptive throttle — only for action commands (30/min per session limit).
+    // Queries (get_status, get_cargo, …) have a 300/min budget and are never throttled.
+    if (ACTION_COMMANDS.has(command)) {
+      await this._throttler.throttle();
+    }
+
     // Log request to console and per-bot file
     const timestamp = new Date().toISOString();
-    console.log(`\n[${timestamp}] → HTTP POST ${url}`);
-    if (body) {
-      console.log(`  Payload: ${JSON.stringify(body)}`);
-    }
+    // console.log(`\n[${timestamp}] → HTTP POST ${url}`);
+    // if (body) {
+    //   console.log(`  Payload: ${JSON.stringify(body)}`);
+    // }
     logApiRequest(this.label, url, activeSession?.id, body);
 
     // fetch() only throws on network errors (DNS, connection refused, etc.)
@@ -573,11 +661,24 @@ export class SpaceMoltAPI {
     }
 
     // Log HTTP response
-    console.log(`[${timestamp}] ← HTTP ${resp.status} ${resp.statusText} (${duration}ms)`);
+    // console.log(`[${timestamp}] ← HTTP ${resp.status} ${resp.statusText} (${duration}ms)`);
 
     // 401 = session gone (server restarted, etc.) — return as session error
     if (resp.status === 401) {
       const errResp = { error: { code: "session_invalid", message: "Unauthorized — session lost" } };
+      logApiResponse(this.label, url, resp.status, duration, errResp);
+      return errResp;
+    }
+
+    // 429 = HTTP-level rate limit — normalize to a guaranteed rate_limited error
+    if (resp.status === 429) {
+      const errResp: ApiResponse = { error: { code: "rate_limited", message: "Too Many Requests" } };
+      try {
+        const data = await resp.json() as Record<string, unknown>;
+        const e = data.error as Record<string, unknown> | undefined;
+        if (e?.message) errResp.error!.message = e.message as string;
+        if (e?.retry_after) (errResp.error as Record<string, unknown>).retry_after = e.retry_after;
+      } catch { /* ignore — use synthetic error */ }
       logApiResponse(this.label, url, resp.status, duration, errResp);
       return errResp;
     }

@@ -22,6 +22,8 @@ import { quartermasterRoutine } from "./routines/quartermaster.js";
 import { missionRunnerRoutine } from "./routines/mission_runner.js";
 import { shipUpgradeRoutine } from "./routines/ship_upgrade.js";
 import { scavengerRoutine } from "./routines/scavenger.js";
+import { piCommanderRoutine } from "./routines/pi_commander.js";
+import { aiCommanderRoutine } from "./routines/ai_commander.js";
 import { mapStore } from "./mapstore.js";
 import { catalogStore } from "./catalogstore.js";
 import { publicCatalog } from "./publicCatalog.js";
@@ -111,6 +113,8 @@ const ROUTINES: Record<string, { name: string; fn: Routine }> = {
   mission_runner: { name: "MissionRunner", fn: missionRunnerRoutine },
   ship_upgrade: { name: "ShipUpgrade", fn: shipUpgradeRoutine },
   scavenger: { name: "Scavenger", fn: scavengerRoutine },
+  pi_commander: { name: "PI Commander", fn: piCommanderRoutine },
+  ai_commander: { name: "AI Commander", fn: aiCommanderRoutine }, // Add aiCommanderRoutine to ROUTINES
 };
 
 // ── Auto-discover existing sessions ─────────────────────────
@@ -185,6 +189,40 @@ function setupBotLogging(bot: Bot): void {
 
   bot.on("notifications", (notifications: unknown[], username: string) => {
     logNotifications(notifications, username);
+    // Route chat/broadcast notifications to the dashboard Broadcast panel
+    for (const n of notifications) {
+      if (typeof n !== "object" || !n) continue;
+      const notif = n as Record<string, unknown>;
+      const type = notif.type as string | undefined;
+      const msgType = notif.msg_type as string | undefined;
+      const data = notif.data as Record<string, unknown> | undefined;
+      // chat_message
+      if (msgType === "chat_message" && data && typeof data === "object") {
+        const channel = (data.channel as string) || "chat";
+        const sender = (data.sender as string) || (data.sender_id as string) || "?";
+        const content = (data.content as string) || "";
+        const ts = new Date().toLocaleTimeString("en-US", { hour12: false });
+        const chanLabel = channel === "system" ? "SYS" : channel === "private" ? "DM" : channel.toUpperCase();
+        server.logBroadcast(`${ts} [${chanLabel}] ${sender}: ${content}`);
+        continue;
+      }
+      // new_forum_post
+      if (msgType === "new_forum_post" && data && typeof data === "object") {
+        const title = (data.title as string) || "";
+        const author = (data.author as string) || "";
+        const ts = new Date().toLocaleTimeString("en-US", { hour12: false });
+        server.logBroadcast(`${ts} [FORUM] 📌 ${author}: ${title}`);
+        continue;
+      }
+      // system-level broadcast (ok/announce msgs)
+      if (type === "system" && BROADCAST_CATEGORIES.has("broadcast") && data && typeof data === "object") {
+        const message = (data.message as string) || "";
+        if (message) {
+          const ts = new Date().toLocaleTimeString("en-US", { hour12: false });
+          server.logBroadcast(`${ts} [SYS] @${username}: ${message}`);
+        }
+      }
+    }
   });
 }
 
@@ -261,17 +299,37 @@ async function handleStart(action: WebAction): Promise<WebActionResult> {
 
   server.logSystem(`Starting ${bot.username} with ${routine.name} routine...`);
 
-  const startOpts = (routineKey === "rescue" || routineKey === "coordinator")
-    ? { getFleetStatus: () => [...bots.values()].map(b => b.status()) }
+  const needsFleet = routineKey === "rescue" || routineKey === "coordinator" || routineKey === "ai_commander";
+  const startOpts = needsFleet
+    ? {
+        getFleetStatus: () => [...bots.values()].map(b => b.status()),
+        sendBotAction: routineKey === "ai_commander"
+          ? async (a: { type: string; bot?: string; routine?: string; command?: string; params?: Record<string, unknown> }) => {
+              return handleAction(a as WebAction);
+            }
+          : undefined,
+      }
     : undefined;
 
   bot.start(routineKey, routine.fn, startOpts).then(() => {
     server.logSystem(`Bot ${bot.username} routine finished.`);
     server.clearBotAssignment(botName);
+    server.fireAlert("botStopped", `\u23F9 Hex-Bots: **${bot.username}** (${routine.name}) finished.`);
   }).catch((err: unknown) => {
     const msg = err instanceof Error ? err.message : String(err);
     server.logSystem(`Bot ${bot.username} stopped with error: ${msg}`);
-    server.clearBotAssignment(botName);
+    server.fireAlert("botStopped", `\u26A0\uFE0F Hex-Bots: **${bot.username}** (${routine.name}) crashed: ${msg}`);
+    // Auto-restart after 30s — no manual clearBotAssignment so the assignment survives
+    const AUTO_RESTART_DELAY_MS = 30_000;
+    server.logSystem(`Auto-restarting ${botName} (${routine.name}) in ${AUTO_RESTART_DELAY_MS / 1000}s...`);
+    setTimeout(async () => {
+      if (bot.state === "error" || bot.state === "idle") {
+        server.saveBotAssignment(botName, routineKey);
+        await handleStart({ type: "start", bot: botName, routine: routineKey }).catch((e: unknown) => {
+          server.logSystem(`Auto-restart of ${botName} failed: ${e instanceof Error ? e.message : String(e)}`);
+        });
+      }
+    }, AUTO_RESTART_DELAY_MS);
   });
 
   server.saveBotAssignment(botName, routineKey);
@@ -285,9 +343,10 @@ async function handleStop(action: WebAction): Promise<WebActionResult> {
 
   const bot = bots.get(botName);
   if (!bot) return { ok: false, error: `Bot not found: ${botName}` };
-  if (bot.state !== "running") return { ok: false, error: `${botName} is not running` };
+  if (bot.state === "idle") return { ok: false, error: `${botName} is not running` };
+  if (bot.state === "stopping") return { ok: true, message: `${botName} is already stopping` };
 
-  bot.stop();
+  bot.forceStop();
   server.clearBotAssignment(botName);
   server.logSystem(`Stop signal sent to ${bot.username}`);
   return { ok: true, message: `Stop signal sent to ${botName}` };
@@ -442,9 +501,15 @@ async function handleExec(action: WebAction): Promise<WebActionResult> {
     "attack", "loot_wreck", "salvage_wreck", "send_gift", "craft",
     "accept_mission", "complete_mission", "abandon_mission",
     "buy_ship", "sell_ship", "switch_ship", "install_mod", "uninstall_mod", "set_colors",
+    "faction_deposit_items", "faction_withdraw_items",
   ]);
   if (refreshCommands.has(command)) {
     await bot.refreshStatus();
+
+    // Also refresh faction storage cache after faction deposit/withdraw
+    if (command === "faction_deposit_items" || command === "faction_withdraw_items") {
+      await bot.refreshFactionStorage();
+    }
 
     // Also refresh the recipient bot after gift/trade
     if (command === "send_gift" || command === "trade_offer") {
@@ -464,6 +529,20 @@ async function handleExec(action: WebAction): Promise<WebActionResult> {
     }
 
     refreshStatusTable();
+  }
+
+  // Sync bot cached state after read commands so periodic status broadcasts stay correct
+  if (!resp.error) {
+    if (command === "view_faction_storage") {
+      await bot.refreshFactionStorage();
+      refreshStatusTable();
+    } else if (command === "view_storage") {
+      await bot.refreshStorage();
+      refreshStatusTable();
+    } else if (command === "get_cargo") {
+      await bot.refreshCargo();
+      refreshStatusTable();
+    }
   }
 
   // Log manual faction operations to faction activity log
@@ -491,6 +570,11 @@ async function handleExec(action: WebAction): Promise<WebActionResult> {
         const itemId = p?.item_id as string | undefined;
         const qty = p?.quantity as number | undefined;
         if (itemId) server.logFaction(`${timestamp} [withdraw] ${botName}: Withdrew ${qty || 1}x ${itemId} from faction storage`);
+        break;
+      }
+      case "complete_mission": {
+        const mId = p?.mission_id as string | undefined;
+        server.fireAlert("missionComplete", `\u2705 Hex-Bots: **${botName}** completed mission${mId ? ` ${mId}` : ""}`);
         break;
       }
     }
@@ -585,6 +669,21 @@ async function main(): Promise<void> {
   server.onEconomyData = () => economy.getSummary(buildFleetSummary());
   server.onCreditHistory = (sinceMs: number) => logger.getCreditHistory(sinceMs);
   server.onCommanderData = () => commander.getLastResult();
+
+  server.onGetPiTodo = (session: string): string => {
+    try {
+      const mgr = new SessionManager(session, BASE_DIR);
+      return mgr.loadTodo();
+    } catch { return ""; }
+  };
+  server.onSavePiTodo = (session: string, content: string): void => {
+    try {
+      const mgr = new SessionManager(session, BASE_DIR);
+      mgr.saveTodo(content);
+    } catch (err) {
+      console.error("[PiTodo] Failed to save:", err);
+    }
+  };
   server.onGetGoals = () => goalsStore.loadGoals();
   server.onSaveGoals = (goals: unknown[]) => {
     try {
@@ -616,6 +715,7 @@ async function main(): Promise<void> {
   setIpBlockHandler((secs: number) => {
     server.logSystem(`[Rate Limit] IP blocked — retry after ${secs}s`);
     server.broadcastRateLimit(true, secs);
+    server.fireAlert("ipBlocked", `\u26D4 Hex-Bots: IP rate-limited — retry in ${secs}s.`);
     // Automatically clear block flag after the timeout expires
     setTimeout(() => server.broadcastRateLimit(false), secs * 1000);
   });
@@ -709,18 +809,23 @@ async function main(): Promise<void> {
     refreshStatusTable();
   }, TABLE_STATUS_REFRESH_INTERVAL));  // Changed from 2s to 5s
 
-  // Periodic live refresh (hit API ONLY for running bots, skip idle)
+  // Periodic live refresh — running bots hit API every 30s; idle/error bots every 90s
+  // so the UI always shows fresh location/credits even for non-running bots.
+  let idleRefreshTick = 0;
   intervals.push(setInterval(async () => {
+    idleRefreshTick++;
     for (const [, bot] of bots) {
-      // Only refresh running bots to avoid API spam
-      if (bot.state === "running" && bot.api.getSession()) {
+      if (!bot.api.getSession()) continue;
+      // Always refresh running bots; refresh idle/error bots every 3rd tick (≈90s)
+      const shouldRefresh = bot.state === "running" || idleRefreshTick % 3 === 0;
+      if (shouldRefresh) {
         await bot.refreshStatus().catch((err: unknown) => {
           process.stderr.write(`[${bot.username}] refreshStatus failed: ${err instanceof Error ? err.message : String(err)}\n`);
         });
       }
     }
     refreshStatusTable();
-  }, BOT_STATUS_REFRESH_INTERVAL));  // Only for active bots
+  }, BOT_STATUS_REFRESH_INTERVAL));
 
   // Periodic map data push (every 30s so dashboard stays current)
   intervals.push(setInterval(() => {
@@ -744,6 +849,8 @@ async function main(): Promise<void> {
     }
   }, config.commander.evaluation_interval * 1000));
 
+  let creditsTargetAlerted = false;
+
   // Periodic stats flush (every 60s) + credit history logging
   intervals.push(setInterval(() => {
     const statuses = [...bots.values()].map(b => b.status());
@@ -751,6 +858,17 @@ async function main(): Promise<void> {
     // Log credit history for charting
     const activeBots = statuses.filter(s => s.state === "running").length;
     const totalCredits = statuses.reduce((sum, s) => sum + (s.credits || 0), 0);
+    // Credits target alert (fire once, reset when credits drop below 90% of target)
+    const alertsSettings = server.settings?.alerts as Record<string, unknown> | undefined;
+    const creditsTarget = Number(alertsSettings?.creditsTarget || 0);
+    if (creditsTarget > 0) {
+      if (!creditsTargetAlerted && totalCredits >= creditsTarget) {
+        server.fireAlert("creditsTarget", `\uD83D\uDCB0 Hex-Bots: Fleet credits hit ${totalCredits.toLocaleString()} \u2014 target ${creditsTarget.toLocaleString()} reached!`);
+        creditsTargetAlerted = true;
+      } else if (creditsTargetAlerted && totalCredits < creditsTarget * 0.9) {
+        creditsTargetAlerted = false;
+      }
+    }
     if (activeBots > 0) {
       logger.logCreditHistory(totalCredits, activeBots);
     }

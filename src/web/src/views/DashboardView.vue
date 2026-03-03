@@ -61,6 +61,7 @@
               <th class="py-2 px-0 font-semibold">Ship</th>
               <th class="py-2 px-0 font-semibold">State</th>
               <th class="py-2 px-0 font-semibold">Credits</th>
+              <th class="py-2 px-0 font-semibold" title="Rolling 1-hour earnings rate">₡/hr</th>
               <th class="py-2 px-0 font-semibold">Fuel</th>
               <th class="py-2 px-0 font-semibold">Hull</th>
               <th class="py-2 px-0 font-semibold">Shield</th>
@@ -98,6 +99,14 @@
               <td class="px-0 py-1">
                 <span class="text-space-yellow">₡{{ formatNumber(bot.credits) }}</span>
               </td>
+              <td class="px-0 py-1 text-xs">
+                <template v-if="botStore.botCreditsPerHour[bot.username]">
+                  <span :class="botStore.botCreditsPerHour[bot.username] >= 0 ? 'text-space-green' : 'text-space-red'">
+                    {{ botStore.botCreditsPerHour[bot.username] >= 0 ? '+' : '' }}{{ formatNumber(botStore.botCreditsPerHour[bot.username]) }}
+                  </span>
+                </template>
+                <span v-else class="text-space-text-dim text-[11px]">…</span>
+              </td>
               <td class="pl-0 pr-2 py-1">
                 <ProgressBar 
                   :current="bot.fuel" 
@@ -131,7 +140,7 @@
               </td>
               <td class="px-0 py-1">
                 <div class="flex gap-1 items-center">
-                  <template v-if="bot.state !== 'running' && bot.state !== 'stopping'">
+                  <template v-if="bot.state === 'idle' || bot.state === 'error'">
                     <select 
                       :id="'routine-' + bot.username"
                       @click.stop
@@ -145,10 +154,11 @@
                     >Start</button>
                   </template>
                   <button 
-                    v-if="bot.state === 'running'"
+                    v-if="bot.state === 'running' || bot.state === 'stopping' || bot.state === 'error'"
                     @click.stop="stopBot(bot.username)"
-                    class="btn-danger text-xs py-0.5 px-2"
-                  >Stop</button>
+                    :disabled="bot.state === 'stopping'"
+                    class="btn-danger text-xs py-0.5 px-2 disabled:opacity-40"
+                  >{{ bot.state === 'stopping' ? '…' : 'Stop' }}</button>
                 </div>
               </td>
             </tr>
@@ -196,33 +206,32 @@
             <span class="text-[11px] text-space-text-dim">{{ botStore.broadcastLogs.length }} msgs</span>
           </div>
           <div ref="broadcastLogRef" class="flex-1 overflow-auto mt-1 pr-0.5 font-mono scrollbar-dark">
-            <template v-for="(entry, idx) in parsedBroadcastLogs" :key="idx">
+            <template v-for="(group, idx) in groupedBroadcastLogs" :key="idx">
 
-              <!-- Market announcement card (RESOURCE SHORTAGE / SURPLUS SALE) -->
-              <div v-if="entry.type === 'market'"
+              <!-- Market announcement card — keep rich card format (actionable) -->
+              <div v-if="group.entry.type === 'market'"
                 class="rounded border px-1 py-0.5 my-1 text-[11px]"
-                :class="entry.titleType === 'shortage'
+                :class="group.entry.titleType === 'shortage'
                   ? 'border-orange-800/50 bg-orange-950/20'
-                  : entry.titleType === 'surplus'
+                  : group.entry.titleType === 'surplus'
                     ? 'border-green-800/50 bg-green-950/20'
                     : 'border-space-border bg-[#0d1117]'"
               >
-                <!-- Sender + title badge -->
                 <div class="flex items-center gap-1.5 mb-1.5">
-                  <span class="font-semibold text-space-yellow">{{ entry.sender }}</span>
+                  <span v-if="group.entry.time" class="text-[#555d6b] shrink-0">{{ group.entry.time }}</span>
+                  <span class="font-semibold text-space-yellow">{{ group.entry.sender }}</span>
                   <span
                     class="px-1.5 py-0 rounded text-[11px] font-bold tracking-wide uppercase"
-                    :class="entry.titleType === 'shortage'
+                    :class="group.entry.titleType === 'shortage'
                       ? 'bg-orange-900/60 text-orange-300'
-                      : entry.titleType === 'surplus'
+                      : group.entry.titleType === 'surplus'
                         ? 'bg-green-900/60 text-green-300'
                         : 'bg-[#21262d] text-space-text-dim'"
-                  >{{ entry.title }}</span>
+                  >{{ group.entry.title }}</span>
                 </div>
-                <!-- Item pills -->
-                <div v-if="entry.items?.length" class="flex flex-wrap gap-1 mb-1">
+                <div v-if="group.entry.items?.length" class="flex flex-wrap gap-1 mb-1">
                   <span
-                    v-for="item in entry.items" :key="item.name"
+                    v-for="item in group.entry.items" :key="item.name"
                     class="inline-flex items-center gap-1 px-1.5 py-0.5 rounded bg-[#161b22] border border-[#30363d]"
                   >
                     <span class="text-space-text">{{ item.name.replace(/_/g, '\u200b_') }}</span>
@@ -232,66 +241,63 @@
                     >×{{ item.multiplier }}</span>
                   </span>
                 </div>
-                <!-- Command hint -->
-                <div v-if="entry.command" class="text-[11px] text-space-text-dim opacity-60 truncate">
-                  ▶ {{ entry.command.slice(0, 80) }}{{ entry.command.length > 80 ? '…' : '' }}
+                <div v-if="group.entry.command" class="text-[11px] text-space-text-dim opacity-60 truncate">
+                  ▶ {{ group.entry.command.slice(0, 80) }}{{ group.entry.command.length > 80 ? '…' : '' }}
                 </div>
               </div>
 
-              <!-- Combat hit card (⚔ pirate damage) -->
-              <div v-else-if="entry.type === 'combat'"
-                class="rounded border border-red-800/50 bg-red-950/20 px-1.5 py-1 my-0.5 text-[11px]"
-              >
+              <!-- Uniform two-row format for all other types -->
+              <div v-else class="py-0.5 leading-tight">
+                <!-- Row 1: TYPE LABEL  TIME  ×N -->
                 <div class="flex items-center gap-1.5">
-                  <span class="text-red-400 shrink-0">⚔</span>
-                  <span class="font-semibold text-red-300">{{ entry.pirate }}</span>
-                  <span v-if="entry.tier" class="text-[11px] text-red-500/80 border border-red-800/40 rounded px-1">{{ entry.tier }}</span>
-                  <span v-if="entry.victim" class="text-[11px] text-space-text-dim">→ <span class="text-yellow-400">{{ entry.victim }}</span></span>
-                  <span class="ml-auto text-orange-300 font-mono font-semibold">{{ entry.damage }}</span>
+                  <span class="text-[10px] font-semibold uppercase tracking-widest"
+                    :class="group.entry.type === 'alert'  ? 'text-red-500'
+                           : group.entry.type === 'combat' ? 'text-orange-400'
+                           : group.entry.type === 'forum'  ? 'text-purple-400'
+                           : group.entry.tag === 'DM'      ? 'text-space-accent'
+                           : 'text-space-text-dim'"
+                  >
+                    {{ group.entry.type === 'simple' || group.entry.type === 'header'
+                        ? (group.entry.tag || 'CHAT')
+                        : group.entry.type.toUpperCase() }}
+                  </span>
+                  <span class="text-[#555d6b] text-[11px]">{{ group.entry.time }}</span>
+                  <span v-if="group.count > 1"
+                    class="text-[10px] px-1 rounded bg-[#21262d] text-space-text-dim font-mono">
+                    ×{{ group.count }}
+                  </span>
                 </div>
-                <div v-if="entry.hullStr" class="text-[11px] text-space-text-dim mt-0.5 pl-4">{{ entry.hullStr }}</div>
-              </div>
-
-              <!-- Forum post card (📌 author [category]: title) -->
-              <div v-else-if="entry.type === 'forum'"
-                class="rounded border border-purple-800/30 bg-purple-950/10 px-1.5 py-1 my-0.5 text-[11px]"
-              >
-                <div class="flex items-center gap-1.5 mb-0.5">
-                  <span class="text-purple-400 shrink-0">📌</span>
-                  <span class="font-semibold text-space-yellow">{{ entry.author }}</span>
-                  <span v-if="entry.category" class="text-[11px] text-purple-400/70 border border-purple-800/40 rounded px-1">{{ entry.category }}</span>
+                <!-- Row 2: content -->
+                <div class="text-[11px] leading-snug">
+                  <!-- Bot name tag (for SYS notifications targeting a specific bot) -->
+                  <template v-if="group.entry.botName">
+                    <span class="text-[10px] px-1 rounded bg-[#21262d] text-space-accent font-mono mr-1">{{ group.entry.botName }}</span>
+                  </template>
+                  <!-- Alert -->
+                  <span v-if="group.entry.type === 'alert'" class="text-red-300">
+                    {{ group.entry.message || group.entry.raw }}
+                  </span>
+                  <!-- Combat -->
+                  <span v-else-if="group.entry.type === 'combat'" class="text-orange-200">
+                    ⚔ <span class="font-semibold">{{ group.entry.pirate }}</span>
+                    <span v-if="group.entry.tier" class="text-red-500/70"> ({{ group.entry.tier }})</span>
+                    <span class="text-space-text-dim"> — </span>{{ group.entry.damage }}
+                    <span v-if="group.entry.victim"> → <span class="text-yellow-400">{{ group.entry.victim }}</span></span>
+                    <span v-if="group.entry.hullStr" class="text-space-text-dim"> | {{ group.entry.hullStr }}</span>
+                  </span>
+                  <!-- Forum -->
+                  <span v-else-if="group.entry.type === 'forum'" class="text-space-text">
+                    📌 <span class="font-semibold text-space-yellow">{{ group.entry.author }}</span>
+                    <span v-if="group.entry.category" class="text-purple-400/70"> [{{ group.entry.category }}]</span>
+                    <span v-if="group.entry.forumTitle">: {{ group.entry.forumTitle }}</span>
+                  </span>
+                  <!-- Simple / header / content -->
+                  <span v-else class="text-space-cyan">{{ group.entry.message || group.entry.raw }}</span>
                 </div>
-                <div v-if="entry.forumTitle" class="text-space-text leading-tight pl-4">{{ entry.forumTitle }}</div>
               </div>
-
-              <!-- Attack / combat alert -->
-              <div v-else-if="entry.type === 'alert'"
-                class="flex items-start gap-1.5 leading-snug text-[11px] text-red-400 py-0.5"
-              >
-                <span class="shrink-0 text-red-500">⚠</span>
-                <span>{{ entry.raw }}</span>
-              </div>
-
-              <!-- Channel header (e.g. "CHAT SYSTEM 12:15:09") -->
-              <div v-else-if="entry.type === 'header'" class="leading-none mt-0 mb-0.5">
-                <span class="text-[11px] text-space-text-dim uppercase tracking-widest opacity-60">{{ entry.tag }}</span>
-                <span class="text-[#555d6b] ml-1 text-[11px]">{{ entry.time }}</span>
-              </div>
-
-              <!-- Simple: "HH:MM:SS message" -->
-              <div v-else-if="entry.type === 'simple'" class="leading-snug text-[11px]">
-                <span class="text-[#555d6b]">{{ entry.time }}</span>
-                <span class="text-space-cyan"> {{ entry.message }}</span>
-              </div>
-
-              <!-- Empty separator between message groups -->
-              <div v-else-if="entry.type === 'empty'" class="h-1.5"></div>
-
-              <!-- Fallback content -->
-              <div v-else class="leading-snug text-[11px] text-space-text-dim whitespace-pre-wrap py-px">{{ entry.raw }}</div>
 
             </template>
-            <div v-if="parsedBroadcastLogs.length === 0" class="text-space-text-dim text-[11px] italic py-1">No messages</div>
+            <div v-if="groupedBroadcastLogs.length === 0" class="text-space-text-dim text-[11px] italic py-1">No messages</div>
           </div>
         </div>
 
@@ -427,7 +433,7 @@ import {
 
 const {
   activityBotFilter, systemBotFilter, systemCatFilter,
-  botUsernameColor, filteredActivityLogs, filteredSystemLogs, parsedBroadcastLogs,
+  botUsernameColor, filteredActivityLogs, filteredSystemLogs, parsedBroadcastLogs, groupedBroadcastLogs,
 } = useDashboardLogs();
 
 const emit = defineEmits<{

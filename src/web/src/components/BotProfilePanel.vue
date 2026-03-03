@@ -1,5 +1,29 @@
 <template>
   <div class="flex-1 overflow-auto scrollbar-dark py-2 px-0 space-y-2">
+    <!-- Deposit Settings -->
+    <div class="card py-2 px-3">
+      <h3 class="text-xs font-semibold text-space-text-dim uppercase mb-2">💰 Deposit Settings</h3>
+      <div class="space-y-2 text-xs">
+        <div class="flex items-center justify-between gap-2">
+          <span class="text-space-text-dim">Primary</span>
+          <select v-model="depositPrimary" class="input text-[11px] flex-1 !p-1">
+            <option value="storage">Station Storage</option>
+            <option value="faction">Faction Storage</option>
+            <option value="sell">Sell</option>
+            <option value="gift">Gift</option>
+          </select>
+        </div>
+        <div class="flex items-center justify-between gap-2">
+          <span class="text-space-text-dim">Fallback</span>
+          <select v-model="depositSecondary" class="input text-[11px] flex-1 !p-1">
+            <option value="storage">Station Storage</option>
+            <option value="faction">Faction Storage</option>
+            <option value="sell">Sell</option>
+            <option value="gift">Gift</option>
+          </select>
+        </div>
+      </div>
+    </div>
     <!-- Load button -->
     <div class="card py-2 px-3">
       <div class="flex items-center justify-between">
@@ -116,7 +140,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed } from 'vue';
+import { ref, computed, watch, nextTick } from 'vue';
 import { useBotStore } from '../stores/botStore';
 
 interface Props { bot: any; }
@@ -136,6 +160,25 @@ const form = ref({
 });
 
 const saving = ref({ status: false, anon: false, colors: false, home: false });
+
+const depositPrimary = ref('faction');
+const depositSecondary = ref('storage');
+
+let _skipDepositSave = false;
+watch(() => botStore.settings, (s) => {
+  _skipDepositSave = true;
+  const username = props.bot.username;
+  const perBot = (s[username] || {}) as Record<string, unknown>;
+  const globalMiner = (s.miner || {}) as Record<string, unknown>;
+  depositPrimary.value = (perBot.depositMode as string) || (globalMiner.depositMode as string) || 'faction';
+  depositSecondary.value = (perBot.depositFallback as string) || (globalMiner.depositFallback as string) || 'storage';
+  nextTick(() => { _skipDepositSave = false; });
+}, { immediate: true, deep: true });
+watch([depositPrimary, depositSecondary], ([primary, secondary]) => {
+  if (_skipDepositSave) return;
+  const username = props.bot.username;
+  if (username) botStore.saveSettings(username, { depositMode: primary, depositFallback: secondary });
+});
 
 const currentBot = computed(() => botStore.bots.find(b => b.username === props.bot.username) || props.bot);
 

@@ -398,46 +398,67 @@ async function grindCraftingXP(
   // Sort by complexity (simplest first — basic refining recipes)
   candidates.sort((a, b) => a.complexity - b.complexity);
 
-  // Try the simplest recipe
-  const target = candidates[0].recipe;
-  ctx.log("craft", `Grinding XP: crafting ${target.name} (${target.components.map(c => `${c.quantity}x ${c.name}`).join(", ")})...`);
+  // Try all candidates in order; when one runs out of materials, move to the next
+  for (const { recipe: target } of candidates) {
+    if (bot.state !== "running") break;
 
-  // Deposit non-essential cargo to make space
-  for (const item of [...bot.inventory]) {
-    if (item.quantity <= 0) continue;
-    const lower = item.itemId.toLowerCase();
-    if (lower.includes("fuel") || lower.includes("energy_cell")) continue;
-    if (target.components.some(c => c.item_id === item.itemId)) continue;
-    const dResp = await bot.exec("faction_deposit_items", { item_id: item.itemId, quantity: item.quantity });
-    if (dResp.error) {
-      await bot.exec("deposit_items", { item_id: item.itemId, quantity: item.quantity });
-    }
-  }
-  await bot.refreshCargo();
-  await bot.refreshStatus();
-
-  const MAX_XP_CRAFTS = 5;
-  for (let i = 0; i < MAX_XP_CRAFTS && bot.state === "running"; i++) {
     await bot.refreshCargo();
     if (bot.docked) {
       await bot.refreshStorage();
       await bot.refreshFactionStorage();
     }
 
-    if (!hasMaterialsAnywhere(ctx, target)) break;
+    if (!hasMaterialsAnywhere(ctx, target)) continue;
 
-    await withdrawFactionMaterials(ctx, target);
-    await withdrawStorageMaterials(ctx, target);
+    // Deposit non-essential cargo to make space for this recipe's materials
+    for (const item of [...bot.inventory]) {
+      if (item.quantity <= 0) continue;
+      const lower = item.itemId.toLowerCase();
+      if (lower.includes("fuel") || lower.includes("energy_cell")) continue;
+      if (target.components.some(c => c.item_id === item.itemId)) continue;
+      const dResp = await bot.exec("faction_deposit_items", { item_id: item.itemId, quantity: item.quantity });
+      if (dResp.error) {
+        await bot.exec("deposit_items", { item_id: item.itemId, quantity: item.quantity });
+      }
+    }
+    await bot.refreshCargo();
+    await bot.refreshStatus();
 
-    if (getMissingMaterial(ctx, target)) break;
+    ctx.log("craft", `Grinding XP: ${target.name} (${target.components.map(c => `${c.quantity}x ${c.name}`).join(", ")})`);
 
-    const craftResp = await bot.exec("craft", { recipe_id: target.recipe_id, count: 1 });
-    if (craftResp.error) break;
+    // Craft until materials are exhausted for this candidate
+    while (bot.state === "running") {
+      await bot.refreshCargo();
+      if (bot.docked) {
+        await bot.refreshStorage();
+        await bot.refreshFactionStorage();
+      }
 
-    const result = craftResp.result as Record<string, unknown> | undefined;
-    const qty = (result?.count as number) || (result?.quantity as number) || (target.output_quantity || 1);
-    crafted.push(`${qty}x ${target.output_name || target.name}`);
-    bot.stats.totalCrafted += qty;
+      if (!hasMaterialsAnywhere(ctx, target)) break;
+
+      await withdrawFactionMaterials(ctx, target);
+      await withdrawStorageMaterials(ctx, target);
+
+      if (getMissingMaterial(ctx, target)) break;
+
+      // Calculate how many batches we can craft from current cargo
+      let batchCount = 1;
+      if (target.components.length > 0) {
+        batchCount = target.components.reduce((min, c) => {
+          const have = countInCargo(ctx, c.item_id);
+          return Math.min(min, Math.floor(have / c.quantity));
+        }, 99);
+        batchCount = Math.max(1, Math.min(batchCount, 20));
+      }
+
+      const craftResp = await bot.exec("craft", { recipe_id: target.recipe_id, count: batchCount });
+      if (craftResp.error) break;
+
+      const result = craftResp.result as Record<string, unknown> | undefined;
+      const qty = (result?.count as number) || (result?.quantity as number) || (target.output_quantity * batchCount);
+      crafted.push(`${qty}x ${target.output_name || target.name}`);
+      bot.stats.totalCrafted += qty;
+    }
   }
 
   return crafted;

@@ -132,7 +132,7 @@
               <div class="text-[11px] text-space-text-dim">Treasury</div>
             </div>
             <div class="bg-space-bg border border-[#21262d] rounded-md p-2">
-              <div class="text-lg font-bold text-space-magenta">{{ factionFacilities.length }}</div>
+              <div class="text-lg font-bold text-space-magenta">{{ ownFacilities.length }}</div>
               <div class="text-[11px] text-space-text-dim">Facilities</div>
             </div>
           </div>
@@ -190,8 +190,8 @@
 
           <!-- Existing facilities -->
           <h4 class="text-xs font-semibold text-space-text-dim uppercase mb-2">Active Facilities</h4>
-          <div v-if="factionFacilities.length > 0" class="grid grid-cols-5 gap-2">
-            <div v-for="f in factionFacilities" :key="f.facility_id"
+          <div v-if="ownFacilities.length > 0" class="grid grid-cols-5 gap-2">
+            <div v-for="f in ownFacilities" :key="f.facility_id"
               class="bg-space-bg border border-[#21262d] rounded-md p-2 mb-2 text-xs"
               :class="f.active === false ? 'opacity-60' : ''">
               <div class="flex items-start justify-between gap-2">
@@ -232,16 +232,16 @@
 
           <!-- Buildable types -->
           <h4 class="text-xs font-semibold text-space-text-dim uppercase mb-2">Build New Facility</h4>
-          <div v-if="buildableTypes.length > 0" class="grid grid-cols-5 gap-2">
-            <div v-for="bt in buildableTypes" :key="bt.id"
+          <div v-if="unbuildableTypes.length > 0" class="grid grid-cols-5 gap-2">
+            <div v-for="bt in unbuildableTypes" :key="bt.id"
               class="bg-space-bg border border-[#21262d] rounded-md p-2 mb-2 text-xs transition-opacity"
-              :class="[!bt.buildable && !hasFacility(bt.id) ? 'opacity-50' : '', hasFacility(bt.id) ? 'border-green-900/30' : '']">
+              :class="[!bt.buildable && !hasFacility(bt.id) ? 'opacity-50' : '', !bt.buildable && hasFacility(bt.id) ? 'border-green-900/30' : '']">
               <div class="flex items-start justify-between gap-2">
                 <div class="min-w-0 flex-1">
                   <div class="flex items-center gap-1.5 flex-wrap">
-                    <span class="font-medium" :class="hasFacility(bt.id) ? 'text-space-green' : 'text-space-text'">{{ bt.name }}</span>
+                    <span class="font-medium" :class="!bt.buildable && hasFacility(bt.id) ? 'text-space-green' : 'text-space-text'">{{ bt.name }}</span>
                     <span v-if="bt.level" class="text-[11px] text-space-text-dim">Lv{{ bt.level }}</span>
-                    <span v-if="hasFacility(bt.id)" class="text-[11px] px-1 py-0.5 rounded bg-green-900/30 text-space-green">✓ built</span>
+                    <span v-if="!bt.buildable && hasFacility(bt.id)" class="text-[11px] px-1 py-0.5 rounded bg-green-900/30 text-space-green">✓ built</span>
                     <span v-else-if="!bt.buildable" class="text-[11px] px-1 py-0.5 rounded bg-[#30363d] text-space-text-dim">🔒 locked</span>
                   </div>
                   <div v-if="bt.description" class="text-[11px] text-space-text-dim mt-0.5 line-clamp-2">{{ bt.description }}</div>
@@ -252,10 +252,10 @@
                 <div class="text-right shrink-0">
                   <div class="text-space-yellow text-[11px] mb-1">{{ bt.build_cost != null ? formatBuildCost(bt.build_cost) : '—' }}</div>
                   <button @click="buildFacility(bt.id, bt.name)"
-                    :disabled="hasFacility(bt.id) || !bt.buildable || factionActionLoading === bt.id"
+                    :disabled="!bt.buildable || factionActionLoading === bt.id"
                     class="btn text-[11px] px-2 py-0.5 disabled:opacity-40 disabled:cursor-not-allowed"
-                    :class="hasFacility(bt.id) ? 'btn-secondary' : bt.buildable ? 'btn-primary' : 'btn-secondary'">
-                    {{ factionActionLoading === bt.id ? '...' : hasFacility(bt.id) ? '✓ Built' : !bt.buildable ? '🔒 Locked' : '🔨 Build' }}
+                    :class="bt.buildable ? 'btn-primary' : 'btn-secondary'">
+                    {{ factionActionLoading === bt.id ? '...' : bt.buildable ? '🔨 Build' : hasFacility(bt.id) ? '✓ Built' : '🔒 Locked' }}
                   </button>
                   <div v-if="factionBuildErrors[bt.id]" class="text-[11px] text-red-400 mt-1">⚠ {{ factionBuildErrors[bt.id] }}</div>
                 </div>
@@ -265,8 +265,11 @@
                 class="mt-1.5 pt-1.5 border-t border-[#30363d] flex items-end justify-between gap-2">
                 <div class="min-w-0">
                   <div class="text-[11px] text-space-text-dim uppercase tracking-wider mb-0.5">Materials required</div>
-                  <div class="flex flex-wrap gap-x-3 gap-y-0.5 text-[11px] text-space-text-dim">
-                    <span v-for="m in (factionTypeCache[bt.id]?.build_materials || bt.build_materials)" :key="m.item_id">{{ m.name || m.item_id }} ×{{ m.quantity }}</span>
+                  <div class="flex flex-wrap gap-x-3 gap-y-0.5 text-[11px]">
+                    <span v-for="m in (factionTypeCache[bt.id]?.build_materials || bt.build_materials)" :key="m.item_id"
+                      :class="hasMaterial(m.item_id, m.quantity) ? 'text-space-green' : 'text-red-400'">
+                      {{ hasMaterial(m.item_id, m.quantity) ? '✓' : '✗' }} {{ m.name || m.item_id }} ×{{ m.quantity }}
+                    </span>
                   </div>
                 </div>
                 <div class="shrink-0 flex flex-col items-end gap-1">
@@ -274,7 +277,7 @@
                     ⚙️ Gathering
                     <button @click="clearGatherGoal()" class="text-space-red hover:text-red-400" title="Cancel">✕</button>
                   </span>
-                  <button v-else-if="!hasFacility(bt.id)" @click="gatherFacilityMaterials(bt)"
+                  <button v-else-if="bt.buildable" @click="gatherFacilityMaterials(bt)"
                     class="btn btn-secondary text-[11px] px-2 py-0.5 whitespace-nowrap">📦 Gather</button>
                 </div>
               </div>
@@ -285,7 +288,8 @@
           </div>
 
           <!-- Facility Detail Modal -->
-          <div v-if="facilityDetail" class="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50" @click.self="facilityDetail = null">
+          <Teleport to="body">
+          <div v-if="facilityDetail" class="fixed inset-0 bg-black/30 flex items-center justify-center z-50" @click.self="facilityDetail = null">
             <div class="bg-space-card border border-space-border rounded-lg p-5 w-[28rem] max-h-[80vh] overflow-auto">
               <div class="flex items-center justify-between mb-3">
                 <h3 class="text-lg font-semibold text-space-text-bright">{{ facilityDetail.name }}</h3>
@@ -296,7 +300,10 @@
                 <div v-if="facilityDetail.bonus_type" class="px-2 py-1.5 bg-[#0d2233] rounded text-space-cyan">Bonus: +{{ facilityDetail.bonus_value }} {{ facilityDetail.bonus_type.replace('_', ' ') }}</div>
                 <div v-if="facilityDetail.build_materials?.length" class="px-2 py-1.5 bg-[#2d2200] rounded">
                   <div class="text-space-yellow font-medium mb-1">Build Materials:</div>
-                  <div v-for="mat in facilityDetail.build_materials" :key="mat.item_id" class="text-space-text-dim">• {{ mat.quantity }}x {{ mat.name }}</div>
+                  <div v-for="mat in facilityDetail.build_materials" :key="mat.item_id"
+                  :class="hasMaterial(mat.item_id, mat.quantity) ? 'text-space-green' : 'text-red-400'">
+                {{ hasMaterial(mat.item_id, mat.quantity) ? '✓' : '✗' }} {{ mat.quantity }}x {{ mat.name || mat.item_id }}
+              </div>
                 </div>
                 <div v-if="facilityDetail.build_cost" class="px-2 py-1.5 bg-[#0d2818] rounded text-space-green">Cost: {{ formatBuildCost(facilityDetail.build_cost) }}</div>
                 <div v-if="facilityDetail.rent_per_cycle" class="px-2 py-1.5 bg-[#2d1500] rounded text-space-yellow">Rent: {{ facilityDetail.rent_per_cycle }} cr/cycle</div>
@@ -305,12 +312,12 @@
               </div>
               <div class="flex gap-2 mt-4 flex-wrap">
                 <button @click="buildFacility(facilityDetail.id, facilityDetail.name); facilityDetail = null"
-                  :disabled="loading || hasFacility(facilityDetail.id) || currentGatherGoal?.target_id === facilityDetail.id"
+                  :disabled="loading || facilityDetail.buildable === false"
                   class="btn btn-primary flex-1 text-xs">
-                  {{ hasFacility(facilityDetail.id) ? 'Already Built' : 'Build Now' }}
+                  {{ facilityDetail.buildable === false ? (hasFacility(facilityDetail.id) ? 'Already Built' : 'Locked') : 'Build Now' }}
                 </button>
                 <button
-                  v-if="!hasFacility(facilityDetail.id) && facilityDetail.build_materials?.length && currentGatherGoal?.target_id !== facilityDetail.id"
+                  v-if="facilityDetail.buildable !== false && facilityDetail.build_materials?.length && currentGatherGoal?.target_id !== facilityDetail.id"
                   @click="gatherFacilityMaterials(facilityDetail); facilityDetail = null"
                   class="btn flex-1 text-xs">📦 Gather</button>
                 <span v-else-if="currentGatherGoal?.target_id === facilityDetail.id" class="flex items-center gap-1 text-xs text-space-cyan flex-1 justify-center">
@@ -321,6 +328,7 @@
               </div>
             </div>
           </div>
+          </Teleport>
         </div>
 
         <!-- Tab: Diplomacy -->
@@ -350,6 +358,178 @@
           <div class="font-mono text-xs leading-relaxed max-h-[500px] overflow-auto scrollbar-dark">
             <div v-if="botStore.factionLogLines.length === 0" class="text-space-text-dim italic py-3">No faction activity logged yet.</div>
             <div v-for="(line, idx) in botStore.factionLogLines" :key="idx" class="text-space-text-dim">{{ line }}</div>
+          </div>
+        </div>
+
+        <!-- Tab: Missions -->
+        <div v-if="activeSection === 'missions'">
+          <div class="flex items-center justify-between mb-4">
+            <h3 class="text-sm font-semibold text-space-text-bright">Faction Missions</h3>
+            <div class="flex gap-2">
+              <button @click="loadFactionMissions" :disabled="missionsLoading" class="btn btn-secondary text-xs px-3">{{ missionsLoading ? '⏳' : '🔄 Refresh' }}</button>
+              <button @click="showPostMissionModal = true" class="btn btn-primary text-xs px-3">+ Post Mission</button>
+            </div>
+          </div>
+
+          <div v-if="!missionsLoaded" class="text-xs text-space-text-dim italic text-center py-6">Click Refresh to load posted missions.</div>
+          <div v-else-if="factionMissions.length === 0" class="text-xs text-space-text-dim italic text-center py-6">No missions posted by this faction.</div>
+          <div v-else class="space-y-2">
+            <div v-for="m in factionMissions" :key="m.id || m.mission_id"
+              class="bg-space-bg border border-[#21262d] rounded-md p-3 hover:border-space-accent/30 transition-colors">
+              <div class="flex items-start justify-between gap-3">
+                <div class="min-w-0 flex-1">
+                  <div class="flex items-center gap-2 flex-wrap">
+                    <span class="text-sm font-medium text-space-text-bright">{{ m.title || m.name }}</span>
+                    <span class="px-1.5 py-0.5 text-[11px] rounded bg-[#21262d] text-space-cyan">{{ m.type || 'unknown' }}</span>
+                    <span v-if="m.difficulty" class="text-[11px] text-space-text-dim">Diff {{ m.difficulty }}</span>
+                  </div>
+                  <div v-if="m.description" class="text-xs text-space-text-dim mt-1 line-clamp-2">{{ m.description }}</div>
+                  <div class="flex items-center gap-3 mt-1.5 text-[11px]">
+                    <span v-if="m.reward_credits || m.reward?.credits" class="text-space-yellow">💰 {{ fmt(m.reward_credits || m.reward?.credits || 0) }} cr</span>
+                    <span v-if="m.expires_at" class="text-space-text-dim">⏱ Expires {{ formatDate(m.expires_at) }}</span>
+                    <span v-if="m.accepted_count !== undefined" class="text-space-text-dim">{{ m.accepted_count }} accepted</span>
+                  </div>
+                </div>
+                <button @click="cancelFactionMission(m)" :disabled="missionCancellingId === (m.id || m.mission_id)"
+                  class="btn text-[11px] px-2 py-0.5 bg-red-900/40 text-red-300 hover:bg-red-900/70 border-red-700/40 shrink-0">
+                  {{ missionCancellingId === (m.id || m.mission_id) ? '⏳' : '✕ Cancel' }}
+                </button>
+              </div>
+            </div>
+          </div>
+
+          <!-- Post Mission Modal -->
+          <Teleport to="body">
+            <Transition enter-active-class="transition-opacity duration-200" enter-from-class="opacity-0" enter-to-class="opacity-100"
+              leave-active-class="transition-opacity duration-150" leave-from-class="opacity-100" leave-to-class="opacity-0">
+              <div v-if="showPostMissionModal" class="fixed inset-0 z-50 flex items-center justify-center bg-black/60" @click.self="showPostMissionModal = false">
+                <div class="bg-[#0d1117] border border-space-border rounded-lg shadow-2xl w-full max-w-lg mx-4 p-5 overflow-auto max-h-[90vh]">
+                  <div class="flex items-center justify-between mb-4">
+                    <h3 class="text-sm font-semibold text-space-text-bright">Post Faction Mission</h3>
+                    <button @click="showPostMissionModal = false" class="text-space-text-dim hover:text-space-text-bright">×</button>
+                  </div>
+                  <div class="space-y-3">
+                    <div>
+                      <label class="text-xs text-space-text-dim block mb-1">Title *</label>
+                      <input v-model="newMission.title" type="text" placeholder="Mission title" class="input text-sm w-full" />
+                    </div>
+                    <div>
+                      <label class="text-xs text-space-text-dim block mb-1">Description</label>
+                      <textarea v-model="newMission.description" rows="3" placeholder="Mission briefing…" class="input text-sm w-full resize-none"></textarea>
+                    </div>
+                    <div class="grid grid-cols-2 gap-3">
+                      <div>
+                        <label class="text-xs text-space-text-dim block mb-1">Type</label>
+                        <select v-model="newMission.type" class="input text-sm w-full">
+                          <option value="delivery">Delivery</option>
+                          <option value="mining">Mining</option>
+                          <option value="combat">Combat</option>
+                          <option value="exploration">Exploration</option>
+                          <option value="trading">Trading</option>
+                          <option value="other">Other</option>
+                        </select>
+                      </div>
+                      <div>
+                        <label class="text-xs text-space-text-dim block mb-1">Reward (credits)</label>
+                        <input v-model.number="newMission.reward_credits" type="number" min="0" placeholder="0" class="input text-sm w-full" />
+                      </div>
+                    </div>
+                    <div class="grid grid-cols-2 gap-3">
+                      <div>
+                        <label class="text-xs text-space-text-dim block mb-1">Min Level</label>
+                        <input v-model.number="newMission.min_level" type="number" min="0" placeholder="0" class="input text-sm w-full" />
+                      </div>
+                      <div>
+                        <label class="text-xs text-space-text-dim block mb-1">Expires (hours)</label>
+                        <input v-model.number="newMission.expires_hours" type="number" min="1" max="168" placeholder="24" class="input text-sm w-full" />
+                      </div>
+                    </div>
+                  </div>
+                  <div class="flex justify-end gap-2 mt-4">
+                    <button @click="showPostMissionModal = false" class="btn btn-secondary text-xs px-4">Cancel</button>
+                    <button @click="doPostMission" :disabled="!newMission.title || postingMission" class="btn btn-primary text-xs px-4">
+                      {{ postingMission ? '⏳ Posting…' : '📋 Post Mission' }}
+                    </button>
+                  </div>
+                </div>
+              </div>
+            </Transition>
+          </Teleport>
+        </div>
+
+        <!-- Tab: Trade Intel -->
+        <div v-if="activeSection === 'intel'">
+          <div class="flex items-center justify-between mb-4">
+            <h3 class="text-sm font-semibold text-space-text-bright">Trade Intelligence</h3>
+            <button @click="loadIntelStatus" :disabled="intelLoading" class="btn btn-secondary text-xs px-3">{{ intelLoading ? '⏳' : '🔄 Refresh' }}</button>
+          </div>
+
+          <!-- Coverage stats -->
+          <div v-if="intelStatus" class="grid grid-cols-3 gap-3 mb-4">
+            <div class="bg-space-bg border border-[#21262d] rounded-md p-3 text-center">
+              <div class="text-xl font-bold text-space-cyan">{{ intelStatus.systems_covered ?? '—' }}</div>
+              <div class="text-[11px] text-space-text-dim">Systems Covered</div>
+            </div>
+            <div class="bg-space-bg border border-[#21262d] rounded-md p-3 text-center">
+              <div class="text-xl font-bold text-space-yellow">{{ intelStatus.total_reports ?? '—' }}</div>
+              <div class="text-[11px] text-space-text-dim">Reports</div>
+            </div>
+            <div class="bg-space-bg border border-[#21262d] rounded-md p-3 text-center">
+              <div class="text-xl font-bold text-space-green">{{ intelStatus.freshness_score ?? '—' }}</div>
+              <div class="text-[11px] text-space-text-dim">Freshness</div>
+            </div>
+          </div>
+
+          <!-- Query intel -->
+          <div class="card py-2 px-3 mb-3">
+            <h4 class="text-xs font-semibold text-space-text-dim uppercase mb-2">Query Intel</h4>
+            <div class="flex gap-2">
+              <input v-model="intelQuery" type="text" placeholder="Item ID or system ID…" class="input text-xs flex-1" @keydown.enter="queryIntel" />
+              <button @click="queryIntel" :disabled="intelLoading || !intelQuery.trim()" class="btn btn-primary text-xs px-3">Search</button>
+            </div>
+            <div v-if="intelResults.length > 0" class="mt-3 space-y-1">
+              <div v-for="(r, i) in intelResults" :key="i"
+                class="flex items-center justify-between px-2 py-1.5 bg-space-bg border border-[#21262d] rounded text-xs">
+                <div>
+                  <span class="text-space-text-bright">{{ r.item_name || r.item_id }}</span>
+                  <span class="text-space-text-dim ml-2">@ {{ r.station_name || r.base_name || r.location }}</span>
+                </div>
+                <div class="flex gap-3 shrink-0">
+                  <span v-if="r.buy_price" class="text-space-cyan">Buy: {{ fmt(r.buy_price) }}</span>
+                  <span v-if="r.sell_price" class="text-space-yellow">Sell: {{ fmt(r.sell_price) }}</span>
+                  <span v-if="r.timestamp" class="text-space-text-dim">{{ formatDate(r.timestamp) }}</span>
+                </div>
+              </div>
+            </div>
+            <div v-else-if="intelQueried" class="text-xs text-space-text-dim italic mt-2">No results found.</div>
+          </div>
+
+          <!-- Submit intel -->
+          <div class="card py-2 px-3">
+            <h4 class="text-xs font-semibold text-space-text-dim uppercase mb-2">Submit Market Observation</h4>
+            <div class="grid grid-cols-2 gap-2">
+              <div>
+                <label class="text-[11px] text-space-text-dim block mb-1">Item ID</label>
+                <input v-model="submitIntel.item_id" type="text" placeholder="ore_iron" class="input text-xs w-full" />
+              </div>
+              <div>
+                <label class="text-[11px] text-space-text-dim block mb-1">System ID</label>
+                <input v-model="submitIntel.system_id" type="text" placeholder="sol" class="input text-xs w-full" />
+              </div>
+              <div>
+                <label class="text-[11px] text-space-text-dim block mb-1">Buy Price</label>
+                <input v-model.number="submitIntel.buy_price" type="number" min="0" placeholder="0" class="input text-xs w-full" />
+              </div>
+              <div>
+                <label class="text-[11px] text-space-text-dim block mb-1">Sell Price</label>
+                <input v-model.number="submitIntel.sell_price" type="number" min="0" placeholder="0" class="input text-xs w-full" />
+              </div>
+            </div>
+            <div class="flex justify-end mt-2">
+              <button @click="doSubmitIntel" :disabled="!submitIntel.item_id || submittingIntel" class="btn btn-primary text-xs px-4">
+                {{ submittingIntel ? '⏳' : '📡 Submit' }}
+              </button>
+            </div>
           </div>
         </div>
       </div>
@@ -443,8 +623,117 @@ const sections = [
   { id: 'storage', label: 'Storage' },
   { id: 'buildings', label: 'Buildings' },
   { id: 'diplomacy', label: 'Diplomacy' },
+  { id: 'missions', label: '📋 Missions' },
+  { id: 'intel', label: '📡 Intel' },
   { id: 'activity', label: 'Activity' },
 ];
+
+// ── Faction Missions ─────────────────────────────────────────
+const factionMissions = ref<any[]>([]);
+const missionsLoading = ref(false);
+const missionsLoaded = ref(false);
+const missionCancellingId = ref<string | null>(null);
+const showPostMissionModal = ref(false);
+const postingMission = ref(false);
+const newMission = ref({ title: '', description: '', type: 'delivery', reward_credits: 0, min_level: 0, expires_hours: 24 });
+
+async function loadFactionMissions() {
+  missionsLoading.value = true;
+  const r = await execAsync('faction_list_missions');
+  missionsLoading.value = false;
+  missionsLoaded.value = true;
+  if (r.ok && r.data) {
+    const d = r.data as any;
+    factionMissions.value = Array.isArray(d) ? d : (Array.isArray(d.missions) ? d.missions : []);
+  }
+}
+
+async function doPostMission() {
+  if (!newMission.value.title) return;
+  postingMission.value = true;
+  const r = await execAsync('faction_post_mission', {
+    title: newMission.value.title,
+    description: newMission.value.description,
+    type: newMission.value.type,
+    reward_credits: newMission.value.reward_credits,
+    min_level: newMission.value.min_level,
+    expires_hours: newMission.value.expires_hours,
+  });
+  postingMission.value = false;
+  if (r.ok) {
+    showPostMissionModal.value = false;
+    newMission.value = { title: '', description: '', type: 'delivery', reward_credits: 0, min_level: 0, expires_hours: 24 };
+    setStatus('Mission posted successfully');
+    await loadFactionMissions();
+  } else {
+    setError(r.error || 'Failed to post mission');
+  }
+}
+
+async function cancelFactionMission(m: any) {
+  const id = m.id || m.mission_id;
+  missionCancellingId.value = id;
+  const r = await execAsync('faction_cancel_mission', { mission_id: id });
+  missionCancellingId.value = null;
+  if (r.ok) {
+    factionMissions.value = factionMissions.value.filter(x => (x.id || x.mission_id) !== id);
+    setStatus('Mission cancelled');
+  } else {
+    setError(r.error || 'Failed to cancel mission');
+  }
+}
+
+// ── Trade Intel ──────────────────────────────────────────────
+const intelStatus = ref<any>(null);
+const intelLoading = ref(false);
+const intelQuery = ref('');
+const intelResults = ref<any[]>([]);
+const intelQueried = ref(false);
+const submittingIntel = ref(false);
+const submitIntel = ref({ item_id: '', system_id: '', buy_price: 0, sell_price: 0 });
+
+async function loadIntelStatus() {
+  intelLoading.value = true;
+  const r = await execAsync('faction_trade_intel_status');
+  intelLoading.value = false;
+  if (r.ok && r.data) intelStatus.value = r.data;
+}
+
+async function queryIntel() {
+  const q = intelQuery.value.trim();
+  if (!q) return;
+  intelLoading.value = true;
+  intelQueried.value = false;
+  const r = await execAsync('faction_query_trade_intel', { query: q });
+  intelLoading.value = false;
+  intelQueried.value = true;
+  if (r.ok && r.data) {
+    const d = r.data as any;
+    intelResults.value = Array.isArray(d) ? d : (Array.isArray(d.results) ? d.results : d.intel ? [d.intel] : []);
+  } else {
+    intelResults.value = [];
+  }
+}
+
+async function doSubmitIntel() {
+  if (!submitIntel.value.item_id) return;
+  submittingIntel.value = true;
+  const r = await execAsync('faction_submit_trade_intel', { ...submitIntel.value });
+  submittingIntel.value = false;
+  if (r.ok) {
+    setStatus('Trade intel submitted');
+    submitIntel.value = { item_id: '', system_id: '', buy_price: 0, sell_price: 0 };
+  } else {
+    setError(r.error || 'Failed to submit intel');
+  }
+}
+
+function formatDate(ts: string | number | undefined): string {
+  if (!ts) return '';
+  const d = new Date(typeof ts === 'number' ? ts * 1000 : ts);
+  if (isNaN(d.getTime())) return String(ts);
+  return d.toLocaleDateString(undefined, { month: 'short', day: 'numeric' }) + ' ' + d.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' });
+}
 
 function fmt(n: number): string { return new Intl.NumberFormat().format(n); }
 
@@ -468,10 +757,34 @@ function parseBuildError(raw: string): string {
 function setError(msg: string) { errorMsg.value = msg; setTimeout(() => { errorMsg.value = ''; }, 5000); }
 function setStatus(msg: string) { statusMsg.value = msg; setTimeout(() => { statusMsg.value = ''; }, 4000); }
 
+const selectedBotObj = computed(() => botStore.bots.find(b => b.username === selectedBot.value));
+
+function hasMaterial(itemId: string, qty: number): boolean {
+  const bot = selectedBotObj.value as any;
+  if (!bot) return false;
+  const inv  = (bot.inventory      || []).find((i: any) => i.itemId === itemId || i.item_id === itemId);
+  const stor = (bot.storage        || []).find((i: any) => i.itemId === itemId || i.item_id === itemId);
+  const fac  = (bot.factionStorage || []).find((i: any) => i.itemId === itemId || i.item_id === itemId);
+  return ((inv?.quantity ?? 0) + (stor?.quantity ?? 0) + (fac?.quantity ?? 0)) >= qty;
+}
+
 // Computed
 const members = computed(() => factionData.value?.members || []);
 const memberCount = computed(() => factionData.value?.member_count ?? members.value.length);
 const onlineCount = computed(() => members.value.filter((m: any) => m.is_online).length);
+
+/** Only the facilities that belong to the current bot's faction. */
+const ownFacilities = computed(() => {
+  const botFactionId = (selectedBotObj.value as any)?.factionId;
+  if (!botFactionId || factionFacilities.value.length === 0) return factionFacilities.value;
+  const own = factionFacilities.value.filter((f: any) => f.faction_id === botFactionId);
+  return own.length > 0 ? own : factionFacilities.value;
+});
+
+/** Types from the buildable list that haven't been built yet. */
+const unbuildableTypes = computed(() =>
+  buildableTypes.value.filter((bt: any) => !hasFacility(bt.id))
+);
 
 // ── Bot selection ───────────────────────────────────────────
 function selectBot(username: string) {
@@ -717,7 +1030,7 @@ async function buildFacility(facilityTypeId: string, facilityName?: string): Pro
 }
 
 function hasFacility(facilityTypeId: string): boolean {
-  return factionFacilities.value.some((f: any) => f.type === facilityTypeId);
+  return ownFacilities.value.some((f: any) => (f.facility_type ?? f.type) === facilityTypeId);
 }
 
 function formatBuildCost(cost: any): string {

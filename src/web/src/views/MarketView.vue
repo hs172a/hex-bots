@@ -1,5 +1,13 @@
 <template>
-  <div class="flex-1 flex flex-col gap-4 p-4 overflow-hidden">
+  <div class="flex-1 flex flex-col overflow-hidden">
+    <!-- Tab bar -->
+    <div class="flex gap-0 border-b border-space-border bg-space-card px-4 shrink-0">
+      <button @click="activeTab = 'overview'" class="px-4 py-2.5 text-sm font-medium border-b-2 transition-all" :class="activeTab === 'overview' ? 'text-space-text-bright border-space-accent' : 'text-space-text-dim border-transparent hover:text-space-text'">📊 Overview</button>
+      <button @click="activeTab = 'orders'" class="px-4 py-2.5 text-sm font-medium border-b-2 transition-all" :class="activeTab === 'orders' ? 'text-space-text-bright border-space-accent' : 'text-space-text-dim border-transparent hover:text-space-text'">📋 My Orders</button>
+    </div>
+
+    <!-- ── Overview Tab ─────────────────────────────────────── -->
+    <div v-if="activeTab === 'overview'" class="flex-1 flex flex-col gap-4 p-4 overflow-hidden">
     <!-- Market Header -->
     <div class="flex items-center justify-between">
       <h2 class="text-lg font-semibold text-space-text-bright">Market Overview</h2>
@@ -111,6 +119,104 @@
         </table>
       </div>
     </div>
+    </div><!-- /overview tab -->
+
+    <!-- ── My Orders Tab ────────────────────────────────────── -->
+    <div v-else-if="activeTab === 'orders'" class="flex-1 flex flex-col gap-3 p-4 overflow-hidden">
+      <!-- Controls -->
+      <div class="flex items-center gap-3 shrink-0">
+        <h2 class="text-lg font-semibold text-space-text-bright">My Orders</h2>
+        <select v-model="orderBot" class="input text-xs min-w-[160px]">
+          <option v-for="b in botStore.bots" :key="b.username" :value="b.username">{{ b.username }}</option>
+        </select>
+        <button @click="loadOrders" :disabled="ordersLoading || !orderBot" class="btn btn-secondary text-xs px-3">
+          {{ ordersLoading ? '⏳' : '🔄 Load' }}
+        </button>
+        <span v-if="orders.length > 0" class="text-xs text-space-text-dim">{{ orders.length }} order{{ orders.length !== 1 ? 's' : '' }}</span>
+      </div>
+
+      <!-- Orders table -->
+      <div class="card flex flex-col flex-1 overflow-hidden">
+        <div v-if="!ordersLoaded" class="flex items-center justify-center h-32 text-center">
+          <div class="text-space-text-dim text-sm">Select a bot and click Load to view active orders.</div>
+        </div>
+        <div v-else-if="ordersLoading" class="flex items-center justify-center h-32 text-space-text-dim text-sm">Loading…</div>
+        <div v-else-if="orders.length === 0" class="flex items-center justify-center h-32 text-center">
+          <div><div class="text-2xl mb-2">📋</div><div class="text-space-text-dim text-sm">No active orders for {{ orderBot }}.</div></div>
+        </div>
+        <div v-else class="flex-1 overflow-auto">
+          <table class="w-full text-sm">
+            <thead class="sticky top-0 bg-space-card border-b border-space-border">
+              <tr class="text-left text-xs text-space-text-dim uppercase tracking-wider">
+                <th class="py-2 px-3 font-semibold">Type</th>
+                <th class="py-2 px-3 font-semibold">Item</th>
+                <th class="py-2 px-3 font-semibold text-right">Qty</th>
+                <th class="py-2 px-3 font-semibold text-right">Price</th>
+                <th class="py-2 px-3 font-semibold">Station</th>
+                <th class="py-2 px-3 font-semibold text-right">Total</th>
+                <th class="py-2 px-3 font-semibold text-center">Actions</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr v-for="order in orders" :key="order.id" class="border-b border-space-border hover:bg-space-row-hover transition-colors">
+                <td class="px-3 py-2">
+                  <span class="px-1.5 py-0.5 rounded text-[11px] font-medium"
+                    :class="order.type === 'buy' ? 'bg-blue-900/40 text-blue-300' : 'bg-green-900/40 text-green-300'">
+                    {{ order.type === 'buy' ? '🛒 BUY' : '💰 SELL' }}
+                  </span>
+                </td>
+                <td class="px-3 py-2 text-space-text-bright font-medium">{{ order.item_name || order.item_id }}</td>
+                <td class="px-3 py-2 text-right text-space-text">{{ formatNumber(order.quantity) }}</td>
+                <td class="px-3 py-2 text-right">
+                  <div v-if="editingOrder?.id === order.id" class="flex items-center gap-1 justify-end">
+                    <input v-model.number="editingOrder.price" type="number" min="1" class="input text-xs w-24 py-0.5 text-right" @keydown.enter="saveOrderPrice(order)" @keydown.escape="editingOrder = null" />
+                    <button @click="saveOrderPrice(order)" :disabled="modifyingId === order.id" class="btn btn-primary text-[11px] py-0.5 px-2">{{ modifyingId === order.id ? '⏳' : '✓' }}</button>
+                    <button @click="editingOrder = null" class="text-space-text-dim hover:text-space-text text-xs px-1">✕</button>
+                  </div>
+                  <div v-else class="flex items-center gap-1 justify-end">
+                    <span class="text-space-yellow">{{ formatNumber(order.price_each ?? order.price ?? 0) }} ₡</span>
+                    <button @click="startEditPrice(order)" class="text-space-text-dim hover:text-space-accent text-xs ml-1" title="Edit price">✏️</button>
+                  </div>
+                </td>
+                <td class="px-3 py-2 text-space-text-dim text-xs">{{ order.station_name || order.base_name || order.location || '—' }}</td>
+                <td class="px-3 py-2 text-right text-space-text-dim text-xs">{{ formatNumber((order.price_each ?? order.price ?? 0) * order.quantity) }} ₡</td>
+                <td class="px-3 py-2 text-center">
+                  <button @click="confirmCancel(order)" :disabled="cancellingId === order.id"
+                    class="btn text-[11px] px-2 py-0.5 bg-red-900/40 text-red-300 hover:bg-red-900/70 border-red-700/40"
+                    title="Cancel order">
+                    {{ cancellingId === order.id ? '⏳' : '✕ Cancel' }}
+                  </button>
+                </td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      <!-- Cancel confirmation modal -->
+      <Teleport to="body">
+        <Transition enter-active-class="transition-opacity duration-150" enter-from-class="opacity-0" enter-to-class="opacity-100"
+          leave-active-class="transition-opacity duration-100" leave-from-class="opacity-100" leave-to-class="opacity-0">
+          <div v-if="cancelTarget" class="fixed inset-0 z-50 flex items-center justify-center bg-black/60" @click.self="cancelTarget = null">
+            <div class="bg-[#0d1117] border border-space-border rounded-lg shadow-2xl w-full max-w-sm mx-4 p-5">
+              <h3 class="text-sm font-semibold text-space-text-bright mb-2">Cancel Order</h3>
+              <p class="text-xs text-space-text-dim mb-4">
+                Cancel <span class="text-space-text-bright">{{ cancelTarget.type === 'buy' ? 'BUY' : 'SELL' }}</span> order for
+                <span class="text-space-text-bright">{{ formatNumber(cancelTarget.quantity) }}x {{ cancelTarget.item_name || cancelTarget.item_id }}</span>
+                @ <span class="text-space-yellow">{{ formatNumber(cancelTarget.price_each ?? cancelTarget.price ?? 0) }} ₡</span>?
+              </p>
+              <div class="flex justify-end gap-2">
+                <button @click="cancelTarget = null" class="btn btn-secondary text-xs px-4">Keep</button>
+                <button @click="doCancel" :disabled="cancellingId !== null" class="btn text-xs px-4 bg-red-900/60 text-red-300 hover:bg-red-900/90 border-red-700/50">
+                  {{ cancellingId ? '⏳ Cancelling…' : 'Cancel Order' }}
+                </button>
+              </div>
+            </div>
+          </div>
+        </Transition>
+      </Teleport>
+    </div><!-- /orders tab -->
+
   </div>
 </template>
 
@@ -132,10 +238,102 @@ interface MarketItem {
   numStations: number;
 }
 
+const activeTab = ref<'overview' | 'orders'>('overview');
 const searchQuery = ref('');
 const filterType = ref('all');
 const sortKey = ref('name');
 const sortAsc = ref(true);
+
+// ── Orders tab state ──────────────────────────────────────────
+
+interface Order {
+  id: string;
+  type: 'buy' | 'sell';
+  item_id: string;
+  item_name?: string;
+  quantity: number;
+  price_each?: number;
+  price?: number;
+  station_name?: string;
+  base_name?: string;
+  location?: string;
+}
+
+const orderBot = ref(botStore.bots[0]?.username || '');
+const orders = ref<Order[]>([]);
+const ordersLoading = ref(false);
+const ordersLoaded = ref(false);
+const editingOrder = ref<{ id: string; price: number } | null>(null);
+const cancelTarget = ref<Order | null>(null);
+const cancellingId = ref<string | null>(null);
+const modifyingId = ref<string | null>(null);
+
+function execOrderCmd(command: string, params?: Record<string, unknown>): Promise<{ ok: boolean; data?: any; error?: string }> {
+  return new Promise(resolve => {
+    botStore.sendExec(orderBot.value, command, params || {}, (r: any) => resolve(r));
+  });
+}
+
+async function loadOrders() {
+  if (!orderBot.value) return;
+  ordersLoading.value = true;
+  ordersLoaded.value = false;
+  const r = await execOrderCmd('view_orders');
+  ordersLoading.value = false;
+  ordersLoaded.value = true;
+  if (r.ok && r.data) {
+    const d = r.data as any;
+    const raw: any[] = Array.isArray(d) ? d
+      : Array.isArray(d.orders) ? d.orders
+      : Array.isArray(d.buy_orders || d.sell_orders)
+        ? [...(d.buy_orders || []).map((o: any) => ({ ...o, type: 'buy' })), ...(d.sell_orders || []).map((o: any) => ({ ...o, type: 'sell' }))]
+      : [];
+    orders.value = raw.map((o: any) => ({
+      id: o.id || o.order_id || String(Math.random()),
+      type: o.type || (o.order_type?.toLowerCase().includes('buy') ? 'buy' : 'sell'),
+      item_id: o.item_id || '',
+      item_name: o.item_name || o.name || o.item_id || '',
+      quantity: o.quantity || o.amount || 0,
+      price_each: o.price_each || o.price_per_unit || o.price || 0,
+      price: o.price || o.price_each || 0,
+      station_name: o.station_name || o.base_name || o.location || '',
+    }));
+  } else {
+    orders.value = [];
+  }
+}
+
+function startEditPrice(order: Order) {
+  editingOrder.value = { id: order.id, price: order.price_each ?? order.price ?? 0 };
+}
+
+async function saveOrderPrice(order: Order) {
+  if (!editingOrder.value) return;
+  const newPrice = editingOrder.value.price;
+  modifyingId.value = order.id;
+  const r = await execOrderCmd('modify_order', { order_id: order.id, price_each: newPrice });
+  modifyingId.value = null;
+  if (r.ok) {
+    order.price_each = newPrice;
+    order.price = newPrice;
+    editingOrder.value = null;
+  }
+}
+
+function confirmCancel(order: Order) {
+  cancelTarget.value = order;
+}
+
+async function doCancel() {
+  if (!cancelTarget.value) return;
+  cancellingId.value = cancelTarget.value.id;
+  const r = await execOrderCmd('cancel_order', { order_id: cancelTarget.value.id });
+  if (r.ok) {
+    orders.value = orders.value.filter(o => o.id !== cancelTarget.value!.id);
+  }
+  cancellingId.value = null;
+  cancelTarget.value = null;
+}
 
 // Реальні market data з mapData (як в старому UI)
 const marketItems = computed<MarketItem[]>(() => {

@@ -95,6 +95,7 @@ export interface BotStatus {
   isCloaked: boolean;
   inventory: CargoItem[];
   storage: CargoItem[];
+  factionStorage: CargoItem[];
   stats: BotStats;
   playerStats: PlayerStats;
   skills: SkillEntry[];
@@ -108,6 +109,8 @@ export interface RoutineContext {
   catalogStore: CatalogStore;
   /** Optional: get status of all bots in the fleet (used by rescue routine). */
   getFleetStatus?: () => BotStatus[];
+  /** Optional: send a start/stop/exec action for any bot (used by ai_commander). */
+  sendBotAction?: (action: { type: string; bot?: string; routine?: string; command?: string; params?: Record<string, unknown> }) => Promise<{ ok: boolean; error?: string }>;
 }
 
 /** A routine is an async generator that yields state names as it progresses. */
@@ -226,6 +229,10 @@ export class Bot extends EventEmitter {
   private lastRateLimitLogMs = 0;
   private static readonly RATE_LIMIT_LOG_COOLDOWN_MS = 15_000;
 
+  /** Mutex: prevents concurrent bot.login() calls from each resetting the session
+   *  and spawning redundant auth sequences. */
+  private _loginLock: Promise<boolean> | null = null;
+
   constructor(username: string, baseDir: string) {
     super();
     this.username = username;
@@ -280,11 +287,30 @@ export class Bot extends EventEmitter {
         resp = await this.api.execute(command, payload);
       }
 
-      // Transient server errors — single retry after brief pause
+      // Transient server errors (504, 503, 500) — the server may still be processing the action.
+      // Wait 15s to let any server-side operation complete before retrying.
       const transientCodes = ["gateway_timeout", "service_unavailable", "internal_server_error"];
       if (resp.error && transientCodes.includes(resp.error.code ?? "")) {
-        await sleep(5000);
+        await sleep(15_000);
         resp = await this.api.execute(command, payload);
+      }
+
+      // "Another action is already in progress" — server is still processing a previous request.
+      // Wait and retry up to 4 times with increasing delays (5s, 10s, 15s, 20s).
+      if (resp.error) {
+        const isActionBusy =
+          resp.error.code === "action_in_progress" ||
+          resp.error.message?.toLowerCase().includes("action is already in progress");
+        if (isActionBusy) {
+          for (let attempt = 1; attempt <= 4; attempt++) {
+            await sleep(5000 * attempt);
+            resp = await this.api.execute(command, payload);
+            if (!resp.error || !(
+              resp.error.code === "action_in_progress" ||
+              resp.error.message?.toLowerCase().includes("action is already in progress")
+            )) break;
+          }
+        }
       }
 
       // Rate limit — exponential backoff retry (max 3 attempts)
@@ -315,6 +341,10 @@ export class Bot extends EventEmitter {
     }
 
     if (resp.error) {
+      // Ensure message is always a non-empty string — prevents .toLowerCase() crashes in routines
+      if (!resp.error.message) {
+        resp.error.message = resp.error.code || "Unknown error";
+      }
       // Suppress noisy expected errors — callers handle these gracefully
       const code = resp.error.code || "";
       const quiet =
@@ -338,6 +368,15 @@ export class Bot extends EventEmitter {
 
   /** Login using stored credentials. Returns true on success. */
   async login(): Promise<boolean> {
+    // Serialize concurrent calls — if a login is already in progress, wait for it.
+    if (this._loginLock) {
+      return this._loginLock;
+    }
+    this._loginLock = this._doLogin().finally(() => { this._loginLock = null; });
+    return this._loginLock;
+  }
+
+  private async _doLogin(): Promise<boolean> {
     const creds = this.session.loadCredentials();
     if (!creds) {
       this._error = "No credentials found";
@@ -567,10 +606,10 @@ export class Bot extends EventEmitter {
   async start(
     routineName: string,
     routine: Routine,
-    opts?: { getFleetStatus?: () => BotStatus[] },
+    opts?: { getFleetStatus?: () => BotStatus[]; sendBotAction?: RoutineContext["sendBotAction"] },
   ): Promise<void> {
-    if (this._state === "running") {
-      this.log("error", "Bot is already running");
+    if (this._state === "running" || this._state === "stopping") {
+      this.log("error", "Bot is already running or stopping");
       return;
     }
 
@@ -598,6 +637,7 @@ export class Bot extends EventEmitter {
       mapStore,
       catalogStore,
       getFleetStatus: opts?.getFleetStatus,
+      sendBotAction: opts?.sendBotAction,
     };
 
     try {
@@ -858,6 +898,19 @@ export class Bot extends EventEmitter {
     this.log("system", "Stop requested — will halt after current action");
   }
 
+  /** Force-stop regardless of current state — clears error/ghost/stuck states. */
+  forceStop(): void {
+    this._abortController?.abort();
+    this._abortController = null;
+    this._routine = null;
+    this._error = null;
+    // Use "stopping" if currently running so the for-await loop in start() detects it
+    // on the next yield and breaks cleanly. Going directly to "idle" bypasses that check.
+    // If already idle/stopping/error, set to idle immediately.
+    this.state = this._state === "running" ? "stopping" : "idle";
+    this.log("system", "Force-stopped");
+  }
+
   /** Get a summary of the bot's current state. */
   status(): BotStatus {
     return {
@@ -902,6 +955,7 @@ export class Bot extends EventEmitter {
       isCloaked: this.isCloaked,
       inventory: this.inventory,
       storage: this.storage,
+      factionStorage: this.factionStorage,
       stats: { ...this.stats },
       playerStats: { ...this.playerStats },
       skills: [...this.skills],

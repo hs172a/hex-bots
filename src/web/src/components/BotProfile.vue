@@ -16,7 +16,7 @@
       <!-- Sidebar col 1 -->
       <div class="w-72 space-y-3 overflow-hidden">
         <!-- Status -->
-        <div class="card py-2 px-2">
+        <div class="card py-2 px-2 !mb-2">
           <div class="py-1 px-0 border-b border-space-border bg-space-card">
             <h3 class="text-xs font-semibold text-space-text-dim uppercase">📊 Status</h3>
           </div>
@@ -72,7 +72,7 @@
           </div>
         </div>
         <!-- Cargo Hold -->
-        <div class="card py-2 px-2 !mt-2">
+        <div class="card py-2 px-2 !mt-2 !mb-2">
           <div class="py-1 px-0 border-b border-space-border bg-space-card">
             <h3 class="text-xs font-semibold text-space-text-dim uppercase">📦 Cargo Hold</h3>
           </div>
@@ -87,12 +87,13 @@
           </div>
         </div>
         <!-- Station Storage -->
-        <div class="card py-2 px-2 !mt-2">
+        <div class="card py-2 px-2 !mt-2 !mb-2">
           <div class="py-1 px-0 border-b border-space-border bg-space-card">
             <h3 class="text-xs font-semibold text-space-text-dim uppercase">🏠 Station Storage</h3>
           </div>
           <div class="py-1 px-0 max-h-60 overflow-auto scrollbar-dark">
-            <div v-if="storage.length === 0" class="text-xs text-space-text-dim text-center py-2">Empty</div>
+            <div v-if="!currentBot.docked" class="text-xs text-space-text-dim text-center py-2 italic">⚠️ Not docked</div>
+            <div v-else-if="storage.length === 0" class="text-xs text-space-text-dim text-center py-2">Empty</div>
             <div v-else class="space-y-1 pr-1">
               <div v-for="item in storage" :key="item.itemId" class="flex justify-between text-xs">
                 <span class="text-space-text">{{ item.name }}</span>
@@ -102,12 +103,14 @@
           </div>
         </div>
         <!-- Faction Storage -->
-        <div v-if="factionStorage && factionStorage.length > 0" class="card py-2 px-2 !mt-2 border-space-accent/30">
+        <div v-if="currentBot.factionId" class="card py-2 px-2 !mt-2 border-space-accent/30">
           <div class="py-1 px-0 border-b border-space-border bg-space-card">
             <h3 class="text-xs font-semibold text-space-accent uppercase">🛡️ Faction Storage</h3>
           </div>
           <div class="py-1 px-0 max-h-60 overflow-auto scrollbar-dark">
-            <div class="space-y-1 pr-1">
+            <div v-if="!currentBot.docked" class="text-xs text-space-text-dim text-center py-2 italic">⚠️ Not docked</div>
+            <div v-else-if="factionStorage.length === 0" class="text-xs text-space-text-dim text-center py-2">Empty</div>
+            <div v-else class="space-y-1 pr-1">
               <div v-for="item in factionStorage" :key="item.itemId" class="flex justify-between text-xs">
                 <span class="text-space-text">{{ item.name }}</span>
                 <span class="text-space-text-dim">x{{ item.quantity }}</span>
@@ -115,40 +118,18 @@
             </div>
           </div>
         </div>
-        <!-- Deposit Settings -->
-        <div class="card py-2 px-2 !mt-2">
-          <div class="py-1 px-0 border-b border-space-border bg-space-card">
-            <h3 class="text-xs font-semibold text-space-text-dim uppercase">💰 Deposit Settings</h3>
-          </div>
-          <div class="py-1 px-0 space-y-2 text-xs">
-            <div class="flex items-center justify-between gap-2">
-              <span class="text-space-text-dim">Primary</span>
-              <select v-model="depositPrimary" class="input text-[11px] flex-1 !p-1">
-                <option value="station_storage">(global) Station Storage</option>
-                <option value="faction_storage">(global) Faction Storage</option>
-              </select>
-            </div>
-            <div class="flex items-center justify-between gap-2">
-              <span class="text-space-text-dim">Secondary</span>
-              <select v-model="depositSecondary" class="input text-[11px] flex-1 !p-1">
-                <option value="station_storage">(global) Station Storage</option>
-                <option value="faction_storage">(global) Faction Storage</option>
-              </select>
-            </div>
-          </div>
-        </div>
       </div>
       <!-- Sidebar col 2 -->
       <div class="w-72 space-y-3 overflow-hidden">
         <!-- Statistics -->
-        <div class="card py-2 px-2">
+        <div class="card py-2 px-2 !mb-2">
           <div class="py-1 px-0 border-b border-space-border bg-space-card">
             <h3 class="text-xs font-semibold text-space-text-dim uppercase">📊 Statistics</h3>
           </div>
           <div class="py-1 px-0">
             <div class="grid grid-cols-2 gap-y-1.5 gap-x-3 text-xs">
               <div class="flex items-center gap-1 text-green-400"><span>💰</span><span>₡{{ formatNumber(currentBot.playerStats?.creditsEarned ?? 0) }}</span><span class="text-gray-500">earned</span></div>
-              <div class="flex items-center gap-1 text-red-400"><span>💸</span><span>{{ formatNumber(currentBot.playerStats?.creditsSpent ?? 0) }}</span><span class="text-gray-500">spent</span></div>
+              <div class="flex items-center gap-1 text-red-400"><span>💸</span><span>₡{{ formatNumber(currentBot.playerStats?.creditsSpent ?? 0) }}</span><span class="text-gray-500">spent</span></div>
               <div class="flex items-center gap-1 text-amber-400"><span>⛏️</span><span>{{ formatNumber(currentBot.playerStats?.oreMined ?? 0) }}</span><span class="text-gray-500">mined</span></div>
               <div class="flex items-center gap-1 text-blue-400"><span>🔄</span><span>{{ currentBot.playerStats?.tradesCompleted ?? 0 }}</span><span class="text-gray-500">trades</span></div>
               <div class="flex items-center gap-1 text-red-400"><span>💥</span><span>{{ currentBot.playerStats?.shipsDestroyed ?? 0 }}</span><span class="text-gray-500">kills</span></div>
@@ -197,19 +178,29 @@
       <!-- Main Content -->
       <div class="flex-1 flex flex-col overflow-hidden">
         <!-- Tab navigation -->
-        <div class="flex gap-0 border-b border-space-border bg-space-card px-2 shrink-0">
-          <button @click="activeMainTab = 'control'" class="px-4 py-2 text-xs font-medium border-b-2 transition-all" :class="activeMainTab === 'control' ? 'text-space-text-bright border-space-accent' : 'text-space-text-dim border-transparent hover:text-space-text'">🛠️ Control</button>
-          <button @click="currentBot.docked && (activeMainTab = 'ship')" class="px-4 py-2 text-xs font-medium border-b-2 transition-all" :class="[activeMainTab === 'ship' ? 'text-space-text-bright border-space-accent' : 'text-space-text-dim border-transparent', currentBot.docked ? 'hover:text-space-text cursor-pointer' : 'opacity-40 cursor-not-allowed']" :title="!currentBot.docked ? 'Dock at a station to manage ship modules' : ''">🛸 Ship</button>
-          <button @click="currentBot.docked && loadStationTab()" class="px-4 py-2 text-xs font-medium border-b-2 transition-all" :class="[activeMainTab === 'station' ? 'text-space-text-bright border-space-accent' : 'text-space-text-dim border-transparent', currentBot.docked ? 'hover:text-space-text cursor-pointer' : 'opacity-40 cursor-not-allowed']" :title="!currentBot.docked ? 'Dock at a station to view station info' : ''">🏠 Station</button>
-          <button @click="activeMainTab = 'log'" class="px-4 py-2 text-xs font-medium border-b-2 transition-all" :class="activeMainTab === 'log' ? 'text-space-text-bright border-space-accent' : 'text-space-text-dim border-transparent hover:text-space-text'">📜 Log</button>
-          <button @click="activeMainTab = 'profile'" class="px-4 py-2 text-xs font-medium border-b-2 transition-all" :class="activeMainTab === 'profile' ? 'text-space-text-bright border-space-accent' : 'text-space-text-dim border-transparent hover:text-space-text'">👤 Profile</button>
+        <div class="flex gap-0 border-b border-space-border bg-space-card px-2 shrink-0 overflow-x-auto">
+          <button @click="activeMainTab = 'control'" class="px-3 py-2 text-xs font-medium border-b-2 transition-all whitespace-nowrap" :class="activeMainTab === 'control' ? 'text-space-text-bright border-space-accent' : 'text-space-text-dim border-transparent hover:text-space-text'">🛠️ Control</button>
+          <button @click="currentBot.docked && (activeMainTab = 'ship')" class="px-3 py-2 text-xs font-medium border-b-2 transition-all whitespace-nowrap" :class="[activeMainTab === 'ship' ? 'text-space-text-bright border-space-accent' : 'text-space-text-dim border-transparent', currentBot.docked ? 'hover:text-space-text cursor-pointer' : 'opacity-40 cursor-not-allowed']" :title="!currentBot.docked ? 'Dock to manage ship' : ''">🛸 Ship</button>
+          <button @click="currentBot.docked && loadFacilityTab()" class="px-3 py-2 text-xs font-medium border-b-2 transition-all whitespace-nowrap" :class="[activeMainTab === 'facility' ? 'text-space-text-bright border-space-accent' : 'text-space-text-dim border-transparent', currentBot.docked ? 'hover:text-space-text cursor-pointer' : 'opacity-40 cursor-not-allowed']" :title="!currentBot.docked ? 'Dock to manage facilities' : ''">⚙️ Facility</button>
+          <button @click="activeMainTab = 'insurance'" class="px-3 py-2 text-xs font-medium border-b-2 transition-all whitespace-nowrap" :class="activeMainTab === 'insurance' ? 'text-space-text-bright border-space-accent' : 'text-space-text-dim border-transparent hover:text-space-text'">🔰 Insurance</button>
+          <button @click="activeMainTab = 'combat'" class="px-3 py-2 text-xs font-medium border-b-2 transition-all whitespace-nowrap" :class="activeMainTab === 'combat' ? 'text-space-text-bright border-space-accent' : 'text-space-text-dim border-transparent hover:text-space-text'">⚔️ Combat</button>
+          <button @click="activeMainTab = 'profile'" class="px-3 py-2 text-xs font-medium border-b-2 transition-all whitespace-nowrap" :class="activeMainTab === 'profile' ? 'text-space-text-bright border-space-accent' : 'text-space-text-dim border-transparent hover:text-space-text'">👤 Profile</button>
+          <button @click="currentBot.docked && loadStationTab()" class="px-3 py-2 text-xs font-medium border-b-2 transition-all whitespace-nowrap" :class="[activeMainTab === 'station' ? 'text-space-text-bright border-space-accent' : 'text-space-text-dim border-transparent', currentBot.docked ? 'hover:text-space-text cursor-pointer' : 'opacity-40 cursor-not-allowed']" :title="!currentBot.docked ? 'Dock to view station info' : ''">🏠 Station</button>
+          <button @click="activeMainTab = 'log'" class="px-3 py-2 text-xs font-medium border-b-2 transition-all whitespace-nowrap" :class="activeMainTab === 'log' ? 'text-space-text-bright border-space-accent' : 'text-space-text-dim border-transparent hover:text-space-text'">🗒️ Log</button>
+          <button @click="activeMainTab = 'notes'" class="px-3 py-2 text-xs font-medium border-b-2 transition-all whitespace-nowrap" :class="activeMainTab === 'notes' ? 'text-space-text-bright border-space-accent' : 'text-space-text-dim border-transparent hover:text-space-text'">📝 Notes</button>
+          <button @click="activeMainTab = 'social'" class="px-3 py-2 text-xs font-medium border-b-2 transition-all whitespace-nowrap" :class="activeMainTab === 'social' ? 'text-space-text-bright border-space-accent' : 'text-space-text-dim border-transparent hover:text-space-text'">🤝 Social</button>
         </div>
         <!-- Panel components -->
         <BotControlPanel v-show="activeMainTab === 'control'" :bot="bot" @notif="onChildNotif" />
         <BotShipPanel v-show="activeMainTab === 'ship'" :bot="bot" @notif="onChildNotif" />
-        <BotStationPanel v-show="activeMainTab === 'station'" ref="stationPanel" :bot="bot" @notif="onChildNotif" />
-        <CaptainsLogPanel v-if="activeMainTab === 'log'" :bot="bot" @notif="onChildNotif" />
+        <BotStationPanel v-show="activeMainTab === 'facility'" ref="facilityPanel" :bot="bot" mode="facility" @notif="onChildNotif" />
+        <InsurancePanel v-if="activeMainTab === 'insurance'" :bot="bot" @notif="onChildNotif" />
+        <CombatPanel v-if="activeMainTab === 'combat'" :bot="bot" @notif="onChildNotif" />
         <BotProfilePanel v-if="activeMainTab === 'profile'" :bot="bot" @notif="onChildNotif" />
+        <BotStationPanel v-show="activeMainTab === 'station'" ref="stationPanel" :bot="bot" mode="station" @notif="onChildNotif" />
+        <CaptainsLogPanel v-if="activeMainTab === 'log'" :bot="bot" @notif="onChildNotif" />
+        <NotesPanel v-if="activeMainTab === 'notes'" :bot="bot" @notif="onChildNotif" />
+        <SocialPanel v-if="activeMainTab === 'social'" :bot="bot" @notif="onChildNotif" />
       </div>
     </div>
     <!-- Toast notification -->
@@ -240,6 +231,10 @@ import BotShipPanel from './BotShipPanel.vue';
 import BotStationPanel from './BotStationPanel.vue';
 import CaptainsLogPanel from './CaptainsLogPanel.vue';
 import BotProfilePanel from './BotProfilePanel.vue';
+import CombatPanel from './CombatPanel.vue';
+import InsurancePanel from './InsurancePanel.vue';
+import NotesPanel from './NotesPanel.vue';
+import SocialPanel from './SocialPanel.vue';
 
 interface Props { bot: any; }
 const props = defineProps<Props>();
@@ -306,10 +301,13 @@ const CATEGORY_BAR_COLOR: Record<string, string> = {
 const CATEGORY_ORDER = ['mining','ships','navigation','engineering','crafting','trading',
   'exploration','drones','support','salvaging','faction','empire','prestige'];
 
-const activeMainTab = ref<'control' | 'ship' | 'station' | 'log' | 'profile'>('control');
+const activeMainTab = ref<'control' | 'ship' | 'station' | 'log' | 'profile' | 'combat' | 'insurance' | 'notes' | 'facility' | 'social'>('control');
+const facilityPanel = ref<InstanceType<typeof BotStationPanel> | null>(null);
+function loadFacilityTab() {
+  activeMainTab.value = 'facility';
+  facilityPanel.value?.maybeLoad();
+}
 const skills = ref<any[]>([]);
-const depositPrimary = ref('station_storage');
-const depositSecondary = ref('station_storage');
 const shipInfo = ref<any>(null);
 const moduleNotif = ref<{ text: string; type: 'success' | 'warn' | 'error' } | null>(null);
 let moduleNotifTimer: ReturnType<typeof setTimeout> | null = null;
@@ -332,9 +330,9 @@ const currentBot = computed(() => {
   const bot = botStore.bots.find(b => b.username === props.bot.username);
   return bot || props.bot;
 });
-const inventory = computed(() => currentBot.value.inventory || []);
-const storage = computed(() => currentBot.value.storage || []);
-const factionStorage = computed(() => currentBot.value.factionStorage || []);
+const inventory = computed(() => [...(currentBot.value.inventory || [])].sort((a, b) => (a.name || a.itemId).localeCompare(b.name || b.itemId)));
+const storage = computed(() => [...(currentBot.value.storage || [])].sort((a, b) => (a.name || a.itemId).localeCompare(b.name || b.itemId)));
+const factionStorage = computed(() => [...(currentBot.value.factionStorage || [])].sort((a, b) => (a.name || a.itemId).localeCompare(b.name || b.itemId)));
 const weaponModules = computed(() => {
   if (!shipInfo.value) return [];
   const mods = shipInfo.value.modules || [];

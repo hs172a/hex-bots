@@ -157,7 +157,7 @@
             <select v-model="buyItem" class="input text-xs flex-1 !p-1">
               <option value="">No market data</option>
               <option v-for="item in marketItems" :key="item.item_id" :value="item.item_id">
-                {{ item.name || item.item_id }} ({{ item.buy_price }}₡)
+                {{ item.name || item.item_id }} (₡{{ item.buy_price }})
               </option>
             </select>
             <input v-model.number="buyQty" type="number" min="1" class="input text-xs w-16 !p-1 scrollbar-dark" value="1">
@@ -188,6 +188,32 @@
             </select>
             <input v-model.number="withdrawQty" type="number" min="1" class="input text-xs w-16 !p-1 scrollbar-dark" value="1">
             <button @click="execWithdraw" class="btn text-xs px-3 py-1">Withdraw</button>
+          </div>
+
+          <!-- Faction Deposit -->
+          <div class="flex gap-2 items-center">
+            <label class="text-xs text-space-accent w-20">F.Deposit</label>
+            <select v-model="factionDepositItem" class="input text-xs flex-1 !p-1">
+              <option value="">No items</option>
+              <option v-for="item in inventory" :key="item.itemId" :value="item.itemId">
+                {{ item.name }} ({{ item.quantity }})
+              </option>
+            </select>
+            <input v-model.number="factionDepositQty" type="number" min="1" class="input text-xs w-16 !p-1 scrollbar-dark" value="1">
+            <button @click="execFactionDeposit" class="btn text-xs px-3 py-1 border-space-accent/50">F.Deposit</button>
+          </div>
+
+          <!-- Faction Withdraw -->
+          <div class="flex gap-2 items-center">
+            <label class="text-xs text-space-accent w-20">F.Withdraw</label>
+            <select v-model="factionWithdrawItem" class="input text-xs flex-1 !p-1">
+              <option value="">No items</option>
+              <option v-for="item in factionStorage" :key="item.itemId" :value="item.itemId">
+                {{ item.name }} ({{ item.quantity }})
+              </option>
+            </select>
+            <input v-model.number="factionWithdrawQty" type="number" min="1" class="input text-xs w-16 !p-1 scrollbar-dark" value="1">
+            <button @click="execFactionWithdraw" class="btn text-xs px-3 py-1 border-space-accent/50">F.Withdraw</button>
           </div>
 
           <!-- Gift Item -->
@@ -228,6 +254,7 @@
             <button @click="execCommand('get_status')" class="btn text-xs px-2 py-1">🚀 Status</button>
             <button @click="execCommand('get_cargo')" class="btn text-xs px-2 py-1">📦 Cargo</button>
             <button @click="execCommand('view_storage')" class="btn text-xs px-2 py-1">🏠 Storage</button>
+            <button @click="execCommand('view_faction_storage')" class="btn text-xs px-2 py-1">🛡 F.Storage</button>
             <button @click="execCommand('view_market')" class="btn text-xs px-2 py-1">💰 Market</button>
             <button @click="execCommand('get_system')" class="btn text-xs px-2 py-1">🌌 System</button>
             <button @click="execCommand('get_nearby')" class="btn text-xs px-2 py-1">👁 Nearby</button>
@@ -326,6 +353,10 @@ const depositItem = ref('');
 const depositQty = ref(1);
 const withdrawItem = ref('');
 const withdrawQty = ref(1);
+const factionDepositItem = ref('');
+const factionDepositQty = ref(1);
+const factionWithdrawItem = ref('');
+const factionWithdrawQty = ref(1);
 const giftTarget = ref('');
 const giftItem = ref('');
 const giftQty = ref(1);
@@ -347,8 +378,9 @@ const currentBot = computed(() => {
   return bot || props.bot;
 });
 
-const inventory = computed(() => currentBot.value.inventory || []);
-const storage = computed(() => currentBot.value.storage || []);
+const inventory = computed(() => [...(currentBot.value.inventory || [])].sort((a: any, b: any) => (a.name || a.itemId).localeCompare(b.name || b.itemId)));
+const storage = computed(() => [...(currentBot.value.storage || [])].sort((a: any, b: any) => (a.name || a.itemId).localeCompare(b.name || b.itemId)));
+const factionStorage = computed(() => [...(currentBot.value.factionStorage || [])].sort((a: any, b: any) => (a.name || a.itemId).localeCompare(b.name || b.itemId)));
 
 const otherBots = computed(() =>
   botStore.bots.filter(b => b.username !== currentBot.value.username)
@@ -443,11 +475,30 @@ function pushDetailLines(command: string, data: any, username: string): void {
       break;
     }
     case 'get_status': {
-      const skip = new Set(['notifications', 'session']);
-      for (const [k, v] of Object.entries(data)) {
-        if (skip.has(k)) continue;
-        push(`${k}: ${typeof v === 'object' ? JSON.stringify(v) : v}`);
-      }
+      const player = data.player || data;
+      const ship = data.ship || {};
+      const credits = player.credits != null ? `₡${Number(player.credits).toLocaleString()}` : '?';
+      const docked = player.docked_at_base ? 'Yes' : (player.docked ? 'Yes' : 'No');
+      const system = player.current_system || player.system || '?';
+      const poi = player.current_poi || player.poi_id || '';
+      push(`credits: ${credits} | docked: ${docked} | ${poi ? `poi: ${poi} | ` : ''}system: ${system}`);
+      const hull = ship.hull ?? ship.hp;
+      const maxHull = ship.max_hull ?? ship.max_hp;
+      const shield = ship.shield ?? ship.shields;
+      const maxShield = ship.max_shield;
+      const fuel = ship.fuel;
+      const maxFuel = ship.max_fuel;
+      const cargo = ship.cargo_used;
+      const cargoMax = ship.cargo_capacity ?? ship.max_cargo;
+      const shipName = ship.name || '?';
+      const shipClass = ship.class_id || '';
+      push(`ship: ${shipName}${shipClass ? ` (${shipClass})` : ''} | hull: ${hull ?? '?'}/${maxHull ?? '?'} | shield: ${shield ?? '?'}/${maxShield ?? '?'} | fuel: ${fuel ?? '?'}/${maxFuel ?? '?'} | cargo: ${cargo ?? '?'}/${cargoMax ?? '?'}`);
+      break;
+    }
+    case 'view_faction_storage': {
+      const items = data.items || data.storage || data.faction_storage || [];
+      push(`faction storage (${items.length} types):`);
+      for (const item of items) push(`  ${item.quantity}x ${item.name || item.item_id}`);
       break;
     }
     case 'get_cargo': {
@@ -465,7 +516,7 @@ function pushDetailLines(command: string, data: any, username: string): void {
     case 'view_market': {
       const items = data.market || data.items || data.listings || [];
       push(`market (${items.length} items):`);
-      for (const item of items.slice(0, 20)) push(`  ${item.name || item.item_id}: buy ${item.buy_price ?? '?'}₴ sell ${item.sell_price ?? '?'}₴`);
+      for (const item of items.slice(0, 20)) push(`  ${item.name || item.item_id}: buy ₡${item.buy_price ?? '?'} sell ₡${item.sell_price ?? '?'}`);
       if (items.length > 20) push(`  ...and ${items.length - 20} more`);
       break;
     }
@@ -538,6 +589,17 @@ function processExecResult(command: string, data: any) {
       });
       break;
     }
+    case 'view_faction_storage': {
+      const rawItems = data.items || data.storage || data.faction_storage || [];
+      updateBotInStore({
+        factionStorage: rawItems.map((i: any) => ({
+          itemId: i.item_id || i.id || '',
+          name: i.name || i.item_id || '',
+          quantity: i.quantity ?? 0,
+        }))
+      });
+      break;
+    }
     case 'get_system': {
       const pois = data.system?.pois || data.pois || data.points_of_interest || [];
       if (pois.length > 0) systemPois.value = pois;
@@ -551,7 +613,9 @@ function processExecResult(command: string, data: any) {
     }
     case 'view_market': {
       const items = data.market || data.items || data.listings || (Array.isArray(data) ? data : []);
-      marketItems.value = items;
+      marketItems.value = [...items]
+        .map((i: any) => ({ ...i, name: i.name || botStore.catalogName(i.item_id) }))
+        .sort((a: any, b: any) => a.name.localeCompare(b.name));
       break;
     }
     case 'catalog': {
@@ -587,13 +651,15 @@ function extractRecipes(data: any): any[] {
 
 const craftableRecipes = computed(() => {
   const inv = inventory.value;
-  return recipes.value.filter(r => {
-    if (!r.components?.length) return true;
-    return r.components.every((comp: any) => {
-      const item = inv.find((i: any) => i.itemId === comp.item_id || i.item_id === comp.item_id);
-      return item && (item.quantity ?? 0) >= (comp.quantity || 1);
-    });
-  });
+  return recipes.value
+    .filter(r => {
+      if (!r.components?.length) return true;
+      return r.components.every((comp: any) => {
+        const item = inv.find((i: any) => i.itemId === comp.item_id || i.item_id === comp.item_id);
+        return item && (item.quantity ?? 0) >= (comp.quantity || 1);
+      });
+    })
+    .sort((a, b) => (a.name || a.id).localeCompare(b.name || b.id));
 });
 
 const selectedRecipeInfo = computed(() =>
@@ -637,7 +703,15 @@ async function findRouteLD() {
     return;
   }
 
-  const targetId = systems[0].system_id || systems[0].id || systems[0].name;
+  // Sort by relevance: exact name match > starts-with > substring
+  const q = destSystem.value.trim().toLowerCase();
+  const sorted = [...systems].sort((a: any, b: any) => {
+    const an = (a.name || '').toLowerCase();
+    const bn = (b.name || '').toLowerCase();
+    const rank = (n: string) => n === q ? 0 : n.startsWith(q) ? 1 : 2;
+    return rank(an) - rank(bn);
+  });
+  const targetId = sorted[0].system_id || sorted[0].id || sorted[0].name;
   const routeRes = await execAsync('find_route', { target_system: targetId });
   const route = routeRes.data?.route || routeRes.data || [];
   if (!route.length) {
@@ -703,6 +777,8 @@ function execSell() { if (sellItem.value) execCommand('sell', { item_id: sellIte
 function execBuy() { if (buyItem.value) execCommand('buy', { item_id: buyItem.value, quantity: buyQty.value }); }
 function execDeposit() { if (depositItem.value) execCommand('deposit_items', { item_id: depositItem.value, quantity: depositQty.value }); }
 function execWithdraw() { if (withdrawItem.value) execCommand('withdraw_items', { item_id: withdrawItem.value, quantity: withdrawQty.value }); }
+function execFactionDeposit() { if (factionDepositItem.value) execCommand('faction_deposit_items', { item_id: factionDepositItem.value, quantity: factionDepositQty.value }); }
+function execFactionWithdraw() { if (factionWithdrawItem.value) execCommand('faction_withdraw_items', { item_id: factionWithdrawItem.value, quantity: factionWithdrawQty.value }); }
 function execGiftItem() { if (giftTarget.value && giftItem.value) execCommand('send_gift', { recipient: giftTarget.value, item_id: giftItem.value, quantity: giftQty.value }); }
 function execSendCredits() { if (creditsTarget.value) execCommand('send_gift', { recipient: creditsTarget.value, credits: creditsAmount.value }); }
 

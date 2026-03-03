@@ -1,5 +1,19 @@
 <template>
-  <div class="flex-1 flex flex-col gap-4 p-4 overflow-auto scrollbar-dark">
+  <div class="flex-1 flex flex-col overflow-hidden">
+    <!-- Tab bar -->
+    <div class="flex border-b border-space-border bg-space-card px-3 shrink-0">
+      <button @click="activeTab = 'advisory'" class="px-4 py-2 text-xs font-medium border-b-2 transition-all"
+        :class="activeTab === 'advisory' ? 'text-space-text-bright border-space-accent' : 'text-space-text-dim border-transparent hover:text-space-text'">
+        📊 Advisory
+      </button>
+      <button @click="activeTab = 'agent'" class="px-4 py-2 text-xs font-medium border-b-2 transition-all"
+        :class="activeTab === 'agent' ? 'text-space-text-bright border-space-accent' : 'text-space-text-dim border-transparent hover:text-space-text'">
+        🤖 AI Agent
+      </button>
+    </div>
+
+  <!-- Advisory Tab -->
+  <div v-if="activeTab === 'advisory'" class="flex-1 flex flex-col gap-4 p-4 overflow-auto scrollbar-dark">
     <!-- Commander Header -->
     <div class="flex items-center justify-between">
       <h3 class="text-sm font-semibold text-space-text-bright">Commander Advisory</h3>
@@ -172,10 +186,74 @@
       </div>
     </div>
   </div>
+
+  <!-- AI Agent Tab -->
+  <div v-else-if="activeTab === 'agent'" class="flex-1 flex flex-col gap-3 p-4 overflow-auto scrollbar-dark">
+    <!-- Bot Selector -->
+    <div class="card py-2 px-3">
+      <div class="flex items-center gap-3 flex-wrap">
+        <span class="text-xs font-semibold text-space-text-dim uppercase">Bot</span>
+        <select v-model="agentBot" class="input text-xs min-w-36">
+          <option v-for="b in botStore.bots" :key="b.username" :value="b.username">{{ b.username }}</option>
+        </select>
+        <span v-if="agentBotStatus" class="px-2 py-0.5 text-[11px] rounded"
+          :class="agentBotStatus === 'running' ? 'bg-green-900/40 text-green-300' : 'bg-[#21262d] text-space-text-dim'">{{ agentBotStatus }}</span>
+        <span v-if="agentBotRoutine" class="text-[11px] text-space-cyan">{{ agentBotRoutine }}</span>
+        <div class="ml-auto flex gap-2">
+          <button v-if="agentBotStatus !== 'running'" @click="startAgent('pi_commander')" class="btn btn-primary text-xs px-3">▶ Start PI Commander</button>
+          <button v-if="agentBotStatus !== 'running'" @click="startAgent('ai')" class="btn btn-secondary text-xs px-3">▶ Start AI</button>
+          <button v-if="agentBotStatus === 'running'" @click="stopAgent" class="btn text-xs px-3 bg-red-900/40 text-red-300 border-red-700/40 hover:bg-red-900/70">⏹ Stop</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Instruction Editor -->
+    <div class="card py-2 px-3">
+      <div class="flex items-center justify-between mb-2">
+        <h4 class="text-xs font-semibold text-space-text-dim uppercase">Mission Instruction</h4>
+        <button @click="saveInstruction" class="btn btn-primary text-xs px-3">Save</button>
+      </div>
+      <textarea v-model="agentInstruction" rows="3" class="input w-full text-xs resize-y font-mono"
+        placeholder="Mine ore, sell it, and upgrade your ship when you can afford a better one."></textarea>
+      <div class="text-[11px] text-space-text-dim mt-1">Saved to Settings → 🤖 PI Commander and applied on next start.</div>
+    </div>
+
+    <!-- TODO Editor -->
+    <div class="card py-2 px-3">
+      <div class="flex items-center justify-between mb-2">
+        <h4 class="text-xs font-semibold text-space-text-dim uppercase">Agent TODO List</h4>
+        <div class="flex gap-2">
+          <button @click="loadTodo" :disabled="todoLoading" class="btn btn-secondary text-xs px-3">{{ todoLoading ? '⏳' : '🔄 Load' }}</button>
+          <button @click="saveTodo" class="btn btn-primary text-xs px-3">Save</button>
+          <button @click="clearTodo" class="btn text-xs px-3 bg-red-900/30 text-red-300 border-red-700/30 hover:bg-red-900/60">🗑️ Clear</button>
+        </div>
+      </div>
+      <textarea v-model="agentTodo" rows="8" class="input w-full text-xs resize-y font-mono"
+        placeholder="(empty — load from session to edit)"></textarea>
+      <div class="text-[11px] text-space-text-dim mt-1">Session: <span class="text-space-cyan">{{ agentSession }}</span> → sessions/{{ agentSession }}/TODO.md</div>
+    </div>
+
+    <!-- Agent Log -->
+    <div class="card py-2 px-3">
+      <div class="flex items-center justify-between mb-2">
+        <h4 class="text-xs font-semibold text-space-text-dim uppercase">📝 Agent Log</h4>
+        <span class="text-[11px] text-space-text-dim">{{ agentLogs.length }} lines</span>
+      </div>
+      <div class="font-mono text-[11px] leading-relaxed max-h-72 overflow-auto scrollbar-dark space-y-px">
+        <div v-if="agentLogs.length === 0" class="text-space-text-dim italic">No log output yet. Start the agent to see activity here.</div>
+        <div v-for="(line, i) in agentLogs" :key="i"
+          :class="line.includes('[error]') || line.includes('ERROR') ? 'text-space-red' : line.includes('[setup]') || line.includes('[system]') ? 'text-space-text-dim' : line.includes('✓') || line.includes('success') || line.includes('purchased') ? 'text-space-green' : 'text-space-text'">
+          {{ line }}
+        </div>
+      </div>
+    </div>
+  </div>
+
+  </div>
 </template>
 
 <script setup lang="ts">
-import { ref, computed, onMounted, onUnmounted } from 'vue'
+import { ref, computed, watch, onMounted, onUnmounted } from 'vue'
 import { useBotStore } from '../stores/botStore'
 
 interface EconomyData {
@@ -213,6 +291,7 @@ interface Goal {
 }
 
 const botStore = useBotStore()
+const activeTab = ref<'advisory' | 'agent'>('advisory')
 const economyData = ref<EconomyData>({ deficits: [], surpluses: [], totalRevenue: 0, totalCosts: 0, netProfit: 0 })
 const suggestions = ref<Suggestion[]>([])
 const commanderReasoning = ref('')
@@ -234,6 +313,73 @@ const goalTypes = [
 ]
 
 let pollTimer: ReturnType<typeof setInterval> | null = null
+
+// ── AI Agent tab state ──────────────────────────────────────
+
+const agentBot = ref(botStore.bots[0]?.username || '')
+const agentInstruction = ref('')
+const agentTodo = ref('')
+const todoLoading = ref(false)
+
+const agentBotObj = computed(() => botStore.bots.find(b => b.username === agentBot.value))
+const agentBotStatus = computed(() => agentBotObj.value?.state || '')
+const agentBotRoutine = computed(() => agentBotObj.value?.routine || '')
+const agentSession = computed(() => {
+  const s = botStore.settings?.pi_commander?.session || agentBot.value
+  return s || agentBot.value
+})
+const agentLogs = computed(() => {
+  const buf = botStore.botLogBuffers[agentBot.value] || []
+  return buf.slice(-100)
+})
+
+watch(agentBot, () => {
+  const s = botStore.settings?.pi_commander
+  agentInstruction.value = (s as any)?.bots?.[agentBot.value]?.instruction || (s as any)?.instruction || ''
+})
+
+
+async function loadTodo() {
+  todoLoading.value = true
+  try {
+    const resp = await fetch(`/api/pi-todo?session=${encodeURIComponent(agentSession.value)}`)
+    if (resp.ok) {
+      const { content } = await resp.json()
+      agentTodo.value = content || ''
+    }
+  } catch {}
+  todoLoading.value = false
+}
+
+async function saveTodo() {
+  try {
+    await fetch('/api/pi-todo', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ session: agentSession.value, content: agentTodo.value }),
+    })
+  } catch {}
+}
+
+async function clearTodo() {
+  agentTodo.value = ''
+  await saveTodo()
+}
+
+function saveInstruction() {
+  const existing = (botStore.settings?.pi_commander || {}) as Record<string, unknown>
+  botStore.saveSettings('pi_commander', { ...existing, instruction: agentInstruction.value })
+}
+
+function startAgent(routine: string) {
+  if (!agentBot.value) return
+  botStore.startBot(agentBot.value, routine)
+}
+
+function stopAgent() {
+  if (!agentBot.value) return
+  botStore.stopBot(agentBot.value)
+}
 
 // ── Chart computation ──
 
@@ -351,6 +497,9 @@ function formatTimeAgo(ts: number): string {
 // ── Lifecycle ──
 
 onMounted(() => {
+  if (botStore.bots.length > 0 && !agentBot.value) agentBot.value = botStore.bots[0].username
+  const s = botStore.settings?.pi_commander
+  agentInstruction.value = (s as any)?.instruction || ''
   refreshAll()
   pollTimer = setInterval(refreshAll, 30_000)
 })

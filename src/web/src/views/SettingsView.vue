@@ -6,17 +6,20 @@
         <h3 class="text-xs font-semibold text-space-text-dim uppercase tracking-wider">Bot Types</h3>
       </div>
       <div class="flex-1 overflow-auto">
-        <div 
-          v-for="tab in settingsTabs" 
-          :key="tab.id"
-          @click="activeTab = tab.id"
-          class="px-3 py-2 text-sm cursor-pointer border-b border-[#21262d] transition-colors"
-          :class="activeTab === tab.id 
-            ? 'bg-space-row-hover text-space-accent border-l-2 border-l-space-accent pl-[11px]' 
-            : 'text-space-text-dim hover:bg-space-row-hover hover:text-space-text'"
-        >
-          {{ tab.name }}
-        </div>
+        <template v-for="(groupTabs, groupName) in groupedTabs" :key="groupName">
+          <div class="px-3 pt-2 pb-0.5 text-[10px] font-semibold uppercase tracking-widest text-space-text-dim/60 select-none">{{ groupName }}</div>
+          <div
+            v-for="tab in groupTabs"
+            :key="tab.id"
+            @click="activeTab = tab.id"
+            class="px-3 py-1.5 text-xs cursor-pointer border-b border-[#21262d] transition-colors"
+            :class="activeTab === tab.id
+              ? 'bg-space-row-hover text-space-accent border-l-2 border-l-space-accent pl-[11px]'
+              : 'text-space-text-dim hover:bg-space-row-hover hover:text-space-text'"
+          >
+            {{ tab.name }}
+          </div>
+        </template>
       </div>
     </div>
 
@@ -71,6 +74,34 @@
 
         <div class="save-bar">
           <button @click="saveGeneral" class="btn btn-primary">Save Settings</button>
+        </div>
+
+        <!-- Routines Quick Reference -->
+        <div class="mt-6 p-4 rounded bg-[#0d1117] border border-[#21262d] text-xs">
+          <div class="font-semibold text-space-text mb-3 text-sm">📋 Routines Quick Reference</div>
+          <table class="w-full text-left border-collapse">
+            <thead>
+              <tr class="text-space-text-dim border-b border-[#21262d]">
+                <th class="pb-2 pr-4 font-medium">Routine</th>
+                <th class="pb-2 pr-4 font-medium">LLM?</th>
+                <th class="pb-2 pr-4 font-medium">Scope</th>
+                <th class="pb-2 font-medium">Purpose</th>
+              </tr>
+            </thead>
+            <tbody class="text-space-text-dim">
+              <tr class="border-b border-[#21262d]"><td class="py-1.5 pr-4 text-space-text">miner / ice_harvester / gas_harvester</td><td class="pr-4">—</td><td class="pr-4">Single bot</td><td>Mine resources, sell at station, loop</td></tr>
+              <tr class="border-b border-[#21262d]"><td class="py-1.5 pr-4 text-space-text">crafter</td><td class="pr-4">—</td><td class="pr-4">Single bot</td><td>Craft items to set stock limits</td></tr>
+              <tr class="border-b border-[#21262d]"><td class="py-1.5 pr-4 text-space-text">trader</td><td class="pr-4">—</td><td class="pr-4">Single bot</td><td>Buy low / sell high between stations</td></tr>
+              <tr class="border-b border-[#21262d]"><td class="py-1.5 pr-4 text-space-text">explorer / scout</td><td class="pr-4">—</td><td class="pr-4">Single bot</td><td>Chart systems, gather market intel</td></tr>
+              <tr class="border-b border-[#21262d]"><td class="py-1.5 pr-4 text-space-text">mission_runner</td><td class="pr-4">—</td><td class="pr-4">Single bot</td><td>Accept &amp; complete NPC missions for credits+XP</td></tr>
+              <tr class="border-b border-[#21262d]"><td class="py-1.5 pr-4 text-space-text">hunter</td><td class="pr-4">—</td><td class="pr-4">Single bot</td><td>PvP/PvE combat in lawless systems</td></tr>
+              <tr class="border-b border-[#21262d]"><td class="py-1.5 pr-4 text-space-text">rescue</td><td class="pr-4">—</td><td class="pr-4">Fleet-aware</td><td>Deliver fuel to stranded bots</td></tr>
+              <tr class="border-b border-[#21262d]"><td class="py-1.5 pr-4 text-space-text">coordinator</td><td class="pr-4">❌ rule-based</td><td class="pr-4">Fleet-aware</td><td>Auto-adjust miner ore targets + crafter limits</td></tr>
+              <tr class="border-b border-[#21262d]"><td class="py-1.5 pr-4 text-space-cyan font-medium">ai</td><td class="pr-4 text-yellow-400">✅ single-bot</td><td class="pr-4">Single bot</td><td>Fully autonomous: LLM plays the game for one bot</td></tr>
+              <tr class="border-b border-[#21262d]"><td class="py-1.5 pr-4 text-space-cyan font-medium">pi_commander</td><td class="pr-4 text-yellow-400">✅ single-bot</td><td class="pr-4">Single bot</td><td>LLM agent with TODO list, wraps commander.ts CLI</td></tr>
+              <tr><td class="py-1.5 pr-4 text-space-cyan font-medium">ai_commander</td><td class="pr-4 text-orange-400">✅ fleet LLM</td><td class="pr-4">All bots</td><td>One LLM brain controls the entire fleet</td></tr>
+            </tbody>
+          </table>
         </div>
       </div>
 
@@ -307,7 +338,18 @@
       <!-- Coordinator Settings -->
       <div v-else-if="activeTab === 'coordinator'">
         <h3 class="text-[15px] font-semibold text-space-text-bright mb-1">Coordinator Settings</h3>
-        <p class="text-xs text-space-text-dim mb-5">Analyzes market demand to auto-adjust crafter limits and miner ore targets.</p>
+        <p class="text-xs text-space-text-dim mb-3">Analyzes market demand to auto-adjust crafter limits and miner ore targets. <strong class="text-space-text">No LLM — pure rule-based logic.</strong></p>
+        <div class="mb-5 p-3 rounded bg-[#0d1117] border border-[#21262d] text-xs text-space-text-dim">
+          <div class="font-semibold text-space-text mb-1">How it works</div>
+          <ol class="list-decimal list-inside space-y-0.5">
+            <li>Scans market data across all known stations</li>
+            <li>Finds which recipe ingredients have lowest stock / highest buy pressure</li>
+            <li>Sets <code class="text-space-accent">targetOre</code> on all miners to the most-needed ingredient</li>
+            <li>Adjusts <code class="text-space-accent">craftLimits</code> on crafter based on demand and current stock</li>
+            <li>Repeats every N seconds</li>
+          </ol>
+          <div class="mt-2 text-space-text-dim"><span class="text-yellow-400">⚠️</span> Requires bots to have visited multiple stations so market data is populated. Does <strong class="text-white">not</strong> start or stop other bots.</div>
+        </div>
 
         <div class="setting-row">
           <div><div class="text-sm text-space-text">Analysis Cycle (seconds)</div><div class="text-xs text-space-text-dim mt-0.5">How often to re-analyze market data.</div></div>
@@ -767,10 +809,147 @@
         <div class="save-bar"><button @click="saveScavenger" class="btn btn-primary">Save Settings</button></div>
       </div>
 
+      <!-- PI Commander Settings -->
+      <div v-else-if="activeTab === 'pi_commander'">
+        <h3 class="text-[15px] font-semibold text-space-text-bright mb-1">🤖 PI Commander Settings</h3>
+        <p class="text-xs text-space-text-dim mb-3">Single-bot LLM agent using the <strong class="text-space-text">pi-ai library</strong> (multi-provider, token-aware). Best for structured task-focused play with a clear mission goal.</p>
+        <div class="mb-5 p-3 rounded bg-[#0d1117] border border-[#21262d] text-xs text-space-text-dim">
+          <div class="font-semibold text-space-text mb-1">How it works</div>
+          <ol class="list-decimal list-inside space-y-0.5">
+            <li>Starts <code class="text-space-accent">commander.ts</code> CLI as a subprocess bound to this bot</li>
+            <li>LLM reads game state + <code class="text-space-accent">_sessions/&lt;name&gt;/TODO.md</code></li>
+            <li>Executes game commands, writes new TODO items, logs decisions</li>
+            <li>On token limit: generates a handoff summary and restarts fresh context</li>
+          </ol>
+          <div class="mt-2 grid grid-cols-3 gap-2">
+            <div class="p-2 rounded bg-[#161b22] border border-[#30363d]">
+              <div class="text-yellow-400 font-medium mb-0.5">vs ai routine</div>
+              <div>Uses pi-ai library (Anthropic/Ollama/OpenAI), has context compaction. Better for long missions.</div>
+            </div>
+            <div class="p-2 rounded bg-[#161b22] border border-[#30363d]">
+              <div class="text-yellow-400 font-medium mb-0.5">vs ai_commander</div>
+              <div>Controls ONE bot only. Can't start/stop other bots. Mission-focused.</div>
+            </div>
+            <div class="p-2 rounded bg-[#161b22] border border-[#30363d]">
+              <div class="text-space-cyan font-medium mb-0.5">CLI alternative</div>
+              <div><code class="text-space-accent">bun run src/commander.ts --model ollama/qwen3:8b "mine ore"</code></div>
+            </div>
+          </div>
+        </div>
+
+        <div class="setting-row">
+          <div>
+            <div class="text-sm text-space-text">Model</div>
+            <div class="text-xs text-space-text-dim mt-0.5">LLM model string, e.g. <code class="text-space-accent">ollama/qwen3:8b</code>, <code class="text-space-accent">anthropic/claude-sonnet-4-20250514</code></div>
+          </div>
+          <input type="text" v-model="piCommanderForm.model" placeholder="ollama/llama3.2" class="input text-sm min-w-[260px]" />
+        </div>
+
+        <div class="setting-row">
+          <div>
+            <div class="text-sm text-space-text">Mission Instruction</div>
+            <div class="text-xs text-space-text-dim mt-0.5">The agent's goal. Be specific about what you want it to do.</div>
+          </div>
+          <textarea v-model="piCommanderForm.instruction" rows="3" placeholder="Mine ore, sell it, and upgrade your ship when you can afford a better one." class="input text-sm min-w-[320px] resize-y"></textarea>
+        </div>
+
+        <div class="setting-row">
+          <div>
+            <div class="text-sm text-space-text">Session Name</div>
+            <div class="text-xs text-space-text-dim mt-0.5">Credentials directory under <code class="text-space-accent">_sessions/</code>. Leave blank to use the bot's username.</div>
+          </div>
+          <input type="text" v-model="piCommanderForm.session" placeholder="(bot username)" class="input text-sm min-w-[200px]" />
+        </div>
+
+        <div class="setting-row">
+          <div>
+            <div class="text-sm text-space-text">Debug Mode</div>
+            <div class="text-xs text-space-text-dim mt-0.5">Pass <code class="text-space-accent">--debug</code> to commander — logs LLM token counts and retry details.</div>
+          </div>
+          <label class="flex items-center gap-2 cursor-pointer select-none">
+            <input type="checkbox" v-model="piCommanderForm.debug" class="w-4 h-4 accent-space-accent" />
+            <span class="text-sm" :class="piCommanderForm.debug ? 'text-green-400' : 'text-space-text-dim'">{{ piCommanderForm.debug ? 'Enabled' : 'Disabled' }}</span>
+          </label>
+        </div>
+
+        <div class="mt-4 p-3 rounded bg-[#0d1117] border border-[#21262d] text-xs text-space-text-dim">
+          <div class="font-semibold text-space-text mb-1">Per-Bot Overrides</div>
+          <p class="mb-2">You can override model/instruction/session per bot. In <code class="text-space-accent">data/settings.json</code> add:</p>
+          <pre class="font-mono text-[11px] text-space-cyan overflow-auto">{"pi_commander":{"bots":{"BotName":{"model":"ollama/qwen3:8b","instruction":"Mine ore"}}}}</pre>
+        </div>
+
+        <div class="save-bar"><button @click="savePiCommander" class="btn btn-primary">Save Settings</button></div>
+      </div>
+
       <!-- AI Settings -->
+      <!-- Alerts Settings -->
+      <div v-else-if="activeTab === 'alerts'">
+        <h3 class="text-[15px] font-semibold text-space-text-bright mb-1">🔔 Alert Settings</h3>
+        <p class="text-xs text-space-text-dim mb-5">Send webhook notifications to Telegram or Discord when important events occur. Leave URL blank to disable.</p>
+
+        <div class="setting-row">
+          <div><div class="text-sm text-space-text">Webhook URL</div><div class="text-xs text-space-text-dim mt-0.5">Telegram: <code class="text-space-accent">https://api.telegram.org/bot&lt;TOKEN&gt;/sendMessage?chat_id=&lt;ID&gt;</code><br>Discord: <code class="text-space-accent">https://discord.com/api/webhooks/...</code></div></div>
+          <input type="text" v-model="alertsForm.webhookUrl" placeholder="https://..." class="input text-sm min-w-[340px]" />
+        </div>
+
+        <div class="setting-row">
+          <div><div class="text-sm text-space-text">Webhook Type</div><div class="text-xs text-space-text-dim mt-0.5">How to format the payload. Discord uses <code>content</code> field, Telegram uses <code>text</code>.</div></div>
+          <select v-model="alertsForm.webhookType" class="input text-sm">
+            <option value="discord">Discord</option>
+            <option value="telegram">Telegram</option>
+            <option value="generic">Generic JSON ({text: ...})</option>
+          </select>
+        </div>
+
+        <div class="text-xs font-semibold text-space-text-dim uppercase mt-4 mb-2">Triggers</div>
+        <div v-for="trigger in alertTriggers" :key="trigger.key" class="setting-row">
+          <div>
+            <div class="text-sm text-space-text">{{ trigger.label }}</div>
+            <div class="text-xs text-space-text-dim mt-0.5">{{ trigger.description }}</div>
+          </div>
+          <label class="flex items-center gap-2 cursor-pointer select-none">
+            <input type="checkbox" v-model="alertsForm.triggers[trigger.key as keyof typeof alertsForm.triggers]" class="w-4 h-4 accent-space-accent" />
+            <span class="text-sm" :class="alertsForm.triggers[trigger.key as keyof typeof alertsForm.triggers] ? 'text-space-green' : 'text-space-text-dim'">{{ alertsForm.triggers[trigger.key as keyof typeof alertsForm.triggers] ? 'On' : 'Off' }}</span>
+          </label>
+        </div>
+
+        <div class="setting-row">
+          <div><div class="text-sm text-space-text">Credits Target (optional)</div><div class="text-xs text-space-text-dim mt-0.5">Alert when total fleet credits exceed this value. 0 = disabled.</div></div>
+          <input type="number" v-model.number="alertsForm.creditsTarget" min="0" class="input w-32 text-sm" />
+        </div>
+
+        <div class="flex gap-3 mt-6">
+          <button @click="saveAlerts" class="btn btn-primary">Save Settings</button>
+          <button @click="testWebhook" :disabled="!alertsForm.webhookUrl || testingWebhook" class="btn btn-secondary text-sm px-4">
+            {{ testingWebhook ? '⏳ Sending…' : '🧪 Test Webhook' }}
+          </button>
+        </div>
+      </div>
+
       <div v-else-if="activeTab === 'ai'">
-        <h3 class="text-[15px] font-semibold text-space-text-bright mb-1">AI Settings</h3>
-        <p class="text-xs text-space-text-dim mb-5">Configure the LLM used by the AI routine. Leave fields empty to use environment variables (OPENAI_COMPAT_BASE_URL, OPENAI_COMPAT_API_KEY, AI_MODEL) or Ollama defaults.</p>
+        <h3 class="text-[15px] font-semibold text-space-text-bright mb-1">🤖 AI Routine Settings</h3>
+        <p class="text-xs text-space-text-dim mb-3">Single-bot fully autonomous LLM agent using <strong class="text-space-text">OpenAI-compatible tool-calling</strong>. Works with Ollama, OpenAI, Anthropic, or any compatible endpoint.</p>
+        <div class="mb-5 p-3 rounded bg-[#0d1117] border border-[#21262d] text-xs text-space-text-dim">
+          <div class="font-semibold text-space-text mb-1">How it works</div>
+          <ol class="list-decimal list-inside space-y-0.5">
+            <li>Refreshes game state every N seconds</li>
+            <li>Builds context: current status, POIs, recent action log, persistent memory</li>
+            <li>LLM calls tools: <code class="text-space-accent">game_exec</code>, <code class="text-space-accent">map_*</code>, <code class="text-space-accent">catalog_lookup</code>, <code class="text-space-accent">memory_update</code></li>
+            <li>Persists goals/insights/decisions to <code class="text-space-accent">data/ai_memory.json</code></li>
+            <li>Optionally writes a Captain's Log entry every N cycles</li>
+          </ol>
+          <div class="mt-2 grid grid-cols-2 gap-2">
+            <div class="p-2 rounded bg-[#161b22] border border-[#30363d]">
+              <div class="text-yellow-400 font-medium mb-0.5">vs pi_commander</div>
+              <div>Uses raw OpenAI API (no pi-ai library). Simpler setup, no context compaction — best for shorter cycles or strong models like GPT-4o.</div>
+            </div>
+            <div class="p-2 rounded bg-[#161b22] border border-[#30363d]">
+              <div class="text-yellow-400 font-medium mb-0.5">vs ai_commander</div>
+              <div>Controls ONE bot. Cannot start/stop other bots. Plays the game like a human player for this bot only.</div>
+            </div>
+          </div>
+          <div class="mt-2">Leave fields empty to use <code class="text-space-accent">OPENAI_COMPAT_BASE_URL</code>, <code class="text-space-accent">OPENAI_COMPAT_API_KEY</code>, <code class="text-space-accent">AI_MODEL</code> env vars, or Ollama defaults.</div>
+        </div>
 
         <div class="setting-row">
           <div><div class="text-sm text-space-text">Base URL</div><div class="text-xs text-space-text-dim mt-0.5">OpenAI-compatible endpoint, e.g. https://api.openai.com/v1 or http://localhost:11434/v1</div></div>
@@ -798,6 +977,58 @@
         </div>
         <div class="save-bar"><button @click="saveAi" class="btn btn-primary">Save Settings</button></div>
       </div>
+
+      <!-- AI Commander Settings -->
+      <div v-else-if="activeTab === 'ai_commander'">
+        <h3 class="text-[15px] font-semibold text-space-text-bright mb-1">🧠 AI Commander Settings</h3>
+        <p class="text-xs text-space-text-dim mb-3">Fleet-level LLM that controls <strong class="text-space-text">all bots</strong> — can start, stop, and redirect any bot based on fleet economy and goals. Run on a dedicated "HQ" bot.</p>
+        <div class="mb-5 p-3 rounded bg-[#0d1117] border border-[#21262d] text-xs text-space-text-dim">
+          <div class="font-semibold text-space-text mb-1">How it works</div>
+          <ol class="list-decimal list-inside space-y-0.5">
+            <li>Every N seconds: reads all bot statuses (state, credits, system, routine, stats)</li>
+            <li>Sends fleet context + strategic instruction to LLM</li>
+            <li>LLM returns <code class="text-space-accent">fleet_command</code> decisions: start/stop/exec per bot</li>
+            <li>Executes decisions in order, up to max-actions-per-cycle cap</li>
+            <li>Logs all decisions to <code class="text-space-accent">data/ai_commander_memory.json</code></li>
+          </ol>
+          <div class="mt-2 p-2 rounded bg-[#161b22] border border-[#30363d]">
+            <span class="text-orange-400 font-medium">⚠️ Warning:</span> The LLM can stop running bots if it decides to reassign them. Use a clear strategic instruction and set Max Actions Per Cycle to limit its reach. Monitor the Commander → AI Agent tab for decisions.
+          </div>
+          <div class="mt-2">Uses same OpenAI-compatible API as the <code class="text-space-accent">ai</code> routine — can share endpoint/key. Leave blank to fall back to <code class="text-space-accent">OPENAI_COMPAT_*</code> env vars.</div>
+        </div>
+
+        <div class="setting-row">
+          <div><div class="text-sm text-space-text">Base URL</div><div class="text-xs text-space-text-dim mt-0.5">OpenAI-compatible endpoint</div></div>
+          <input type="text" v-model="aiCommanderForm.baseUrl" placeholder="http://localhost:11434/v1" class="input text-sm min-w-[260px]" />
+        </div>
+        <div class="setting-row">
+          <div><div class="text-sm text-space-text">API Key</div><div class="text-xs text-space-text-dim mt-0.5">Bearer token. Use "ollama" for local Ollama.</div></div>
+          <input type="password" v-model="aiCommanderForm.apiKey" placeholder="ollama" class="input text-sm min-w-[200px]" />
+        </div>
+        <div class="setting-row">
+          <div><div class="text-sm text-space-text">Model</div><div class="text-xs text-space-text-dim mt-0.5">e.g. llama3.2, gpt-4o-mini, claude-3-5-haiku</div></div>
+          <input type="text" v-model="aiCommanderForm.model" placeholder="llama3.2" class="input text-sm min-w-[200px]" />
+        </div>
+        <div class="setting-row">
+          <div><div class="text-sm text-space-text">Cycle Interval (seconds)</div><div class="text-xs text-space-text-dim mt-0.5">How often the commander re-evaluates the fleet. Default: 300s (5 min).</div></div>
+          <input type="number" v-model.number="aiCommanderForm.cycleIntervalSec" min="60" max="3600" class="input text-sm w-24" />
+        </div>
+        <div class="setting-row">
+          <div><div class="text-sm text-space-text">Max Actions Per Cycle</div><div class="text-xs text-space-text-dim mt-0.5">Cap on start/stop/exec commands per evaluation.</div></div>
+          <input type="number" v-model.number="aiCommanderForm.maxActionsPerCycle" min="1" max="20" class="input text-sm w-24" />
+        </div>
+        <div class="setting-row items-start">
+          <div><div class="text-sm text-space-text">Strategic Instruction</div><div class="text-xs text-space-text-dim mt-0.5">High-level goal for the fleet commander LLM.</div></div>
+          <textarea v-model="aiCommanderForm.instruction" rows="3" placeholder="Maximize fleet earnings. Balance mining, trading, and exploration." class="input text-sm min-w-[320px] resize-y"></textarea>
+        </div>
+
+        <div class="mt-4 p-3 rounded bg-[#0d1117] border border-[#21262d] text-xs text-space-text-dim">
+          <div class="font-semibold text-space-text mb-1">How It Works</div>
+          <p>Start the <code class="text-space-accent">AI Commander</code> routine on any bot. Every cycle it reads the full fleet status and asks the LLM to decide which bots to start, stop, or redirect. All decisions are logged in <code class="text-space-cyan">data/ai_commander_memory.json</code>.</p>
+        </div>
+
+        <div class="save-bar"><button @click="saveAiCommander" class="btn btn-primary">Save Settings</button></div>
+      </div>
     </div>
   </div>
 </template>
@@ -810,27 +1041,39 @@ const botStore = useBotStore();
 const activeTab = ref('general');
 
 const settingsTabs = [
-  { id: 'general', name: 'General' },
-  { id: 'miner', name: 'Miner' },
-  { id: 'crafter', name: 'Crafter' },
-  { id: 'rescue', name: 'FuelRescue' },
-  { id: 'explorer', name: 'Explorer' },
-  { id: 'coordinator', name: 'Coordinator' },
-  { id: 'trader', name: 'Trader' },
-  { id: 'gas_harvester', name: 'GasHarvester' },
-  { id: 'ice_harvester', name: 'IceHarvester' },
-  { id: 'salvager', name: 'Salvager' },
-  { id: 'hunter', name: 'Hunter' },
-  { id: 'gatherer', name: 'Gatherer' },
-  { id: 'cleanup', name: 'Cleanup' },
-  { id: 'scout', name: 'Scout' },
-  { id: 'return_home', name: 'ReturnHome' },
-  { id: 'quartermaster', name: 'Quartermaster' },
-  { id: 'mission_runner', name: 'MissionRunner' },
-  { id: 'ship_upgrade', name: 'ShipUpgrade' },
-  { id: 'scavenger', name: 'Scavenger' },
-  { id: 'ai', name: 'AI' },
+  { id: 'general',        name: '⚙️ General',        group: 'System' },
+  { id: 'alerts',         name: '🔔 Alerts',          group: 'System' },
+  { id: 'coordinator',    name: '📊 Coordinator',     group: 'Fleet' },
+  { id: 'rescue',         name: '⛽ Fuel Rescue',     group: 'Fleet' },
+  { id: 'quartermaster',  name: '📦 Quartermaster',   group: 'Fleet' },
+  { id: 'mission_runner', name: '📋 Mission Runner',  group: 'Fleet' },
+  { id: 'ship_upgrade',   name: '🔧 Ship Upgrade',    group: 'Fleet' },
+  { id: 'miner',          name: '⛏️ Miner',           group: 'Economy' },
+  { id: 'crafter',        name: '⚗️ Crafter',         group: 'Economy' },
+  { id: 'trader',         name: '💹 Trader',          group: 'Economy' },
+  { id: 'gatherer',       name: '🧲 Gatherer',        group: 'Economy' },
+  { id: 'cleanup',        name: '🧹 Cleanup',         group: 'Economy' },
+  { id: 'explorer',       name: '🗺️ Explorer',        group: 'Exploration' },
+  { id: 'scout',          name: '🔭 Scout',           group: 'Exploration' },
+  { id: 'return_home',    name: '🏠 Return Home',     group: 'Exploration' },
+  { id: 'gas_harvester',  name: '🌫️ Gas Harvester',  group: 'Harvesting' },
+  { id: 'ice_harvester',  name: '🧊 Ice Harvester',  group: 'Harvesting' },
+  { id: 'scavenger',      name: '♻️ Scavenger',       group: 'Harvesting' },
+  { id: 'salvager',       name: '🔩 Salvager',        group: 'Harvesting' },
+  { id: 'hunter',         name: '🎯 Hunter',          group: 'Combat' },
+  { id: 'pi_commander',   name: '🤖 PI Commander',    group: 'AI' },
+  { id: 'ai',             name: '🧠 AI Agent',        group: 'AI' },
+  { id: 'ai_commander',   name: '🌐 AI Commander',    group: 'AI' },
 ];
+
+const groupedTabs = computed(() => {
+  const groups: Record<string, typeof settingsTabs> = {};
+  for (const tab of settingsTabs) {
+    if (!groups[tab.group]) groups[tab.group] = [];
+    groups[tab.group].push(tab);
+  }
+  return groups;
+});
 
 // ── Shared helpers ──────────────────────────────────────────
 const depositOptions = computed(() => {
@@ -1041,7 +1284,55 @@ const hunterForm = ref({
   autoCloak: false,
 });
 
-// ── AI form ───────────────────────────────────────────────────
+// ── Alerts form ─────────────────────────────────────────────
+const alertTriggers = [
+  { key: 'botStopped',      label: 'Bot stopped',          description: 'When any bot routine stops (error or normal).' },
+  { key: 'ipBlocked',       label: 'IP rate-limit block',   description: 'When the server receives an IP block from SpaceMolt.' },
+  { key: 'missionComplete', label: 'Mission completed',     description: 'When a bot completes and claims a mission reward.' },
+  { key: 'goalReached',     label: 'Goal reached',          description: 'When a fleet goal is marked as achieved.' },
+  { key: 'creditsTarget',   label: 'Credits target hit',    description: 'When total fleet credits exceed the configured target.' },
+];
+
+const alertsForm = ref({
+  webhookUrl: '',
+  webhookType: 'discord' as 'discord' | 'telegram' | 'generic',
+  creditsTarget: 0,
+  triggers: { botStopped: true, ipBlocked: true, missionComplete: false, goalReached: true, creditsTarget: false },
+});
+const testingWebhook = ref(false);
+
+async function testWebhook() {
+  if (!alertsForm.value.webhookUrl) return;
+  testingWebhook.value = true;
+  try {
+    await fetch('/api/admin/test-webhook', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ url: alertsForm.value.webhookUrl, type: alertsForm.value.webhookType }),
+    });
+  } catch {}
+  testingWebhook.value = false;
+}
+
+// ── PI Commander form ──────────────────────────────────────
+const piCommanderForm = ref({
+  model: '',
+  instruction: '',
+  session: '',
+  debug: false,
+});
+
+// ── AI Commander form ──────────────────────────────────
+const aiCommanderForm = ref({
+  baseUrl: '',
+  apiKey: '',
+  model: '',
+  cycleIntervalSec: 300,
+  maxActionsPerCycle: 5,
+  instruction: 'Maximize fleet earnings. Balance mining, trading, and exploration.',
+});
+
+// ── AI form ─────────────────────────────────────────────
 const aiForm = ref({
   baseUrl: '',
   apiKey: '',
@@ -1279,6 +1570,22 @@ watch(() => botStore.settings, (s) => {
     scavengerForm.value.cargoThreshold = sv.cargoThreshold ?? 80;
     scavengerForm.value.homeSystem = sv.homeSystem || '';
   }
+  if (s.alerts) {
+    const a = s.alerts;
+    alertsForm.value.webhookUrl = a.webhookUrl || '';
+    alertsForm.value.webhookType = (a.webhookType as any) || 'discord';
+    alertsForm.value.creditsTarget = a.creditsTarget ?? 0;
+    if (a.triggers) {
+      Object.assign(alertsForm.value.triggers, a.triggers);
+    }
+  }
+  if (s.pi_commander) {
+    const p = s.pi_commander;
+    piCommanderForm.value.model = p.model || '';
+    piCommanderForm.value.instruction = p.instruction || '';
+    piCommanderForm.value.session = p.session || '';
+    piCommanderForm.value.debug = Boolean(p.debug ?? false);
+  }
   if (s.ai) {
     const a = s.ai;
     aiForm.value.baseUrl = a.baseUrl || '';
@@ -1287,6 +1594,15 @@ watch(() => botStore.settings, (s) => {
     aiForm.value.cycleIntervalSec = a.cycleIntervalSec ?? 10;
     aiForm.value.maxToolCallsPerCycle = a.maxToolCallsPerCycle ?? 40;
     aiForm.value.captainsLogEveryN = a.captainsLogEveryN ?? 5;
+  }
+  if (s.ai_commander) {
+    const a = s.ai_commander;
+    aiCommanderForm.value.baseUrl = a.baseUrl || '';
+    aiCommanderForm.value.apiKey = a.apiKey || '';
+    aiCommanderForm.value.model = a.model || '';
+    aiCommanderForm.value.cycleIntervalSec = a.cycleIntervalSec ?? 300;
+    aiCommanderForm.value.maxActionsPerCycle = a.maxActionsPerCycle ?? 5;
+    aiCommanderForm.value.instruction = a.instruction || 'Maximize fleet earnings. Balance mining, trading, and exploration.';
   }
   // Per-bot ore overrides
   for (const bot of botStore.bots) {
@@ -1430,6 +1746,23 @@ function saveMissionRunner() {
 }
 function saveShipUpgrade() { botStore.saveSettings('ship_upgrade', { ...shipUpgradeForm.value }); }
 function saveScavenger() { botStore.saveSettings('scavenger', { ...scavengerForm.value }); }
+
+function saveAlerts() {
+  botStore.saveSettings('alerts', {
+    webhookUrl: alertsForm.value.webhookUrl,
+    webhookType: alertsForm.value.webhookType,
+    creditsTarget: alertsForm.value.creditsTarget,
+    triggers: { ...alertsForm.value.triggers },
+  });
+}
+
+function savePiCommander() {
+  botStore.saveSettings('pi_commander', { ...piCommanderForm.value });
+}
+
+function saveAiCommander() {
+  botStore.saveSettings('ai_commander', { ...aiCommanderForm.value });
+}
 
 function saveAi() {
   botStore.saveSettings('ai', { ...aiForm.value });

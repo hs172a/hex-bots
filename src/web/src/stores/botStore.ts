@@ -62,6 +62,8 @@ export interface BotStatus {
   ammo?: number;
   inventory?: CargoItem[];
   storage?: CargoItem[];
+  factionStorage?: CargoItem[];
+  factionId?: string;
   skills?: SkillEntry[];
   playerStats?: PlayerStats;
   marketData?: any[];
@@ -99,6 +101,44 @@ export const useBotStore = defineStore('bots', () => {
   // ── Rate-limit block state ──
   const ipBlocked = ref(false);
   const ipBlockEndsAt = ref(0); // ms timestamp
+
+  // ── Credits/hour tracking (rolling 1-hour window) ──
+  const creditsHistory = ref<Record<string, Array<{ ts: number; credits: number }>>>({});
+  const CREDITS_WINDOW_MS = 60 * 60 * 1000; // 1 hour
+  const CREDITS_MIN_WINDOW_MS = 5 * 60 * 1000; // need at least 5 min of data
+
+  function recordCreditsSnapshot(username: string, credits: number) {
+    if (!creditsHistory.value[username]) creditsHistory.value[username] = [];
+    const buf = creditsHistory.value[username];
+    const now = Date.now();
+    // Deduplicate: only record if credits changed or 60s elapsed
+    const last = buf[buf.length - 1];
+    if (last && last.credits === credits && now - last.ts < 60_000) return;
+    buf.push({ ts: now, credits });
+    // Prune entries older than 2 hours
+    const cutoff = now - CREDITS_WINDOW_MS * 2;
+    while (buf.length > 1 && buf[0].ts < cutoff) buf.shift();
+  }
+
+  const botCreditsPerHour = computed<Record<string, number>>(() => {
+    const result: Record<string, number> = {};
+    const now = Date.now();
+    for (const [username, buf] of Object.entries(creditsHistory.value)) {
+      if (buf.length < 2) { result[username] = 0; continue; }
+      const cutoff = now - CREDITS_WINDOW_MS;
+      // Find the oldest snapshot within the window
+      let oldest = buf[0];
+      for (const snap of buf) {
+        if (snap.ts >= cutoff) { oldest = snap; break; }
+      }
+      const newest = buf[buf.length - 1];
+      const elapsedMs = newest.ts - oldest.ts;
+      if (elapsedMs < CREDITS_MIN_WINDOW_MS) { result[username] = 0; continue; }
+      const delta = newest.credits - oldest.credits;
+      result[username] = Math.round(delta / (elapsedMs / CREDITS_WINDOW_MS));
+    }
+    return result;
+  });
 
   // ── Log state ──
   const activityLogs = ref<string[]>([]);
@@ -141,7 +181,24 @@ export const useBotStore = defineStore('bots', () => {
         break;
 
       case 'status':
-        if (data.bots) bots.value = data.bots;
+        if (data.bots) {
+          for (const update of data.bots) {
+            const idx = bots.value.findIndex(b => b.username === update.username);
+            if (idx >= 0) {
+              Object.assign(bots.value[idx], update);
+            } else {
+              bots.value.push(update);
+            }
+            if (update.username && typeof update.credits === 'number') {
+              recordCreditsSnapshot(update.username, update.credits);
+            }
+          }
+          // Remove bots no longer reported by server (splice in-place to avoid full re-render)
+          const names = new Set(data.bots.map((b: any) => b.username));
+          for (let i = bots.value.length - 1; i >= 0; i--) {
+            if (!names.has(bots.value[i].username)) bots.value.splice(i, 1);
+          }
+        }
         break;
 
       case 'log':
@@ -338,6 +395,8 @@ export const useBotStore = defineStore('bots', () => {
     // Rate-limit state
     ipBlocked,
     ipBlockEndsAt,
+    // Credits/hour
+    botCreditsPerHour,
     // Helpers
     resolveLocation,
     catalogName,

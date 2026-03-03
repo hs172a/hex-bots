@@ -38,6 +38,65 @@
       </div>
     </div>
 
+    <!-- Mission Analytics -->
+    <div class="bg-space-card border border-space-border rounded-lg">
+      <div class="px-3 py-2 border-b border-space-border flex items-center justify-between">
+        <span class="text-xs font-semibold text-space-text-dim uppercase">🎯 Mission Analytics</span>
+        <div class="flex items-center gap-3">
+          <span v-if="missionLastLoaded" class="text-[11px] text-space-text-dim">Updated {{ missionLastLoaded }}</span>
+          <button @click="loadMissionStats" :disabled="missionLoading" class="btn btn-secondary px-3 py-0.5 text-xs">
+            {{ missionLoading ? '⏳' : '🔄 Load' }}
+          </button>
+        </div>
+      </div>
+      <div v-if="!missionDataLoaded" class="px-4 py-3 text-xs text-space-text-dim italic">
+        Click Load to fetch mission history from the game API.
+      </div>
+      <div v-else class="p-3">
+        <!-- Fleet totals row -->
+        <div class="flex gap-4 flex-wrap mb-3">
+          <div class="flex flex-col items-center min-w-16">
+            <span class="text-lg font-bold text-space-text-bright">{{ missionTotals.count }}</span>
+            <span class="text-[11px] text-space-text-dim">Completed</span>
+          </div>
+          <div class="flex flex-col items-center min-w-20">
+            <span class="text-lg font-bold text-space-green">{{ fmt(missionTotals.credits) }} ₡</span>
+            <span class="text-[11px] text-space-text-dim">Earned</span>
+          </div>
+          <div v-if="missionTotals.count > 0" class="flex flex-col items-center min-w-20">
+            <span class="text-lg font-bold text-space-cyan">{{ fmt(Math.round(missionTotals.credits / missionTotals.count)) }} ₡</span>
+            <span class="text-[11px] text-space-text-dim">Avg Reward</span>
+          </div>
+        </div>
+        <!-- Per-bot table -->
+        <table class="w-full text-xs">
+          <thead>
+            <tr class="text-left text-[11px] text-space-text-dim uppercase border-b border-space-border">
+              <th class="pb-1 px-2">Bot</th>
+              <th class="pb-1 px-2 text-right">Missions</th>
+              <th class="pb-1 px-2 text-right">Credits Earned</th>
+              <th class="pb-1 px-2 text-right">Avg Reward</th>
+              <th class="pb-1 px-2">Last Mission</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr v-if="missionRows.length === 0">
+              <td colspan="5" class="py-3 text-center text-space-text-dim italic text-xs">No mission data found for selected bots.</td>
+            </tr>
+            <tr v-for="r in missionRows" :key="r.bot" class="border-b border-[#21262d] hover:bg-space-row-hover">
+              <td class="px-2 py-1.5 font-medium text-space-text-bright">{{ r.bot }}</td>
+              <td class="px-2 py-1.5 text-right">{{ r.count }}</td>
+              <td class="px-2 py-1.5 text-right text-space-green">{{ fmt(r.credits) }} ₡</td>
+              <td class="px-2 py-1.5 text-right text-space-cyan">{{ r.count > 0 ? fmt(Math.round(r.credits / r.count)) : '—' }} ₡</td>
+              <td class="px-2 py-1.5 text-space-text-dim truncate max-w-36" :title="r.lastTitle">
+                {{ r.lastTitle || '—' }}
+              </td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+
     <!-- Per-Bot Breakdown + Faction Activity -->
     <div class="flex gap-4 flex-1 min-h-0 overflow-hidden">
       <!-- Per-Bot Table -->
@@ -108,8 +167,43 @@
 import { ref, computed } from 'vue';
 import { useBotStore } from '../stores/botStore';
 
+// ── Mission Analytics state ─────────────────────────────
+
 const botStore = useBotStore();
 const statsPeriod = ref<'today' | 'week' | 'all'>('today');
+
+interface MissionRow { bot: string; count: number; credits: number; lastTitle: string; }
+const missionRows = ref<MissionRow[]>([]);
+const missionLoading = ref(false);
+const missionDataLoaded = ref(false);
+const missionLastLoaded = ref('');
+
+const missionTotals = computed(() => missionRows.value.reduce(
+  (acc, r) => ({ count: acc.count + r.count, credits: acc.credits + r.credits }),
+  { count: 0, credits: 0 },
+));
+
+async function loadMissionStats() {
+  const bots = botStore.bots;
+  if (!bots.length) return;
+  missionLoading.value = true;
+  const results: MissionRow[] = [];
+  await Promise.all(bots.map(bot => new Promise<void>(resolve => {
+    botStore.sendExec(bot.username, 'get_action_log', { category: 'mission', limit: 500 }, (res: any) => {
+      const entries: any[] = res?.data?.entries ?? [];
+      const count = entries.length;
+      const credits = entries.reduce((s: number, e: any) => s + (Number(e.data?.credits) || 0), 0);
+      const lastEntry = entries[0];
+      const lastTitle = lastEntry?.data?.mission_title || lastEntry?.data?.mission_id || lastEntry?.summary || '';
+      results.push({ bot: bot.username, count, credits, lastTitle });
+      resolve();
+    });
+  })));
+  missionRows.value = results.filter(r => r.count > 0).sort((a, b) => b.credits - a.credits);
+  missionLoading.value = false;
+  missionDataLoaded.value = true;
+  missionLastLoaded.value = new Date().toLocaleTimeString();
+}
 const logFilter = ref('All');
 
 const periods = [

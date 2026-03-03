@@ -2,6 +2,7 @@ import type { Routine, RoutineContext } from "../bot.js";
 import type { CargoItem } from "../bot.js";
 import type { MapStore } from "../mapstore.js";
 import type { CatalogStore } from "../catalogstore.js";
+import { claimMiningSystem, releaseMiningClaim, miningClaimCount } from "../miningclaims.js";
 import {
   type SystemPOI,
   isOreBeltPoi,
@@ -517,14 +518,21 @@ export const minerRoutineV2: Routine = async function* (ctx: RoutineContext) {
       if (oreLocations.length === 0) {
         ctx.log("error", `Target ore "${targetOre}" not found at any ore belt — mining locally`);
       } else {
-        const inCurrentSystem = oreLocations.find(loc => loc.systemId === bot.system);
+        // Anti-collision: prefer systems not already claimed by other bots
+        const unclaimedLocations = oreLocations.filter(loc => miningClaimCount(loc.systemId) === 0);
+        const candidateLocations = unclaimedLocations.length > 0 ? unclaimedLocations : oreLocations;
+        if (unclaimedLocations.length === 0 && oreLocations.length > 0) {
+          ctx.log("mining", "All ore locations claimed by other miners — sharing nearest available");
+        }
+
+        const inCurrentSystem = candidateLocations.find(loc => loc.systemId === bot.system);
         if (inCurrentSystem) {
           targetSystemId = inCurrentSystem.systemId;
           targetBeltId = inCurrentSystem.poiId;
           targetBeltName = inCurrentSystem.poiName;
         } else {
-          const withStation = oreLocations.filter(loc => loc.hasStation);
-          const best = withStation.length > 0 ? withStation[0] : oreLocations[0];
+          const withStation = candidateLocations.filter(loc => loc.hasStation);
+          const best = withStation.length > 0 ? withStation[0] : candidateLocations[0];
 
           const route = ctx.mapStore.findRoute(bot.system, best.systemId);
           if (route) {
@@ -548,6 +556,10 @@ export const minerRoutineV2: Routine = async function* (ctx: RoutineContext) {
     if (!targetSystemId && miningSystem && miningSystem !== bot.system) {
       targetSystemId = miningSystem;
     }
+
+    // Register mining claim for chosen system
+    const claimSystemId = targetSystemId || bot.system;
+    claimMiningSystem(bot.username, claimSystemId);
 
     // ── Navigate to target system if needed ──
     if (targetSystemId && targetSystemId !== bot.system) {
@@ -697,6 +709,9 @@ export const minerRoutineV2: Routine = async function* (ctx: RoutineContext) {
       ctx.log("mining", `Stopped before mining — ${stopReason}`);
     }
 
+    // Release claim before returning home / docking
+    releaseMiningClaim(bot.username);
+
     if (bot.state !== "running") break;
 
     // ── Belt depleted: try another system before returning home ──
@@ -835,4 +850,5 @@ export const minerRoutineV2: Routine = async function* (ctx: RoutineContext) {
     const endFuel = bot.maxFuel > 0 ? Math.round((bot.fuel / bot.maxFuel) * 100) : 100;
     ctx.log("info", `Cycle done — ${bot.credits} credits, ${endFuel}% fuel, ${bot.cargo}/${bot.cargoMax} cargo`);
   }
+  releaseMiningClaim(bot.username);
 };

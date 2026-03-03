@@ -355,6 +355,10 @@ export async function collectFromStorage(ctx: RoutineContext): Promise<void> {
   const { bot } = ctx;
 
   const storageResp = await bot.exec("view_storage");
+  if (storageResp.error?.code === "not_docked" || storageResp.error?.message?.includes("not_docked")) {
+    bot.docked = false;
+    return;
+  }
   if (!storageResp.result || typeof storageResp.result !== "object") return;
 
   const r = storageResp.result as Record<string, unknown>;
@@ -406,7 +410,13 @@ export async function transferStationToFaction(ctx: RoutineContext): Promise<voi
 
     // Withdraw from station storage into cargo
     const wResp = await bot.exec("withdraw_items", { item_id: item.itemId, quantity: qty });
-    if (wResp.error) continue;
+    if (wResp.error) {
+      if (wResp.error.code === "not_docked" || wResp.error.message?.includes("not_docked")) {
+        bot.docked = false;
+        break;
+      }
+      continue;
+    }
 
     // Deposit into faction storage
     const dResp = await bot.exec("faction_deposit_items", { item_id: item.itemId, quantity: qty });
@@ -1139,6 +1149,31 @@ export async function navigateToSystem(
 ): Promise<boolean> {
   const { bot } = ctx;
   const MAX_JUMPS = (readSettings().general?.maxJumps as number) || 20;
+
+  await bot.refreshStatus();
+  if (bot.system === targetSystemId) return true;
+
+  // ── Upfront route feasibility check ──────────────────────────────────────
+  // Query the server's find_route once upfront to get total jump count.
+  // This avoids burning MAX_JUMPS iterations on an unreachable system.
+  const localRoute = ctx.mapStore.findRoute(bot.system, targetSystemId);
+  const localJumps = localRoute ? localRoute.length - 1 : 999;
+
+  if (localJumps > MAX_JUMPS || !localRoute) {
+    // Local map incomplete or route too long — verify with server
+    const preflight = await bot.exec("find_route", { target_system: targetSystemId });
+    const pfd = preflight.result as { found?: boolean; total_jumps?: number; route?: Array<{ system_id: string }> } | null;
+    if (preflight.error || !pfd?.found) {
+      ctx.log("error", `No route to ${targetSystemId} — cannot navigate`);
+      return false;
+    }
+    const serverJumps = pfd.total_jumps ?? (pfd.route?.length ?? 0) - 1;
+    if (serverJumps > MAX_JUMPS) {
+      ctx.log("error", `Route to ${targetSystemId} requires ${serverJumps} jumps (max: ${MAX_JUMPS}) — skipping`);
+      return false;
+    }
+  }
+  // ─────────────────────────────────────────────────────────────────────────
 
   for (let attempt = 0; attempt < MAX_JUMPS; attempt++) {
     await bot.refreshStatus();

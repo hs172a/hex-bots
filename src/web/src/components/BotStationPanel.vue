@@ -7,7 +7,7 @@
 
     <template v-else>
       <!-- Station header from catalog -->
-      <div v-if="stationInfo" class="card py-2 px-2">
+      <div v-if="stationInfo && props.mode !== 'facility'" class="card py-2 px-2">
         <div class="flex items-start justify-between gap-2 mb-1.5">
           <div>
             <div class="text-sm font-semibold text-space-text-bright">{{ stationInfo.name }}</div>
@@ -26,24 +26,24 @@
           <span v-if="stationInfo.defense_level" class="px-1.5 py-0.5 rounded text-[11px] bg-[#21262d] text-space-text-dim">🛡️ Def {{ stationInfo.defense_level }}</span>
         </div>
       </div>
-      <div v-else class="card py-2 px-2 text-xs text-space-text-dim italic">Station catalog info not available for this location.</div>
+      <div v-else-if="props.mode !== 'facility'" class="card py-2 px-2 text-xs text-space-text-dim italic">Station catalog info not available for this location.</div>
 
       <!-- Facility panel -->
       <div class="card py-2 px-2">
         <!-- Tab bar -->
         <div class="flex items-center justify-between border-b border-space-border pb-2 mb-3">
           <div class="flex gap-0.5 flex-wrap">
-            <button @click="tab = 'station'"
+            <button v-if="props.mode !== 'facility'" @click="tab = 'station'"
               class="px-2 py-0.5 text-xs rounded transition-colors"
               :class="tab === 'station' ? 'bg-space-accent text-white' : 'text-space-text-dim hover:text-space-text'">
               🏢 Station<span v-if="stationFacilities.length" class="opacity-60 ml-0.5">({{ stationFacilities.length }})</span>
             </button>
-            <button @click="switchToMine"
+            <button v-if="props.mode !== 'station'" @click="switchToMine"
               class="px-2 py-0.5 text-xs rounded transition-colors"
               :class="tab === 'personal' ? 'bg-space-accent text-white' : 'text-space-text-dim hover:text-space-text'">
               👤 Mine<span v-if="myFacilities.length" class="text-space-green ml-0.5">★{{ myFacilities.length }}</span>
             </button>
-            <button @click="switchToBuild"
+            <button v-if="props.mode !== 'station'" @click="switchToBuild"
               class="px-2 py-0.5 text-xs rounded transition-colors"
               :class="tab === 'build' ? 'bg-space-accent text-white' : 'text-space-text-dim hover:text-space-text'">
               🔨 Build
@@ -278,7 +278,7 @@
 import { ref, computed, watch, onMounted } from 'vue';
 import { useBotStore } from '../stores/botStore';
 
-const props = defineProps<{ bot: any }>();
+const props = defineProps<{ bot: any; mode?: 'all' | 'station' | 'facility' }>();
 const emit = defineEmits<{
   (e: 'notif', text: string, type: 'success' | 'warn' | 'error'): void;
 }>();
@@ -286,7 +286,7 @@ const emit = defineEmits<{
 const botStore = useBotStore();
 
 // ── State ─────────────────────────────────────────────────────
-const tab = ref<'station' | 'personal' | 'build'>('station');
+const tab = ref<'station' | 'personal' | 'build'>(props.mode === 'facility' ? 'personal' : 'station');
 const loading = ref(false);
 const typesLoading = ref(false);
 const actionLoading = ref<string | null>(null);
