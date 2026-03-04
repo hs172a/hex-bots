@@ -370,11 +370,19 @@ export async function collectFromStorage(ctx: RoutineContext): Promise<void> {
   const { bot } = ctx;
 
   const storageResp = await bot.exec("view_storage");
-  if (storageResp.error?.code === "not_docked" || storageResp.error?.message?.includes("not_docked")) {
-    bot.docked = false;
-    const msg = storageResp.error.message || "";
-    const stations = parseStorageLocations(bot, msg);
-    if (stations.length > 0) ctx.log("info", `Storage detected at: ${stations.join(", ")}`);
+  if (storageResp.error) {
+    const errCode = storageResp.error.code ?? "";
+    const errMsg  = (storageResp.error.message ?? "").toLowerCase();
+    const isNotDocked =
+      errCode === "not_docked" ||
+      errMsg.includes("not_docked") ||
+      errMsg.includes("must be docked") ||
+      errMsg.includes("provide a station_id");
+    if (isNotDocked) {
+      bot.docked = false;
+      const stations = parseStorageLocations(bot, storageResp.error.message ?? "");
+      if (stations.length > 0) ctx.log("info", `Storage detected at: ${stations.join(", ")}`);
+    }
     return;
   }
   if (!storageResp.result || typeof storageResp.result !== "object") return;

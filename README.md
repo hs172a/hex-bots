@@ -6,7 +6,7 @@
 
 A web-based bot fleet manager for [SpaceMolt](https://www.spacemolt.com) — run multiple bots with automated routines, monitor and control everything from a reactive live dashboard.
 
-![Interface](https://img.shields.io/badge/interface-vue3_spa-blue) ![Runtime](https://img.shields.io/badge/runtime-bun-black) ![Deps](https://img.shields.io/badge/deps-zero_runtime-green) ![Version](https://img.shields.io/badge/version-1.5.x-purple)
+![Interface](https://img.shields.io/badge/interface-vue3_spa-blue) ![Runtime](https://img.shields.io/badge/runtime-bun-black) ![Deps](https://img.shields.io/badge/deps-zero_runtime-green) ![Version](https://img.shields.io/badge/version-1.7.x-purple)
 
 ---
 
@@ -137,7 +137,7 @@ Tab order: **Control · Ship · Facility · Insurance · Combat · Profile · St
 | **Miner** | Mines ore at asteroid belts, returns to station to deposit/sell. Configurable target ore, cargo threshold, ore quotas, faction donations. |
 | **Miner v2** | Anti-collision via claim registry; per-bot ore quotas; faction donate %; home system navigation. |
 | **Explorer** | Jumps system to system, visits every POI, surveys resources. Builds the galaxy map. |
-| **Crafter** | Crafts to configured stock limits. Auto-crafts prerequisites. Falls back to XP-grinding when set is exhausted. |
+| **Crafter** | Crafts to configured stock limits. Auto-crafts prerequisites. Falls back to XP-grinding when skill-blocked. **autoCraft mode**: ranks all craftable recipes by profit margin (volume-weighted market prices, owned items cost 0), crafts top N most profitable. BOM summary log each cycle. |
 | **Coordinator** | Analyses cross-station market demand. Auto-adjusts miner ore quotas and crafter craft limits. |
 | **Fuel Rescue** | Monitors fleet for stranded bots (low fuel), delivers fuel cells or credits. |
 | **Salvager** | Loots wrecks, tows to salvage yard, scraps or sells while docked. |
@@ -157,6 +157,7 @@ Tab order: **Control · Ship · Facility · Insurance · Combat · Profile · St
 | **AI** | In-process LLM agent (OpenAI-compatible/Ollama). Maintains persistent memory, uses map/catalog tools, writes captain's log. |
 | **PI Commander** | Subprocess wrapper for `commander.ts` PI-agent. Full tool suite from game's OpenAPI spec, session handoff, per-bot instruction. Best with Claude/GPT-4. |
 | **AI Commander** | Fleet-level LLM reads all bot statuses and issues `start`/`stop`/`exec` decisions every N seconds. Run on a dedicated "HQ" bot. |
+| **SmartSelector** | Rule-based orchestrator: scores all routines each cycle and delegates to the best match. Miner score is POI-aware (0 when no ore belt in current system, reduced when belt is in another system). Crafter score is profit-aware (catalog cache, no API call). |
 
 ### Common routine features
 All mining/travel routines also include:
@@ -214,15 +215,20 @@ Grouped sidebar (System / Fleet / Economy / Exploration / Harvesting / Combat / 
 - **⚙️ General** — faction storage station, donate %, API request logging, max jumps
 - **🔔 Alerts** — webhook URL, alert triggers (credits, hull, etc.)
 - **Fleet** — Coordinator, Fuel Rescue, Quartermaster, Mission Runner, Ship Upgrade
-- **Economy** — Miner, Crafter, Trader, Gatherer, Cleanup; deposit mode (primary/secondary)
+- **Economy** — Miner, Crafter (`autoCraft`, `minProfitPct`, `maxAutoCraftRecipes`), Trader, Gatherer, Cleanup; deposit mode (primary/secondary)
 - **Exploration** — Explorer, Scout, Return Home
 - **Harvesting** — Gas/Ice Harvester (with deposit mode), Scavenger, Salvager
 - **🎯 Hunter** — patrol system, thresholds, NPCs-only, faction alert range
 - **AI** — PI Commander (model/session/instruction/debug), AI Agent (endpoint/model/cycle), AI Commander (fleet LLM, interval, max actions)
 
 ### Header Controls
-- **🗺️ Force Refresh Map** — re-seeds galaxy map from public API (`POST /api/admin/refresh-map`)
-- **📦 Force Refresh Catalog** — re-fetches item catalog via first available bot session
+- **🗺️ Force Refresh Map** — **fully wipes** galaxy map (SQLite + memory + `map.json`), then re-seeds from public API
+- **📦 Force Refresh Catalog** — **fully wipes** catalog (SQLite + memory + `catalog.json`), then re-fetches via first available bot session
+
+### Stats View
+Per-bot statistics — ores mined, crafted, trades, profit, systems explored, skills. Faction activity log.
+
+**Multi-pool view** — pool selector in header shows Current pool + one button per sibling pool discovered on disk. Selecting a pool switches the Per-Bot Breakdown table and Fleet Totals to that pool's data. 🔄 button reloads the sibling-pool list. Data auto-loaded on mount.
 
 ### Action Log View
 Per-bot action history with category filters and pagination.

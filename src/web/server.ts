@@ -1,5 +1,5 @@
-import { readFileSync, writeFileSync, existsSync, mkdirSync } from "fs";
-import { join } from "path";
+import { readFileSync, writeFileSync, existsSync, mkdirSync, readdirSync } from "fs";
+import { join, basename } from "path";
 import type { BotStatus } from "../bot.js";
 import { mapStore } from "../mapstore.js";
 import { catalogStore } from "../catalogstore.js";
@@ -246,6 +246,24 @@ export class WebServer {
         }
         if (url.pathname === "/api/stats") {
           return Response.json(this.statsData.daily);
+        }
+        if (url.pathname === "/api/stats/all-pools") {
+          const poolName = basename(process.cwd());
+          const allPools: Record<string, Record<string, any>> = { [poolName]: this.statsData.daily };
+          try {
+            const parentDir = join(process.cwd(), "..");
+            for (const entry of readdirSync(parentDir, { withFileTypes: true })) {
+              if (!entry.isDirectory() || entry.name === poolName) continue;
+              const statsPath = join(parentDir, entry.name, "data", "stats.json");
+              if (existsSync(statsPath)) {
+                try {
+                  const raw = JSON.parse(readFileSync(statsPath, "utf-8"));
+                  allPools[entry.name] = raw.daily ?? raw;
+                } catch { /* skip corrupt */ }
+              }
+            }
+          } catch { /* skip on fs error */ }
+          return Response.json(allPools);
         }
         if (url.pathname === "/api/catalog") {
           return Response.json(catalogStore.getAll());

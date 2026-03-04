@@ -23,6 +23,9 @@ function getCrafterSettings(): {
   refuelThreshold: number;
   repairThreshold: number;
   cycleDelayMs: number;
+  autoCraft: boolean;
+  minProfitPct: number;
+  maxAutoCraftRecipes: number;
 } {
   const all = readSettings();
   const c = all.crafter || {};
@@ -38,6 +41,10 @@ function getCrafterSettings(): {
     refuelThreshold: (c.refuelThreshold as number) || 50,
     repairThreshold: (c.repairThreshold as number) || 40,
     cycleDelayMs: (c.cycleDelayMs as number) || 10000,
+    // autoCraft: scan all recipes, rank by profit, craft the top ones
+    autoCraft: (c.autoCraft as boolean) ?? false,
+    minProfitPct: (c.minProfitPct as number) ?? 10,
+    maxAutoCraftRecipes: (c.maxAutoCraftRecipes as number) ?? 5,
   };
 }
 
@@ -464,6 +471,72 @@ async function grindCraftingXP(
   return crafted;
 }
 
+// ── Profitability engine ──────────────────────────────────
+
+export interface RecipeProfitability {
+  recipe: Recipe;
+  /** Price we can sell 1 unit of output for at any known market. null = no data. */
+  outputPrice: number | null;
+  /** Total market cost to BUY all missing inputs (owned items cost 0). */
+  inputCost: number;
+  /** Net profit per craft cycle: outputPrice * outputQty - inputCost. */
+  profit: number;
+  /** profit / inputCost * 100. Infinity when inputs are all owned. */
+  profitPct: number;
+  /** True when all inputs exist in faction/station storage right now. */
+  fullyFunded: boolean;
+  /** Where to sell output — best market across all known stations. */
+  bestSellPoi: string | null;
+}
+
+/**
+ * Calculate profitability of a recipe at the current moment.
+ *
+ * Input cost accounts for items already owned in faction/station/cargo storage
+ * (those are treated as free — opportunity cost is ignored intentionally so the
+ * crafter prioritises consuming existing stockpiles).
+ */
+export function getRecipeProfitability(ctx: RoutineContext, recipe: Recipe): RecipeProfitability {
+  const { bot, mapStore } = ctx;
+
+  // ── Output revenue ──
+  const bestSell = mapStore.getBestSellToMarketPrice(recipe.output_item_id);
+  const outputPrice = bestSell?.price ?? null;
+
+  // ── Input cost (zero for owned items) ──
+  let inputCost = 0;
+  for (const comp of recipe.components) {
+    const owned = countItem(ctx, comp.item_id);
+    const shortfall = Math.max(0, comp.quantity - owned);
+    if (shortfall <= 0) continue;
+
+    // Use current-station price first, fall back to best known price anywhere
+    const localPrice = bot.poi
+      ? mapStore.getPriceAt(comp.item_id, bot.poi, 'buy_from_market')
+      : null;
+    const globalBest = mapStore.findBestSellPrice(comp.item_id);
+    const unitCost = localPrice ?? globalBest?.price ?? 0;
+    inputCost += unitCost * shortfall;
+  }
+
+  // ── Derived metrics ──
+  const outputValue = outputPrice !== null ? outputPrice * (recipe.output_quantity || 1) : null;
+  const profit      = outputValue !== null ? outputValue - inputCost : -inputCost;
+  const profitPct   = inputCost > 0
+    ? (profit / inputCost) * 100
+    : (profit > 0 ? Infinity : 0);
+
+  return {
+    recipe,
+    outputPrice,
+    inputCost,
+    profit,
+    profitPct,
+    fullyFunded: hasMaterialsAnywhere(ctx, recipe),
+    bestSellPoi: bestSell?.poiId ?? null,
+  };
+}
+
 /** Check if the bot has the required skill level to craft a recipe. */
 function canCraftSkillwise(ctx: RoutineContext, recipe: Recipe): { ok: boolean; reason: string } {
   if (!recipe.requiredSkill) return { ok: true, reason: "" };
@@ -471,6 +544,46 @@ function canCraftSkillwise(ctx: RoutineContext, recipe: Recipe): { ok: boolean; 
   const myLevel = ctx.bot.getSkillLevel(skillId);
   if (myLevel >= level) return { ok: true, reason: "" };
   return { ok: false, reason: `${skillName} Lv${level} required (have Lv${myLevel})` };
+}
+
+// ── Crafter score for smart_selector ────────────────────────
+
+/**
+ * Quick crafter attractiveness score.
+ * Reads the catalog cache only — no API calls, safe to call during scoring.
+ *
+ * Returns 0 when there is nothing to craft, higher values when more
+ * profitable recipes are available with current materials.
+ */
+export function scoreCrafter(ctx: RoutineContext, minProfitPct = 10): number {
+  const cached = Object.values(ctx.catalogStore.getAll().recipes);
+  const craftingSkill =
+    ctx.bot.getSkillLevel("crafting") ||
+    ctx.bot.getSkillLevel("crafting_basic") ||
+    ctx.bot.getSkillLevel("manufacturing") ||
+    1;
+
+  // No catalog yet — give a moderate base so crafter can run once to populate it
+  if (cached.length === 0) return craftingSkill * 6;
+
+  const recipes = parseRecipes(cached).filter(r => r.components.length > 0);
+  if (recipes.length === 0) return 0;
+
+  let profitableCount = 0;
+  let totalProfit = 0;
+  for (const recipe of recipes) {
+    if (!canCraftSkillwise(ctx, recipe).ok) continue;
+    if (!hasMaterialsAnywhere(ctx, recipe)) continue;
+    const p = getRecipeProfitability(ctx, recipe);
+    if (p.profitPct >= minProfitPct) {
+      profitableCount++;
+      totalProfit += p.profit;
+    }
+  }
+
+  if (profitableCount === 0) return craftingSkill * 4; // skill-based fallback
+  const profitBonus = Math.min(30, Math.round(totalProfit / 500));
+  return craftingSkill * 5 + profitableCount * 8 + profitBonus;
 }
 
 // ── Crafter routine ──────────────────────────────────────────
@@ -498,8 +611,8 @@ export const crafterRoutine: Routine = async function* (ctx: RoutineContext) {
 
     const settings = getCrafterSettings();
 
-    if (settings.craftLimits.length === 0) {
-      ctx.log("info", "No craft limits configured — check Crafter settings. Waiting 30s...");
+    if (settings.craftLimits.length === 0 && !settings.autoCraft) {
+      ctx.log("info", "No craft limits configured and autoCraft is off — check Crafter settings. Waiting 30s...");
       await sleep(30000);
       continue;
     }
@@ -550,6 +663,27 @@ export const crafterRoutine: Routine = async function* (ctx: RoutineContext) {
 
     // ── Build recipe index for prerequisite lookup ──
     const recipeIndex = buildRecipeIndex(recipes);
+
+    // ── BOM summary: log what's craftable right now (Step 5) ──
+    yield "bom_check";
+    {
+      const craftableNow = recipes.filter(r =>
+        r.components.length > 0 &&
+        hasMaterialsAnywhere(ctx, r) &&
+        canCraftSkillwise(ctx, r).ok
+      );
+      const profItems = craftableNow
+        .map(r => getRecipeProfitability(ctx, r))
+        .filter(p => p.outputPrice !== null)
+        .sort((a, b) => b.profit - a.profit)
+        .slice(0, 5);
+      if (craftableNow.length > 0) {
+        const profStr = profItems.length > 0
+          ? profItems.map(p => `${p.recipe.name} (+${Math.round(p.profit)}cr)`).join(", ")
+          : craftableNow.slice(0, 5).map(r => r.name).join(", ");
+        ctx.log("craft", `Craftable now (${craftableNow.length}): ${profStr}`);
+      }
+    }
 
     // ── Process each configured limit ──
     let totalCrafted = 0;
@@ -705,6 +839,66 @@ export const crafterRoutine: Routine = async function* (ctx: RoutineContext) {
           skillSummary.push(`${recipe.name} (skill too low, ground ${xpCrafted.join(", ")} for XP)`);
         } else {
           skillSummary.push(`${recipe.name} (skill too low, no XP recipes available)`);
+        }
+      }
+    }
+
+    // ── autoCraft: profit-based recipe selection (Step 3) ──
+    if (settings.autoCraft && bot.state === "running") {
+      yield "auto_craft_select";
+
+      // Score all recipes: skill ok + has materials + profit >= threshold
+      const ranked = recipes
+        .filter(r => r.components.length > 0 && canCraftSkillwise(ctx, r).ok)
+        .map(r => getRecipeProfitability(ctx, r))
+        .filter(p => p.fullyFunded && p.profitPct >= settings.minProfitPct)
+        .sort((a, b) => b.profit - a.profit)
+        .slice(0, settings.maxAutoCraftRecipes);
+
+      if (ranked.length === 0) {
+        ctx.log("craft", `autoCraft: no recipe meets minProfitPct=${settings.minProfitPct}% with current stock`);
+      } else {
+        ctx.log("craft", `autoCraft: top picks — ${ranked.map(p => `${p.recipe.name} (${Math.round(p.profitPct)}%)`).join(", ")}`);
+      }
+
+      for (const prof of ranked) {
+        if (bot.state !== "running") break;
+        const recipe = prof.recipe;
+
+        // Refresh storage before each recipe
+        await bot.refreshCargo();
+        if (bot.docked) { await bot.refreshStorage(); await bot.refreshFactionStorage(); }
+
+        if (!hasMaterialsAnywhere(ctx, recipe)) continue; // materials may have been consumed
+
+        await withdrawFactionMaterials(ctx, recipe);
+        await withdrawStorageMaterials(ctx, recipe);
+        if (getMissingMaterial(ctx, recipe)) {
+          // Try prereqs once
+          const preC = await craftPrerequisites(ctx, recipe, recipeIndex);
+          if (preC.length > 0) prereqSummary.push(...preC);
+          await bot.refreshCargo();
+          if (bot.docked) { await bot.refreshStorage(); await bot.refreshFactionStorage(); }
+          await withdrawFactionMaterials(ctx, recipe);
+          await withdrawStorageMaterials(ctx, recipe);
+          if (getMissingMaterial(ctx, recipe)) continue;
+        }
+
+        // Craft as many batches as materials allow (cap at 20)
+        for (let batch = 0; batch < 20 && bot.state === "running"; batch++) {
+          yield `auto_craft_${recipe.recipe_id}`;
+          const craftResp = await bot.exec("craft", { recipe_id: recipe.recipe_id, count: 1 });
+          if (craftResp.error) break;
+          const result = craftResp.result as Record<string, unknown> | undefined;
+          const qty = (result?.count as number) || (result?.quantity as number) || recipe.output_quantity || 1;
+          totalCrafted += qty;
+          bot.stats.totalCrafted += qty;
+          craftedSummary.push(`${qty}x ${recipe.name}`);
+          await bot.refreshCargo();
+          if (!hasMaterialsAnywhere(ctx, recipe)) break;
+          await withdrawFactionMaterials(ctx, recipe);
+          await withdrawStorageMaterials(ctx, recipe);
+          if (getMissingMaterial(ctx, recipe)) break;
         }
       }
     }

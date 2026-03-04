@@ -1,7 +1,7 @@
 <template>
   <div class="flex-1 flex flex-col gap-4 p-4 overflow-hidden">
     <!-- Stats Header -->
-    <div class="flex items-center gap-4">
+    <div class="flex items-center gap-4 flex-wrap">
       <h3 class="text-sm font-semibold text-space-text-bright">Fleet Statistics</h3>
       <div class="inline-flex border border-space-border rounded-md overflow-hidden">
         <button 
@@ -10,6 +10,29 @@
           class="px-4 py-1.5 text-xs font-medium border-r border-space-border last:border-r-0 transition-colors"
           :class="statsPeriod === p.id ? 'bg-space-accent text-white' : 'bg-space-card text-space-text-dim hover:text-space-text hover:bg-space-row-hover'"
         >{{ p.label }}</button>
+      </div>
+      <!-- Pool selector -->
+      <div class="flex items-center gap-2 ml-auto">
+        <span class="text-xs text-space-text-dim">Pool:</span>
+        <div class="inline-flex border border-space-border rounded-md overflow-hidden">
+          <button
+            @click="selectedPool = null"
+            class="px-3 py-1.5 text-xs font-medium border-r border-space-border transition-colors"
+            :class="selectedPool === null ? 'bg-space-accent text-white' : 'bg-space-card text-space-text-dim hover:text-space-text hover:bg-space-row-hover'"
+          >Current</button>
+          <button
+            v-for="pool in otherPools" :key="pool"
+            @click="selectedPool = pool"
+            class="px-3 py-1.5 text-xs font-medium border-r border-space-border last:border-r-0 transition-colors"
+            :class="selectedPool === pool ? 'bg-space-accent text-white' : 'bg-space-card text-space-text-dim hover:text-space-text hover:bg-space-row-hover'"
+          >{{ pool }}</button>
+          <button
+            @click="loadAllPools"
+            :disabled="botStore.allPoolsLoading"
+            class="px-3 py-1.5 text-xs font-medium bg-space-card text-space-text-dim hover:text-space-text hover:bg-space-row-hover transition-colors"
+            title="Load stats from all pools"
+          >{{ botStore.allPoolsLoading ? '⏳' : '🔄' }}</button>
+        </div>
       </div>
     </div>
 
@@ -121,8 +144,9 @@
     <div class="flex gap-4 flex-1 min-h-0 overflow-hidden">
       <!-- Per-Bot Table -->
       <div class="flex-1 bg-space-card border border-space-border rounded-lg flex flex-col overflow-hidden">
-        <div class="px-3 py-2 border-b border-space-border">
+        <div class="px-3 py-2 border-b border-space-border flex items-center gap-2">
           <span class="text-xs font-semibold text-space-text-dim uppercase">Per-Bot Breakdown</span>
+          <span v-if="selectedPool" class="text-[11px] badge badge-yellow">{{ selectedPool }}</span>
         </div>
         <div class="flex-1 overflow-auto scrollbar-dark">
           <table class="w-full text-sm">
@@ -208,13 +232,33 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed } from 'vue';
+import { ref, computed, onMounted } from 'vue';
 import { useBotStore } from '../stores/botStore';
 
 // ── Mission Analytics state ─────────────────────────────
 
 const botStore = useBotStore();
 const statsPeriod = ref<'today' | 'week' | 'all'>('today');
+const selectedPool = ref<string | null>(null);
+
+const otherPools = computed(() =>
+  Object.keys(botStore.allPoolsStats).filter(p => p !== currentPoolKey.value)
+);
+
+const currentPoolKey = computed(() => {
+  const keys = Object.keys(botStore.allPoolsStats);
+  if (keys.length === 0) return '';
+  return keys[0]; // server puts current pool first
+});
+
+async function loadAllPools() {
+  await botStore.fetchAllPoolsStats();
+  if (selectedPool.value && !otherPools.value.includes(selectedPool.value)) {
+    selectedPool.value = null;
+  }
+}
+
+onMounted(() => { botStore.fetchAllPoolsStats(); });
 
 interface MissionRow { bot: string; count: number; credits: number; lastTitle: string; }
 const missionRows = ref<MissionRow[]>([]);
@@ -320,14 +364,24 @@ function aggregateStats(botDaily: Record<string, any> | undefined, days: number)
 
 const periodDays = computed(() => statsPeriod.value === 'today' ? 1 : statsPeriod.value === 'week' ? 7 : 0);
 
+const activeStatsSource = computed<Record<string, any>>(() => {
+  if (selectedPool.value && botStore.allPoolsStats[selectedPool.value]) {
+    return botStore.allPoolsStats[selectedPool.value];
+  }
+  return botStore.statsDaily;
+});
+
 const botRows = computed(() => {
   const days = periodDays.value;
-  const nameSet = new Set(Object.keys(botStore.statsDaily));
-  for (const b of botStore.bots) nameSet.add(b.username);
+  const src = activeStatsSource.value;
+  const nameSet = new Set(Object.keys(src));
+  if (!selectedPool.value) {
+    for (const b of botStore.bots) nameSet.add(b.username);
+  }
   const names = [...nameSet].sort();
   return names.map(name => ({
     name,
-    ...aggregateStats(botStore.statsDaily[name], days),
+    ...aggregateStats(src[name], days),
   }));
 });
 

@@ -31,11 +31,13 @@ import { gasHarvesterRoutine } from "./gas_harvester.js";
 import { iceHarvesterRoutine } from "./ice_harvester.js";
 import { returnHomeRoutine } from "./return_home.js";
 import { hunterRoutine } from "./hunter.js";
+import { crafterRoutine, scoreCrafter } from "./crafter.js";
 import {
   readSettings,
   ensureDocked,
   tryRefuel,
   sleep,
+  isOreBeltPoi,
 } from "./common.js";
 
 // ── Types ─────────────────────────────────────────────────────
@@ -45,6 +47,7 @@ interface SmartSelectorSettings {
   minTradeMargin: number;
   enableHunter: boolean;
   forcedRoutine: string;
+  minCrafterProfitPct: number;
 }
 
 interface RoutineCandidate {
@@ -61,10 +64,11 @@ function getSettings(username: string): SmartSelectorSettings {
   const s = (all.smart_selector || {}) as Record<string, unknown>;
   const perBot = ((s.bots || {}) as Record<string, Record<string, unknown>>)[username] || {};
   return {
-    minMissionReward: (perBot.minMissionReward as number) ?? (s.minMissionReward as number) ?? 500,
-    minTradeMargin:   (perBot.minTradeMargin as number)   ?? (s.minTradeMargin as number)   ?? 300,
-    enableHunter:     Boolean(perBot.enableHunter ?? s.enableHunter ?? false),
-    forcedRoutine:    String(perBot.forcedRoutine  ?? s.forcedRoutine  ?? ""),
+    minMissionReward:    (perBot.minMissionReward    as number)  ?? (s.minMissionReward    as number)  ?? 500,
+    minTradeMargin:      (perBot.minTradeMargin      as number)  ?? (s.minTradeMargin      as number)  ?? 300,
+    enableHunter:        (perBot.enableHunter        as boolean) ?? (s.enableHunter        as boolean) ?? false,
+    forcedRoutine:       (perBot.forcedRoutine       as string)  ?? (s.forcedRoutine       as string)  ?? "",
+    minCrafterProfitPct: (perBot.minCrafterProfitPct as number)  ?? (s.minCrafterProfitPct as number)  ?? 10,
   };
 }
 
@@ -80,6 +84,35 @@ function skillLevel(ctx: RoutineContext, ...ids: string[]): number {
 }
 
 // ── System POI helpers ────────────────────────────────────────
+
+/**
+ * Score the miner based on ore belt availability:
+ * - Current system has a belt  → full score (miningLevel * 10 + 20)
+ * - Another known system has a belt → reduced score (miningLevel * 6) — miner will navigate
+ * - No belt anywhere in the map → near-zero (1) — should not win selection
+ */
+function scoreMiner(ctx: RoutineContext, miningLevel: number): number {
+  const sys = ctx.mapStore.getSystem(ctx.bot.system);
+
+  // Check current system first
+  if (sys?.pois.some(p => isOreBeltPoi(p.type))) {
+    return miningLevel * 10 + 20;
+  }
+
+  // Check entire known map for any ore belt
+  const allSystems = ctx.mapStore.getAllSystems ? ctx.mapStore.getAllSystems() : {};
+  const anyBeltKnown = Object.values(allSystems).some(s =>
+    s.pois.some(p => isOreBeltPoi(p.type))
+  );
+
+  if (anyBeltKnown) {
+    // Miner will travel to another system — give it a lower score
+    return miningLevel * 6;
+  }
+
+  // No ore belt mapped at all — miner cannot do anything useful
+  return 1;
+}
 
 function currentSystemHasPoi(ctx: RoutineContext, keyword: string): boolean {
   const sys = ctx.mapStore.getSystem(ctx.bot.system);
@@ -233,9 +266,20 @@ async function buildCandidates(
       key: "miner",
       name: "Miner",
       fn: minerRoutineV2,
-      score: miningLevel * 10 + 20,
+      score: scoreMiner(ctx, miningLevel),
     },
   ];
+
+  // Crafter — dynamic score based on profitable craftable recipes in catalog cache
+  const craftingLevel = skillLevel(ctx, "crafting", "crafting_basic", "manufacturing");
+  if (craftingLevel > 0) {
+    candidates.push({
+      key: "crafter",
+      name: "Crafter",
+      fn: crafterRoutine,
+      score: scoreCrafter(ctx, settings.minCrafterProfitPct),
+    });
+  }
 
   if (settings.enableHunter) {
     const combatLevel = skillLevel(ctx, "combat", "fighting", "battle");
@@ -304,6 +348,40 @@ export const smartSelectorRoutine: Routine = async function* (ctx: RoutineContex
       await tryRefuel(ctx);
       await sleep(5_000);
       continue;
+    }
+
+    // ── Cargo-full escape hatch ───────────────────────────────
+    // If cargo is near-full, try to flush before scoring so the miner can work.
+    // Only loops back if flush actually freed space; otherwise falls through to
+    // routine scoring (return_home / trader can handle stuck cargo better).
+    const cargoRatio = bot.cargoMax > 0 ? bot.cargo / bot.cargoMax : 0;
+    if (cargoRatio >= 0.85) {
+      ctx.log("system", `SmartSelector: cargo full (${Math.round(cargoRatio * 100)}%) — flushing before next cycle`);
+      yield "flush_cargo";
+      const docked = await ensureDocked(ctx);
+      if (docked) {
+        await bot.refreshCargo();
+        for (const item of [...bot.inventory]) {
+          if (item.quantity <= 0) continue;
+          const sellResp = await bot.exec("sell", { item_id: item.itemId, quantity: item.quantity });
+          if (sellResp.error) {
+            const facResp = await bot.exec("faction_deposit_items", { item_id: item.itemId, quantity: item.quantity });
+            if (facResp.error) {
+              await bot.exec("deposit_items", { item_id: item.itemId, quantity: item.quantity });
+            }
+          }
+        }
+        await bot.refreshStatus();
+        ctx.log("system", `SmartSelector: cargo after flush — ${bot.cargo}/${bot.cargoMax}`);
+      }
+      const newRatio = bot.cargoMax > 0 ? bot.cargo / bot.cargoMax : 0;
+      if (newRatio < 0.85) {
+        // Cargo freed — re-evaluate from scratch
+        await sleep(3_000);
+        continue;
+      }
+      // Flush had no effect — fall through to scoring so a routine can handle it
+      ctx.log("system", "SmartSelector: cargo flush ineffective — proceeding to scoring");
     }
 
     // ── Score and select ─────────────────────────────────────

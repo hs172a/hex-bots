@@ -189,6 +189,23 @@ export class CatalogStore {
 
   // ── Staleness check ───────────────────────────────────────
 
+  /**
+   * Wipe all catalog entries from in-memory store, SQLite, and the JSON cache file.
+   * Called before a force-refresh so removed/renamed items don't persist.
+   */
+  clearAll(): void {
+    if (this.saveTimer) { clearTimeout(this.saveTimer); this.saveTimer = null; }
+    this.data = { version: 1, lastFetched: null, items: {}, ships: {}, skills: {}, recipes: {} };
+    if (this._db) {
+      this._db.run("DELETE FROM catalog_items");
+      this._db.run("DELETE FROM catalog_meta");
+    }
+    if (existsSync(CATALOG_FILE)) {
+      writeFileSync(CATALOG_FILE, JSON.stringify(this.data, null, 2) + "\n", "utf-8");
+    }
+    console.log("[CatalogStore] Cleared all catalog data");
+  }
+
   /** True if catalog data is missing or older than 24 hours. */
   isStale(): boolean {
     if (!this.data.lastFetched) return true;

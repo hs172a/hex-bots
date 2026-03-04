@@ -283,8 +283,11 @@ async function handleCargoFromResponse(
       return false;
     }
     // Default: personal storage
-    await bot.exec("deposit_items", { item_id: itemId, quantity });
-    return true;
+    const storeResp = await bot.exec("deposit_items", { item_id: itemId, quantity });
+    if (storeResp.error) {
+      ctx.log("trade", `Station deposit failed for ${displayName}: ${storeResp.error.message}`);
+    }
+    return !storeResp.error;
   }
 
   const modeLabel: Record<string, string> = {
@@ -309,12 +312,12 @@ async function handleCargoFromResponse(
           const factionResp = await bot.exec("faction_deposit_items", { item_id: itemId, quantity });
           if (factionResp.error) {
             ctx.log("error", `All deposit methods failed for ${displayName}: ${factionResp.error.message}`);
-            continue;
+            continue; // item stays in cargo — skip the push below
           }
         }
       }
     }
-    unloadedItems.push(`${quantity}x ${displayName}`);
+    unloadedItems.push(`${quantity}x ${displayName}`); // only reached when at least one method succeeded
   }
 
   if (unloadedItems.length > 0) {

@@ -654,6 +654,59 @@ export class MapStore {
     return null;
   }
 
+  /**
+   * Get a representative price for an item at a specific station POI.
+   *
+   * - `side = 'sell_to_market'` → we want to SELL this item → look for buy orders
+   *   (buyers willing to pay). Returns best_buy or VW-avg of buy orders.
+   * - `side = 'buy_from_market'` → we want to BUY this item → look for sell orders
+   *   (sellers asking). Returns best_sell or VW-avg of sell orders.
+   *
+   * Uses volume-weighted average across individual orders when available,
+   * falls back to the MarketRecord summary price.
+   */
+  getPriceAt(itemId: string, poiId: string, side: 'sell_to_market' | 'buy_from_market'): number | null {
+    const orderType: OrderRecord['order_type'] = side === 'sell_to_market' ? 'buy' : 'sell';
+
+    for (const sys of Object.values(this.data.systems)) {
+      const poi = sys.pois.find(p => p.id === poiId);
+      if (!poi) continue;
+
+      // Try individual order book first — volume-weighted average
+      const relevant = poi.orders.filter(
+        o => o.item_id === itemId && o.order_type === orderType && o.quantity > 0 && o.price > 0
+      );
+      if (relevant.length > 0) {
+        const totalVol = relevant.reduce((s, o) => s + o.quantity, 0);
+        const vwPrice  = relevant.reduce((s, o) => s + o.price * o.quantity, 0) / totalVol;
+        return Math.round(vwPrice);
+      }
+
+      // Fallback: MarketRecord summary
+      const rec = poi.market.find(m => m.item_id === itemId);
+      if (!rec) return null;
+      return side === 'sell_to_market' ? rec.best_buy : rec.best_sell;
+    }
+    return null;
+  }
+
+  /**
+   * Get the best sell-to-market price for an item across ALL known stations.
+   * Used by crafter to find where to sell crafted output.
+   */
+  getBestSellToMarketPrice(itemId: string): { poiId: string; poiName: string; systemId: string; price: number } | null {
+    let best: { poiId: string; poiName: string; systemId: string; price: number } | null = null;
+    for (const [sysId, sys] of Object.entries(this.data.systems)) {
+      for (const poi of sys.pois) {
+        const price = this.getPriceAt(itemId, poi.id, 'sell_to_market');
+        if (price !== null && (best === null || price > best.price)) {
+          best = { poiId: poi.id, poiName: poi.name, systemId: sysId, price };
+        }
+      }
+    }
+    return best;
+  }
+
   /** Find the best sell price for an item across all known markets. */
   findBestSellPrice(itemId: string): { systemId: string; poiId: string; poiName: string; price: number } | null {
     let best: { systemId: string; poiId: string; poiName: string; price: number } | null = null;
@@ -941,6 +994,22 @@ export class MapStore {
     } catch {
       return { seeded: 0, known: 0, failed: true };
     }
+  }
+
+  /**
+   * Wipe all systems from in-memory store, SQLite, and the JSON cache file.
+   * Called before a force-refresh so stale/removed systems don't persist.
+   */
+  clearAll(): void {
+    this.data = { version: 1, last_saved: now(), systems: {} };
+    this.routeCache.clear();
+    if (this._db) {
+      this._db.run("DELETE FROM map_systems");
+    }
+    if (existsSync(MAP_FILE)) {
+      writeFileSync(MAP_FILE, JSON.stringify(this.data, null, 2) + "\n", "utf-8");
+    }
+    console.log("[MapStore] Cleared all system data");
   }
 
   /** Return the full systems map for the web dashboard. */

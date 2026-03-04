@@ -98,6 +98,20 @@ export const useBotStore = defineStore('bots', () => {
   const publicStations = ref<any[]>([]);
   const mapData = ref<Record<string, any>>({});
   const statsDaily = ref<Record<string, any>>({});
+  // poolName → { botName → { date → DayStats } }
+  const allPoolsStats = ref<Record<string, Record<string, any>>>({});
+  const allPoolsLoading = ref(false);
+
+  async function fetchAllPoolsStats() {
+    if (allPoolsLoading.value) return;
+    allPoolsLoading.value = true;
+    try {
+      const res = await fetch('/api/stats/all-pools');
+      if (res.ok) allPoolsStats.value = await res.json();
+    } catch { /* ignore network errors */ } finally {
+      allPoolsLoading.value = false;
+    }
+  }
 
   // ── Rate-limit block state ──
   const ipBlocked = ref(false);
@@ -382,6 +396,9 @@ export const useBotStore = defineStore('bots', () => {
     publicStations,
     mapData,
     statsDaily,
+    allPoolsStats,
+    allPoolsLoading,
+    fetchAllPoolsStats,
     logs,
     activityLogs,
     broadcastLogs,

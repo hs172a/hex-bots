@@ -707,16 +707,18 @@ async function main(): Promise<void> {
   server.onRefreshCatalog = async (): Promise<string> => {
     const bot = [...bots.values()][0];
     if (!bot) throw new Error("No bots available");
+    catalogStore.clearAll();
     await catalogStore.fetchAll(bot.api);
-    server.logSystem(`[Admin] Catalog refreshed: ${catalogStore.getSummary()}`);
+    server.logSystem(`[Admin] Catalog wiped and refreshed: ${catalogStore.getSummary()}`);
     return catalogStore.getSummary();
   };
 
   server.onRefreshMap = async (): Promise<string> => {
+    mapStore.clearAll();
     const { seeded, known, failed } = await mapStore.seedFromMapAPI();
     if (failed) throw new Error("Map seed failed");
-    const msg = `${seeded} new system(s), ${known} already known`;
-    server.logSystem(`[Admin] Galaxy map refreshed: ${msg}`);
+    const msg = `${seeded} system(s) seeded from API (full wipe + re-seed)`;
+    server.logSystem(`[Admin] Galaxy map wiped and refreshed: ${msg}`);
     server.updateMapData();
     return msg;
   };

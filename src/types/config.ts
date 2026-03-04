@@ -78,7 +78,7 @@ export const LoggingConfigSchema = z.object({
   /** Enable API call logging to files */
   api_logging: z.boolean().default(false),
   /** Enable file logging (console tee to logs/) */
-  file_logging: z.boolean().default(true),
+  file_logging: z.boolean().default(false),
 });
 
 // ── Economy Config (for future Economy Engine) ──

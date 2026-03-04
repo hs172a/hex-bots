@@ -5,6 +5,39 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [1.7.0] - 2026-03-04
+
+### Added
+- **SmartSelector: miner POI-awareness** (`smart_selector.ts`) — new `scoreMiner()` helper:
+  - Current system has ore belt → full score (`miningLevel × 10 + 20`)
+  - Another known system has ore belt → reduced score (`miningLevel × 6`, miner will navigate)
+  - No ore belt mapped anywhere → score = 1 (will not win candidate selection)
+  - Prevents the recurring `No minable POI found — waiting 30s` loop when placed in a system without asteroids
+- **Multi-pool stats** — Stats page now shows statistics across all sibling bot pools:
+  - `server.ts` new `/api/stats/all-pools` endpoint scans `../*/data/stats.json`
+  - `botStore.ts` new `allPoolsStats`, `allPoolsLoading`, `fetchAllPoolsStats()`
+  - `StatsView.vue` pool selector in header (Current + one button per discovered pool + 🔄 reload); Per-Bot table and Fleet Totals switch data source on selection; yellow pool name badge on table header
+- **Force-refresh full wipe** — Force-refresh buttons now completely clear stale data before re-seeding:
+  - `mapStore.clearAll()` — deletes all SQLite rows, in-memory data, and `map.json`
+  - `catalogStore.clearAll()` — deletes all SQLite rows, in-memory data, and `catalog.json`
+  - Both called in `botmanager.ts` before `seedFromMapAPI` / `fetchAll` respectively
+- **Crafter: profit engine** (`crafter.ts` + `mapStore.ts`):
+  - `mapStore.getPriceAt(itemId, poiId, side)` — volume-weighted average from individual order book, fallback to `MarketRecord` summary
+  - `mapStore.getBestSellToMarketPrice(itemId)` — highest buy-price across all known stations
+  - `getRecipeProfitability(ctx, recipe)` — calculates `outputPrice`, `inputCost` (owned items = 0 cost), `profit`, `profitPct`, `fullyFunded`, `bestSellPoi`
+  - `scoreCrafter(ctx, minProfitPct)` — fast score from catalog cache (no API calls), used by SmartSelector
+  - `autoCraft` mode — new settings `autoCraft / minProfitPct / maxAutoCraftRecipes`; ranks all craftable recipes by profit margin, crafts top N after `craftLimits` loop
+  - BOM summary log — at each cycle start logs craftable recipe count + top-5 by profit with `+Xcr` annotation
+- **SmartSelector: crafter as dynamic candidate** — crafter added to `buildCandidates()` when `craftingLevel > 0`; score = `scoreCrafter()`; new `minCrafterProfitPct` setting (per-bot + global)
+- **SmartSelector: cargo-full escape hatch** — if cargo ≥ 85% at evaluation time, dock and flush before scoring (prevents miner dead loop)
+
+### Fixed
+- **`common.ts collectFromStorage`** — broadened not-docked detection: now catches `'must be docked'` and `'provide a station_id'` server messages in addition to `not_docked` code
+- **`miner-v2.ts depositItem`** — `storage` mode now returns `!storeResp.error` instead of always `true`, so failed deposits are properly handled
+- **`miner-v2.ts unloadedItems`** — `unloadedItems.push()` moved inside the success path so items are only counted as unloaded when at least one deposit method succeeded
+
+---
+
 ## [1.6.0] - 2026-03-03
 
 ### Added
