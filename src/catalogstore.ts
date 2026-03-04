@@ -323,6 +323,34 @@ export class CatalogStore {
   getSummary(): string {
     return `${Object.keys(this.data.items).length} items, ${Object.keys(this.data.ships).length} ships, ${Object.keys(this.data.skills).length} skills, ${Object.keys(this.data.recipes).length} recipes`;
   }
+
+  // ── DataSync helpers ─────────────────────────────────────
+
+  /**
+   * Merge catalog entries received from a remote VM.
+   * Only adds entries not already present — existing local data is never overwritten.
+   */
+  mergeItems(
+    items: CatalogItem[],
+    ships: CatalogShip[],
+    skills: CatalogSkill[] = [],
+    recipes: CatalogRecipe[] = [],
+  ): void {
+    let changed = false;
+    for (const item of items) {
+      if (item.id && !this.data.items[item.id]) { this.data.items[item.id] = item; changed = true; }
+    }
+    for (const ship of ships) {
+      if (ship.id && !this.data.ships[ship.id]) { this.data.ships[ship.id] = ship; changed = true; }
+    }
+    for (const skill of skills) {
+      if (skill.id && !this.data.skills[skill.id]) { this.data.skills[skill.id] = skill; changed = true; }
+    }
+    for (const recipe of recipes) {
+      if (recipe.id && !this.data.recipes[recipe.id]) { this.data.recipes[recipe.id] = recipe; changed = true; }
+    }
+    if (changed) this.scheduleSave();
+  }
 }
 
 /** Extract an array of entries from a catalog API response. */

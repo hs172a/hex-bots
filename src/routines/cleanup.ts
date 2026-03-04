@@ -35,9 +35,9 @@ function getCleanupSettings(username?: string): {
   const t = all.cleanup || {};
   const botOverrides = username ? (all[username] || {}) : {};
   return {
-    // Per-bot override > cleanup-specific > general faction storage > "sol"
+    // Per-bot override > cleanup-specific > general faction storage > "sol_star"
     homeSystem: (botOverrides.homeSystem as string)
-      || (t.homeSystem as string) || (general.factionStorageSystem as string) || "sol",
+      || (t.homeSystem as string) || (general.factionStorageSystem as string) || "sol_star",
     homeStation: (botOverrides.homeStation as string)
       || (t.homeStation as string) || (general.factionStorageStation as string) || "",
     refuelThreshold: (t.refuelThreshold as number) || 50,

@@ -372,11 +372,11 @@ async function engageTarget(
     const hullPct = bot.maxHull > 0 ? Math.round((bot.hull / bot.maxHull) * 100) : 100;
     if (hullPct <= fleeThreshold) {
       ctx.log("combat", `Hull critical (${hullPct}%) while advancing — fleeing!`);
-      await bot.exec("stance", { stance: "flee" });
+      await bot.exec("battle", { action: "stance", stance: "flee" });
       return false;
     }
 
-    const advResp = await bot.exec("advance");
+    const advResp = await bot.exec("battle", { action: "advance" });
     if (advResp.error) break;
   }
 
@@ -392,8 +392,8 @@ async function engageTarget(
     // Emergency flee
     if (hullPct <= fleeThreshold) {
       ctx.log("combat", `Hull critical (${hullPct}%) — fleeing!`);
-      await bot.exec("stance", { stance: "flee" });
-      await bot.exec("retreat");
+      await bot.exec("battle", { action: "stance", stance: "flee" });
+      await bot.exec("battle", { action: "retreat" });
       return false;
     }
 
@@ -401,9 +401,9 @@ async function engageTarget(
     const shieldsCritical = shieldPct < 15 && hullPct < 70;
     if (shieldsCritical) {
       ctx.log("combat", `Bracing (shields ${shieldPct}%, hull ${hullPct}%) — regenerating shields`);
-      await bot.exec("stance", { stance: "brace" });
+      await bot.exec("battle", { action: "stance", stance: "brace" });
     } else {
-      await bot.exec("stance", { stance: "fire" });
+      await bot.exec("battle", { action: "stance", stance: "fire" });
     }
 
     ctx.log("combat", `Tick ${tick + 1}: hull ${hullPct}% | shields ${shieldPct}% — attacking ${target.name}`);

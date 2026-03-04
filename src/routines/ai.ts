@@ -213,7 +213,7 @@ MINING (must be undocked, at a belt/gas/ice POI — NOT the sun, planet, or stat
 TRADING (must be docked at a station with market):
   game_exec("view_market")                            — see market prices here
   game_exec("buy",  {item_id: "item_id", quantity: 5})
-  game_exec("sell", {item_id: "ore_iron", quantity: 10})
+  game_exec("sell", {item_id: "iron_ore", quantity: 10})
 
 CRAFTING (must be docked at a station with crafting):
   game_exec("craft", {recipe_id: "recipe_id", count: 1})
@@ -221,8 +221,8 @@ CRAFTING (must be docked at a station with crafting):
 STATION SERVICES (must be docked):
   game_exec("refuel")                                 — refuel with credits
   game_exec("repair")                                 — repair hull with credits
-  game_exec("deposit_items",  {item_id: "ore_iron", quantity: 10})
-  game_exec("withdraw_items", {item_id: "ore_iron", quantity: 10})
+  game_exec("deposit_items",  {item_id: "iron_ore", quantity: 10})
+  game_exec("withdraw_items", {item_id: "iron_ore", quantity: 10})
 
 MISSIONS (must be docked):
   game_exec("get_missions")
@@ -386,7 +386,7 @@ const TOOL_HANDLERS: Record<string, ToolHandler> = {
     if (command === "jump" && !params.target_system) {
       return compact({
         error: "jump requires {target_system: 'sys_id'}. Call game_exec('get_system') to see adjacent system ids.",
-        hint: "Example: game_exec('jump', {target_system: 'sys_0042'})",
+        hint: "Example: game_exec('jump', {target_system: 'gliese_667'})",
       });
     }
 
@@ -517,7 +517,7 @@ const TOOLS: ToolDefinition[] = [
       parameters: {
         type: "object",
         properties: {
-          system_id: { type: "string", description: "The system ID (e.g. 'sol', 'sirius')" },
+          system_id: { type: "string", description: "The system ID (e.g. 'sol_star', 'sirius')" },
         },
         required: ["system_id"],
       },
@@ -531,7 +531,7 @@ const TOOLS: ToolDefinition[] = [
       parameters: {
         type: "object",
         properties: {
-          ore_id: { type: "string", description: "Ore item ID (e.g. 'ore_iron', 'ore_vanadium')" },
+          ore_id: { type: "string", description: "Ore item ID (e.g. 'iron_ore', 'vanadium_ore')" },
         },
         required: ["ore_id"],
       },

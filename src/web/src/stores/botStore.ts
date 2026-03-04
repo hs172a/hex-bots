@@ -64,6 +64,7 @@ export interface BotStatus {
   storage?: CargoItem[];
   factionStorage?: CargoItem[];
   factionId?: string;
+  tradingRestrictedUntil?: string | null;
   skills?: SkillEntry[];
   playerStats?: PlayerStats;
   marketData?: any[];
@@ -101,6 +102,10 @@ export const useBotStore = defineStore('bots', () => {
   // ── Rate-limit block state ──
   const ipBlocked = ref(false);
   const ipBlockEndsAt = ref(0); // ms timestamp
+
+  // ── DataSync status (client mode only) ──
+  const dataSyncOffline = ref(false);
+  const dataSyncMode = ref<'master' | 'client' | 'disabled'>('disabled');
 
   // ── Credits/hour tracking (rolling 1-hour window) ──
   const creditsHistory = ref<Record<string, Array<{ ts: number; credits: number }>>>({});
@@ -178,6 +183,7 @@ export const useBotStore = defineStore('bots', () => {
         if (data.logs?.system) systemLogs.value = data.logs.system.slice(-500);
         if (data.logs?.faction) factionLogLines.value = data.logs.faction.slice(-200);
         if (data.botLogs) botLogBuffers.value = data.botLogs;
+        if (data.dataSyncMode) dataSyncMode.value = data.dataSyncMode;
         break;
 
       case 'status':
@@ -266,6 +272,10 @@ export const useBotStore = defineStore('bots', () => {
         ipBlockEndsAt.value = (data.blocked && data.retryAfterSecs)
           ? Date.now() + data.retryAfterSecs * 1000
           : 0;
+        break;
+
+      case 'dataSyncStatus':
+        dataSyncOffline.value = data.offline === true;
         break;
     }
   }
@@ -395,6 +405,9 @@ export const useBotStore = defineStore('bots', () => {
     // Rate-limit state
     ipBlocked,
     ipBlockEndsAt,
+    // DataSync state
+    dataSyncOffline,
+    dataSyncMode,
     // Credits/hour
     botCreditsPerHour,
     // Helpers

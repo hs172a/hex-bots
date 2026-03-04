@@ -28,6 +28,31 @@
       <!-- Right side: block indicator + admin buttons + connection status -->
       <div class="flex items-center gap-2">
 
+        <!-- DataSync mode badge -->
+        <div
+          v-if="dataSyncMode === 'master'"
+          class="flex items-center gap-1 text-xs px-2 py-0.5 rounded border border-blue-700/50 bg-blue-900/20 text-blue-400"
+          title="This instance is the DataSync master server"
+        >
+          🌐 DS Master
+        </div>
+        <div
+          v-else-if="dataSyncMode === 'client' && !dataSyncOffline"
+          class="flex items-center gap-1 text-xs px-2 py-0.5 rounded border border-cyan-700/50 bg-cyan-900/20 text-cyan-400"
+          title="DataSync client — connected to master"
+        >
+          🔗 DS Client
+        </div>
+
+        <!-- DataSync offline warning -->
+        <div
+          v-if="dataSyncOffline"
+          class="flex items-center gap-1.5 text-xs px-2.5 py-1 rounded border border-red-700/60 bg-red-900/20 text-red-400 font-medium animate-pulse"
+          title="DataSync cannot reach master — SSH tunnel may be down"
+        >
+          🔌 DataSync Offline
+        </div>
+
         <!-- IP block warning -->
         <div
           v-if="ipBlocked"
@@ -119,6 +144,10 @@ const showProfile = ref(false);
 const profileBot = ref<any>(null);
 const botStore = useBotStore();
 let reconnectDelay = 1000;
+
+// ── DataSync state ──
+const dataSyncOffline = computed(() => botStore.dataSyncOffline);
+const dataSyncMode = computed(() => botStore.dataSyncMode);
 
 // ── IP block state ──
 const ipBlocked = computed(() => botStore.ipBlocked);

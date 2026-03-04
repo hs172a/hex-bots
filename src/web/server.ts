@@ -151,6 +151,9 @@ export class WebServer {
   onGetGoals: (() => unknown) | null = null;
   onSaveGoals: ((goals: unknown[]) => void) | null = null;
 
+  // DataSync mode — set by botmanager when datasync is enabled
+  dataSyncMode: 'master' | 'client' | 'disabled' = 'disabled';
+
   // Commander advisory data — set by botmanager
   onCommanderData: (() => unknown) | null = null;
 
@@ -407,6 +410,7 @@ export class WebServer {
             publicCatalog: publicCatalog.getAll(),
             mapData: mapStore.getAllSystems(),
             statsDaily: this.statsData.daily,
+            dataSyncMode: this.dataSyncMode,
             logs: {
               activity: this.activityLog,
               broadcast: this.broadcastLog,
@@ -545,6 +549,10 @@ export class WebServer {
 
   broadcastRateLimit(blocked: boolean, retryAfterSecs?: number): void {
     this.broadcast({ type: "rateLimitBlock", blocked, retryAfterSecs });
+  }
+
+  broadcastDataSyncStatus(offline: boolean): void {
+    this.broadcast({ type: "dataSyncStatus", offline });
   }
 
   // ── Stats flushing ──────────────────────────────────────────

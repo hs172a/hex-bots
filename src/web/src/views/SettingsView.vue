@@ -393,7 +393,7 @@
         </div>
         <div class="setting-row">
           <div><div class="text-sm text-space-text">Home System</div><div class="text-xs text-space-text-dim mt-0.5">Fallback system between trades. Empty = stay.</div></div>
-          <input type="text" v-model="traderForm.homeSystem" placeholder="e.g. sol" class="input text-sm min-w-[200px]" />
+          <input type="text" v-model="traderForm.homeSystem" placeholder="e.g. sol_star" class="input text-sm min-w-[200px]" />
         </div>
         <div class="setting-row">
           <div><div class="text-sm text-space-text">Refuel Threshold (%)</div></div>
@@ -987,7 +987,7 @@
           <ol class="list-decimal list-inside space-y-0.5">
             <li>Every N seconds: reads all bot statuses (state, credits, system, routine, stats)</li>
             <li>Sends fleet context + strategic instruction to LLM</li>
-            <li>LLM returns <code class="text-space-accent">fleet_command</code> decisions: start/stop/exec per bot</li>
+            <li>LLM returns <code class="text-space-accent">crimson_fleet_command</code> decisions: start/stop/exec per bot</li>
             <li>Executes decisions in order, up to max-actions-per-cycle cap</li>
             <li>Logs all decisions to <code class="text-space-accent">data/ai_commander_memory.json</code></li>
           </ol>

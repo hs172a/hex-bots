@@ -2,6 +2,7 @@ import { SpaceMoltAPI, type ApiResponse } from "./api.js";
 import { SessionManager } from "./session.js";
 import { mapStore, MapStore } from "./mapstore.js";
 import { catalogStore, CatalogStore } from "./catalogstore.js";
+import { sharedMarketCache } from "./shared-cache.js";
 import { EventEmitter } from "events";
 
 export type BotState = "idle" | "running" | "stopping" | "error";
@@ -93,6 +94,7 @@ export interface BotStatus {
   factionId: string;
   factionRank: string;
   isCloaked: boolean;
+  tradingRestrictedUntil: Date | null;
   inventory: CargoItem[];
   storage: CargoItem[];
   factionStorage: CargoItem[];
@@ -176,6 +178,9 @@ export class Bot extends EventEmitter {
   factionId = "";
   factionRank = "";
 
+  /** Station IDs known to have items in storage (populated from not_docked error messages). */
+  storageStations: Set<string> = new Set();
+
   /** Full module objects from last get_status. */
   shipModules: ShipModule[] = [];
 
@@ -190,6 +195,9 @@ export class Bot extends EventEmitter {
 
   /** Whether the bot's ship is currently cloaked. */
   isCloaked = false;
+
+  /** ISO timestamp until which trading/gifting is restricted (null = unrestricted). */
+  tradingRestrictedUntil: Date | null = null;
 
   /** Whether the bot's ship is dead (hull <= 0). */
   isDead = false;
@@ -276,7 +284,24 @@ export class Bot extends EventEmitter {
   /** Execute an API command, log the result, handle notifications. */
   async exec(command: string, payload?: Record<string, unknown>): Promise<ApiResponse> {
     this._lastAction = command;
+
+    // Fleet-wide shared market cache (L1) — avoid redundant API calls when multiple
+    // bots are docked at the same POI. Per-bot cache in api.ts acts as L2.
+    if (command === "view_market" && this.poi) {
+      const cached = sharedMarketCache.get(this.poi);
+      if (cached) return cached;
+    }
+
     let resp = await this.api.execute(command, payload);
+
+    // Populate shared market cache on success; invalidate on buy/sell mutations.
+    if (command === "view_market" && this.poi && !resp.error) {
+      sharedMarketCache.set(this.poi, resp);
+    } else if ((command === "sell" || command === "buy" ||
+                command === "create_sell_order" || command === "create_buy_order" ||
+                command === "cancel_order") && this.poi && !resp.error) {
+      sharedMarketCache.invalidate(this.poi);
+    }
 
     // Action pending — a previous game action is still resolving (10s tick).
     // Wait for the tick to complete then retry once.
@@ -517,6 +542,15 @@ export class Bot extends EventEmitter {
       // Cloak detection
       this.isCloaked = !!(p.is_cloaked || p.cloaked);
 
+      // Trading/gifting restriction (added in API update)
+      const rawRestriction = p.trading_restricted_until as string | null | undefined;
+      if (rawRestriction) {
+        const d = new Date(rawRestriction);
+        this.tradingRestrictedUntil = isNaN(d.getTime()) ? null : d;
+      } else {
+        this.tradingRestrictedUntil = null;
+      }
+
       // Death detection
       if (this.hull <= 0 && this.maxHull > 0) {
         this.isDead = true;
@@ -705,8 +739,8 @@ export class Bot extends EventEmitter {
     // Build a unified list from various API shapes:
     //   1. Array at top level: [{ skill_id, name, level }, ...]
     //   2. Array nested under .skills: { skills: [...] }
-    //   3. Dict keyed by skill_id: { crafting_basic: { level: 7, name: "..." }, ... }
-    //   4. Dict keyed by skill_id with numeric values: { crafting_basic: 7, ... }
+    //   3. Dict keyed by skill_id: { basic_crafting: { level: 7, name: "..." }, ... }
+    //   4. Dict keyed by skill_id with numeric values: { basic_crafting: 7, ... }
     const entries: Array<{ id: string; name: string; level: number }> = [];
 
     const rawArray: unknown[] = Array.isArray(r) ? r : Array.isArray(r.skills) ? r.skills as unknown[] : [];
@@ -907,7 +941,19 @@ export class Bot extends EventEmitter {
     // Use "stopping" if currently running so the for-await loop in start() detects it
     // on the next yield and breaks cleanly. Going directly to "idle" bypasses that check.
     // If already idle/stopping/error, set to idle immediately.
-    this.state = this._state === "running" ? "stopping" : "idle";
+    if (this._state === "running") {
+      this.state = "stopping";
+      // Fallback: if the generator is stuck in a long API retry and never yields,
+      // force "idle" after 15s so the bot doesn't remain in "stopping" indefinitely.
+      setTimeout(() => {
+        if (this._state === "stopping") {
+          this.state = "idle";
+          this.log("system", "Force-stopped (timeout)");
+        }
+      }, 15_000);
+    } else {
+      this.state = "idle";
+    }
     this.log("system", "Force-stopped");
   }
 
@@ -953,6 +999,7 @@ export class Bot extends EventEmitter {
       factionId: this.factionId,
       factionRank: this.factionRank,
       isCloaked: this.isCloaked,
+      tradingRestrictedUntil: this.tradingRestrictedUntil,
       inventory: this.inventory,
       storage: this.storage,
       factionStorage: this.factionStorage,

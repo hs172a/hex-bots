@@ -97,6 +97,26 @@
       </div>
     </div>
 
+    <!-- Credits/hr row -->
+    <div class="bg-space-card border border-space-border rounded-lg">
+      <div class="px-3 py-2 border-b border-space-border flex items-center justify-between">
+        <span class="text-xs font-semibold text-space-text-dim uppercase">💰 Credits / Hour (rolling 1h)</span>
+        <span class="text-[11px] text-space-text-dim">Live — updates with each bot status</span>
+      </div>
+      <div class="p-3 flex flex-wrap gap-3">
+        <div v-if="botStore.bots.length === 0" class="text-xs text-space-text-dim italic">No bots running.</div>
+        <div v-for="b in botStore.bots" :key="b.username"
+          class="flex flex-col items-center min-w-[100px] bg-space-bg border border-space-border rounded-md px-3 py-2">
+          <span class="text-xs text-space-text-dim truncate max-w-[90px]" :title="b.username">{{ b.username }}</span>
+          <span class="text-lg font-bold" :class="creditsPerHrClass(b.username)">
+            {{ fmtCreditsHr(botStore.botCreditsPerHour[b.username] ?? 0) }}
+          </span>
+          <span class="text-[10px] text-space-text-dim">cr/hr</span>
+          <span class="text-[11px] text-space-cyan mt-0.5">{{ fmt(b.credits ?? 0) }} ₡</span>
+        </div>
+      </div>
+    </div>
+
     <!-- Per-Bot Breakdown + Faction Activity -->
     <div class="flex gap-4 flex-1 min-h-0 overflow-hidden">
       <!-- Per-Bot Table -->
@@ -160,6 +180,30 @@
         </div>
       </div>
     </div>
+
+    <!-- Skills Breakdown -->
+    <div class="bg-space-card border border-space-border rounded-lg">
+      <div class="px-3 py-2 border-b border-space-border flex items-center justify-between">
+        <span class="text-xs font-semibold text-space-text-dim uppercase">🎓 Skill Levels</span>
+        <span class="text-[11px] text-space-text-dim">From last status update</span>
+      </div>
+      <div v-if="botsWithSkills.length === 0" class="px-4 py-3 text-xs text-space-text-dim italic">
+        No skill data yet — skills load on bot status update.
+      </div>
+      <div v-else class="p-3 flex flex-wrap gap-4">
+        <div v-for="b in botsWithSkills" :key="b.username" class="flex-1 min-w-[200px]">
+          <div class="text-xs font-semibold text-space-text-bright mb-1.5">{{ b.username }}</div>
+          <div class="flex flex-wrap gap-1">
+            <span v-for="s in b.skills" :key="s.skill_id"
+              class="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] border"
+              :class="skillBadgeClass(s.level)">
+              <span class="font-bold">{{ s.level }}</span>
+              <span class="text-space-text-dim truncate max-w-[100px]" :title="s.skill_id">{{ fmtSkillName(s.skill_id) }}</span>
+            </span>
+          </div>
+        </div>
+      </div>
+    </div>
   </div>
 </template>
 
@@ -216,6 +260,41 @@ const logFilters = ['All', 'Deposit', 'Withdraw', 'Donation', 'Gift'];
 
 function fmt(n: number): string {
   return new Intl.NumberFormat().format(n);
+}
+
+function fmtCreditsHr(n: number): string {
+  if (n === 0) return '—';
+  const abs = Math.abs(n);
+  if (abs >= 1_000_000) return (n / 1_000_000).toFixed(1) + 'M';
+  if (abs >= 1_000) return (n / 1_000).toFixed(1) + 'k';
+  return String(n);
+}
+
+function creditsPerHrClass(username: string): string {
+  const v = botStore.botCreditsPerHour[username] ?? 0;
+  if (v > 0) return 'text-space-green';
+  if (v < 0) return 'text-space-red';
+  return 'text-space-text-dim';
+}
+
+const botsWithSkills = computed(() =>
+  botStore.bots
+    .filter(b => b.skills && b.skills.length > 0)
+    .map(b => ({
+      username: b.username,
+      skills: [...(b.skills ?? [])].sort((a, b) => b.level - a.level),
+    }))
+);
+
+function fmtSkillName(id: string): string {
+  return id.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
+}
+
+function skillBadgeClass(level: number): string {
+  if (level >= 8) return 'bg-yellow-900/30 text-yellow-400 border-yellow-700/30';
+  if (level >= 5) return 'bg-blue-900/30 text-blue-400 border-blue-700/30';
+  if (level >= 3) return 'bg-[#0d2818] text-space-green border-[#1a3a2a]';
+  return 'bg-space-bg text-space-text-dim border-space-border';
 }
 
 function aggregateStats(botDaily: Record<string, any> | undefined, days: number) {

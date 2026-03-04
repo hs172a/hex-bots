@@ -98,6 +98,11 @@
               </td>
               <td class="px-0 py-1">
                 <span class="text-space-yellow">₡{{ formatNumber(bot.credits) }}</span>
+                <span
+                  v-if="bot.tradingRestrictedUntil && new Date(bot.tradingRestrictedUntil) > new Date()"
+                  class="ml-1 badge badge-red text-[10px]"
+                  :title="'Trading restricted until ' + new Date(bot.tradingRestrictedUntil).toLocaleTimeString()"
+                >🚫 trade</span>
               </td>
               <td class="px-0 py-1 text-xs">
                 <template v-if="botStore.botCreditsPerHour[bot.username]">

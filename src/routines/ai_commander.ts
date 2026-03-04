@@ -7,7 +7,7 @@
  *
  * Each cycle:
  *   1. Gather fleet status (all bots, their state, credits, location, routine)
- *   2. Send context to LLM with fleet_command tool
+ *   2. Send context to LLM with crimson_fleet_command tool
  *   3. Parse decisions and execute via sendBotAction
  *   4. Log all decisions
  *
@@ -93,7 +93,7 @@ async function callLlm(
   const tool = {
     type: "function",
     function: {
-      name: "fleet_command",
+      name: "crimson_fleet_command",
       description: "Issue commands to fleet bots. Called once per cycle with all decisions.",
       parameters: {
         type: "object",
@@ -134,7 +134,7 @@ async function callLlm(
         { role: "user", content: userMessage },
       ],
       tools: [tool],
-      tool_choice: { type: "function", function: { name: "fleet_command" } },
+      tool_choice: { type: "function", function: { name: "crimson_fleet_command" } },
       temperature: 0.3,
     }),
     signal: AbortSignal.timeout(60_000),

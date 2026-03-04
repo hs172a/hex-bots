@@ -1405,7 +1405,7 @@ export const traderRoutine: Routine = async function* (ctx: RoutineContext) {
       ctx.log("trade", `${remaining}x ${route.itemName} still unsold — storing at Sol Central`);
 
       // Navigate to Sol Central if needed
-      const solSystem = "sol";
+      const solSystem = "sol_star";
       if (bot.system !== solSystem) {
         await ensureUndocked(ctx);
         const fueled = await ensureFueled(ctx, safetyOpts.fuelThresholdPct, { noJettison: true });

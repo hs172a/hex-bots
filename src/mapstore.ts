@@ -98,6 +98,19 @@ export interface StoredSystem {
   last_updated: string;
 }
 
+/** Lightweight delta used by the high-frequency /sync/fast path. */
+export interface FastPatch {
+  system_id: string;
+  last_updated: string;
+  market_updates: Array<{
+    poi_id: string;
+    market: MarketRecord[];
+    orders: OrderRecord[];
+    last_updated: string;
+  }>;
+  pirate_sightings: PirateSighting[];
+}
+
 export interface MapData {
   version: 1;
   last_saved: string;
@@ -1000,6 +1013,101 @@ export class MapStore {
     }
 
     return lines.join("\n");
+  }
+
+  // ── DataSync helpers ─────────────────────────────────────
+
+  /**
+   * Return all systems updated after the given timestamp (for push/pull sync).
+   * Used by the slow topology sync path.
+   */
+  getSystemsSince(since: Date): StoredSystem[] {
+    const sinceMs = since.getTime();
+    return Object.values(this.data.systems).filter(
+      (s) => new Date(s.last_updated).getTime() > sinceMs
+    );
+  }
+
+  /**
+   * Merge an array of StoredSystem objects from a remote VM.
+   * Newer last_updated wins; route cache is cleared if topology changed.
+   */
+  mergeSystems(systems: StoredSystem[]): void {
+    let topologyChanged = false;
+    for (const incoming of systems) {
+      if (!incoming.id) continue;
+      const existing = this.data.systems[incoming.id];
+      if (existing && new Date(existing.last_updated) >= new Date(incoming.last_updated)) continue;
+      if (existing && incoming.connections.length !== existing.connections.length) topologyChanged = true;
+      this.data.systems[incoming.id] = incoming;
+      this.scheduleSystemSave(incoming.id);
+    }
+    if (topologyChanged) this.routeCache.clear();
+  }
+
+  /**
+   * Return lightweight fast-patches (market + pirate data only) for systems
+   * updated after the given timestamp. Used by the high-frequency sync path.
+   */
+  getFastPatchesSince(since: Date): FastPatch[] {
+    const sinceMs = since.getTime();
+    const patches: FastPatch[] = [];
+    for (const sys of Object.values(this.data.systems)) {
+      if (new Date(sys.last_updated).getTime() <= sinceMs) continue;
+      const market_updates = sys.pois
+        .filter(p => p.market.length > 0 || p.orders.length > 0)
+        .map(p => ({ poi_id: p.id, market: p.market, orders: p.orders, last_updated: p.last_updated }));
+      if (market_updates.length === 0 && sys.pirate_sightings.length === 0) continue;
+      patches.push({
+        system_id: sys.id,
+        last_updated: sys.last_updated,
+        market_updates,
+        pirate_sightings: sys.pirate_sightings,
+      });
+    }
+    return patches;
+  }
+
+  /**
+   * Apply lightweight fast-patches from a remote VM.
+   * Only updates market/orders/pirate data; never overwrites topology or ore records.
+   */
+  applyFastPatches(patches: FastPatch[]): void {
+    for (const patch of patches) {
+      const sys = this.data.systems[patch.system_id];
+      if (!sys) continue; // unknown system — skip (topology sync will add it later)
+
+      // Market + orders updates
+      for (const mu of patch.market_updates ?? []) {
+        const poi = sys.pois.find(p => p.id === mu.poi_id);
+        if (!poi) continue;
+        const incomingMs = new Date(mu.last_updated).getTime();
+        const existingMs = new Date(poi.last_updated).getTime();
+        if (incomingMs <= existingMs) continue; // already have newer data
+        poi.market = mu.market;
+        if (mu.orders) poi.orders = mu.orders;
+        poi.last_updated = mu.last_updated;
+      }
+
+      // Pirate sightings — merge by player_id/name, keep higher count
+      for (const incoming of patch.pirate_sightings ?? []) {
+        const key = incoming.player_id || incoming.name || "";
+        if (!key) continue;
+        const existing = sys.pirate_sightings.find(
+          p => (p.player_id && p.player_id === incoming.player_id) || (p.name && p.name === incoming.name)
+        );
+        if (existing) {
+          if (incoming.count > existing.count) {
+            existing.count = incoming.count;
+            existing.last_seen = incoming.last_seen;
+          }
+        } else {
+          sys.pirate_sightings.push(incoming);
+        }
+      }
+
+      this.scheduleSystemSave(patch.system_id);
+    }
   }
 }
 

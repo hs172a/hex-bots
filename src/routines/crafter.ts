@@ -555,7 +555,7 @@ export const crafterRoutine: Routine = async function* (ctx: RoutineContext) {
     let totalCrafted = 0;
     const craftedSummary: string[] = [];   // "5x Fuel Cells"
     const prereqSummary: string[] = [];    // "3x Refined Alloy (prereq)"
-    const missingSummary: string[] = [];   // "Armor Plate (2x refined_titanium)"
+    const missingSummary: string[] = [];   // "Armor Plate (2x titanium_ingot)"
     const skillSummary: string[] = [];     // "Solarian Composite (skill too low, crafted 5x Refined Iron for XP)"
     const atLimitCount = { count: 0 };
 

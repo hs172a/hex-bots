@@ -5,6 +5,25 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [1.6.0] - 2026-03-03
+
+### Added
+- **DataSync UI indicators** — App.vue header now shows:
+  - 🌐 DS Master badge (blue) when instance is running as DataSync master
+  - 🔗 DS Client badge (cyan) when client is connected to master
+  - 🔌 DataSync Offline badge (red, pulsing) after 3 consecutive sync failures; auto-clears on reconnect
+- **`NO_FILE_LOG=1`** environment variable — set to suppress `data/logs/` file logging without code changes
+- **FactionView: treasury deposit/withdraw** — amount input + ↑ Deposit / ↓ Withdraw buttons (`faction_deposit_credits` / `faction_withdraw_credits`), visible in the faction header stats row
+- **FactionView: "+ Own Bots" quick-invite** — batch-invites all fleet bots not yet in the faction
+
+### Changed
+- **FactionView: members** — sorted online-first; role badge with color (leader=yellow, officer=blue, member=gray); online dot indicator on avatar
+- **FactionView: storage** — grouped by category (Ores / Refined / Components / Modules / Other), each sorted by quantity desc; 2-column grid layout
+- **FactionView: facilities** — shows 📍 system location if `system_name` / `systemName` field present
+- **DataSync `dataSyncMode`** — included in `init` WS message; `botStore.dataSyncMode` tracks it; `botmanager.ts` sets it on startup
+
+---
+
 ## [1.5.0] - 2026-03-03
 
 ### Fixed

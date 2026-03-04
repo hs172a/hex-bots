@@ -288,7 +288,9 @@ async function syncMissionProgress(
     const ao = apiObjs[i];
     if (ao) {
       objectives[i].current = (ao.current as number) ?? (ao.progress as number) ?? objectives[i].current;
-      objectives[i].complete = !!(ao.complete || ao.completed);
+      // Never downgrade a locally-completed objective: only set true, never clear it.
+      const apiDone = !!(ao.complete || ao.completed || ao.is_complete || ao.done || ao.finished);
+      if (apiDone) objectives[i].complete = true;
     }
   }
 }

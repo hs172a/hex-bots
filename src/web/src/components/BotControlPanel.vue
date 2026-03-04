@@ -386,6 +386,43 @@ const otherBots = computed(() =>
   botStore.bots.filter(b => b.username !== currentBot.value.username)
 );
 
+const cargoFree = computed(() => {
+  const max = currentBot.value.cargoMax ?? 0;
+  const used = currentBot.value.cargo ?? 0;
+  return Math.max(0, max - used);
+});
+
+watch(sellItem, (itemId) => {
+  if (!itemId) return;
+  const item = inventory.value.find((i: any) => i.itemId === itemId);
+  if (item) sellQty.value = item.quantity;
+});
+watch(depositItem, (itemId) => {
+  if (!itemId) return;
+  const item = inventory.value.find((i: any) => i.itemId === itemId);
+  if (item) depositQty.value = item.quantity;
+});
+watch(withdrawItem, (itemId) => {
+  if (!itemId) return;
+  const item = storage.value.find((i: any) => i.itemId === itemId);
+  if (item) withdrawQty.value = cargoFree.value > 0 ? Math.min(item.quantity, cargoFree.value) : item.quantity;
+});
+watch(factionDepositItem, (itemId) => {
+  if (!itemId) return;
+  const item = inventory.value.find((i: any) => i.itemId === itemId);
+  if (item) factionDepositQty.value = item.quantity;
+});
+watch(factionWithdrawItem, (itemId) => {
+  if (!itemId) return;
+  const item = factionStorage.value.find((i: any) => i.itemId === itemId);
+  if (item) factionWithdrawQty.value = cargoFree.value > 0 ? Math.min(item.quantity, cargoFree.value) : item.quantity;
+});
+watch(giftItem, (itemId) => {
+  if (!itemId) return;
+  const item = inventory.value.find((i: any) => i.itemId === itemId);
+  if (item) giftQty.value = item.quantity;
+});
+
 const showFullLog = ref(false);
 const commandRunning = ref(false);
 const logContainerRef = ref<HTMLElement | null>(null);

@@ -136,30 +136,57 @@
               <div class="text-[11px] text-space-text-dim">Facilities</div>
             </div>
           </div>
+
+          <!-- Treasury controls -->
+          <div class="flex items-center gap-2 mt-2 pt-2 border-t border-[#21262d]">
+            <span class="text-[11px] text-space-text-dim shrink-0">Treasury:</span>
+            <input
+              v-model.number="treasuryAmount"
+              type="number" min="1" placeholder="Amount"
+              class="input text-xs py-0.5 px-2 w-28"
+              @keydown.enter="depositCredits"
+            />
+            <button @click="depositCredits" :disabled="treasuryLoading || !treasuryAmount"
+              class="btn btn-secondary text-xs px-3 py-1 disabled:opacity-40">
+              {{ treasuryLoading ? '⏳' : '↑ Deposit' }}
+            </button>
+            <button @click="withdrawCredits" :disabled="treasuryLoading || !treasuryAmount"
+              class="btn text-xs px-3 py-1 disabled:opacity-40">
+              {{ treasuryLoading ? '⏳' : '↓ Withdraw' }}
+            </button>
+          </div>
         </div>
 
         <!-- Tab: Members -->
         <div v-if="activeSection === 'members'">
           <div class="flex items-center justify-between mb-3">
-            <h3 class="text-sm font-semibold text-space-text-bright">Members</h3>
-            <button @click="showInviteModal = true" class="btn text-xs px-3 py-1">Invite</button>
+            <h3 class="text-sm font-semibold text-space-text-bright">Members <span class="text-space-text-dim font-normal">({{ memberCount }}, {{ onlineCount }} online)</span></h3>
+            <div class="flex gap-2">
+              <button @click="inviteOwnBots" :disabled="loading" class="btn btn-secondary text-xs px-3 py-1" title="Quick-invite bots from your fleet">+ Own Bots</button>
+              <button @click="showInviteModal = true" class="btn text-xs px-3 py-1">Invite Player</button>
+            </div>
           </div>
           <div v-if="!members.length" class="text-xs text-space-text-dim italic">No member data.</div>
           <div v-for="m in members" :key="m.player_id || m.username" class="flex items-center justify-between py-2 px-3 border-b border-[#21262d] hover:bg-space-row-hover transition-colors">
             <div class="flex items-center gap-3">
-              <div class="w-7 h-7 bg-space-accent rounded-full flex items-center justify-center text-xs text-white font-bold">{{ (m.username || '?')[0].toUpperCase() }}</div>
+              <div class="relative w-7 h-7 bg-space-accent rounded-full flex items-center justify-center text-xs text-white font-bold shrink-0">
+                {{ (m.username || '?')[0].toUpperCase() }}
+                <span class="absolute -bottom-0.5 -right-0.5 w-2.5 h-2.5 rounded-full border-2 border-space-card"
+                  :class="(m.is_online ?? m.online) ? 'bg-space-green' : 'bg-[#484f58]'"
+                />
+              </div>
               <div>
                 <div class="text-xs font-medium text-space-text">{{ m.username || m.name }}</div>
-                <div class="text-[11px] text-space-text-dim">{{ m.role || 'Member' }}</div>
+                <div class="flex items-center gap-1.5 mt-0.5">
+                  <span class="text-[11px] px-1.5 py-0.5 rounded border capitalize"
+                    :class="roleColorClass(m.role)">{{ m.role || 'member' }}</span>
+                </div>
               </div>
             </div>
             <div class="flex items-center gap-2 text-xs">
-              <span :class="m.is_online ? 'text-space-green' : 'text-space-text-dim'">{{ m.is_online ? 'Online' : 'Offline' }}</span>
               <select v-if="m.username !== selectedBot" @change="promoteMember(m, ($event.target as HTMLSelectElement).value)" class="input text-[11px] py-0.5 px-1">
-                <option value="" disabled selected>Role</option>
-                <option value="Member">Member</option>
-                <option value="Officer">Officer</option>
-                <option value="Leader">Leader</option>
+                <option value="" disabled selected>Set role…</option>
+                <option v-for="r in availableRoles" :key="r" :value="r">{{ r }}</option>
               </select>
               <button v-if="m.username !== selectedBot" @click="kickMember(m)" class="text-[11px] px-2 py-0.5 rounded border border-space-border text-space-text-dim hover:border-space-red hover:text-space-red transition-colors">Kick</button>
             </div>
@@ -170,14 +197,22 @@
         <div v-if="activeSection === 'storage'">
           <div class="flex items-center justify-between mb-3">
             <h3 class="text-sm font-semibold text-space-text-bright">Faction Storage</h3>
-            <button @click="loadStorage" :disabled="loading" class="btn text-xs px-3 py-1">Load Storage</button>
+            <button @click="loadStorage" :disabled="loading" class="btn text-xs px-3 py-1">{{ storageLoaded ? 'Reload' : 'Load Storage' }}</button>
           </div>
-          <div v-if="!storageLoaded" class="text-xs text-space-text-dim italic">Click "Load Storage" to view items (bot must be docked).</div>
-          <div v-else-if="storageError" class="text-xs text-space-red">{{ storageError }}</div>
-          <div v-else-if="!factionStorage.length" class="text-xs text-space-text-dim italic">No items in faction storage.</div>
-          <div v-for="item in factionStorage" :key="item.item_id || item.name" class="flex items-center justify-between py-1.5 px-2 border-b border-[#21262d] text-xs">
-            <span class="text-space-text">{{ item.name || item.item_id }}</span>
-            <span class="text-space-text-dim font-mono">x{{ item.quantity }}</span>
+          <div v-if="!storageLoaded" class="text-xs text-space-text-dim italic py-4 text-center">Click "Load Storage" to view items (bot must be docked at a faction storage facility).</div>
+          <div v-else-if="storageError" class="text-xs text-space-red px-2 py-2">{{ storageError }}</div>
+          <div v-else-if="!factionStorage.length" class="text-xs text-space-text-dim italic py-4 text-center">Storage is empty.</div>
+          <div v-else>
+            <div v-for="(items, category) in storageByCategory" :key="category" class="mb-4">
+              <h4 class="text-[11px] font-semibold uppercase tracking-wider text-space-text-dim mb-1.5">{{ category }}</h4>
+              <div class="grid grid-cols-2 gap-1">
+                <div v-for="item in items" :key="item.item_id || item.name"
+                  class="flex items-center justify-between py-1.5 px-2 rounded bg-space-bg hover:bg-space-row-hover transition-colors">
+                  <span class="text-xs text-space-text truncate">{{ item.name || item.item_id }}</span>
+                  <span class="text-xs font-mono ml-2 shrink-0" :class="CATEGORY_COLORS[category] || 'text-space-text-dim'">{{ fmt(item.quantity) }}</span>
+                </div>
+              </div>
+            </div>
           </div>
         </div>
 
@@ -204,6 +239,7 @@
                   <div v-if="f.description" class="text-[11px] text-space-text-dim mt-0.5">{{ f.description }}</div>
                   <div v-if="f.faction_service" class="text-[11px] text-space-text-dim">Service: {{ f.faction_service }}</div>
                   <div v-if="f.capacity" class="text-[11px] text-space-text-dim">Cap: {{ f.capacity }}</div>
+                  <div v-if="f.system_name || f.systemName" class="text-[11px] text-space-text-dim">📍 {{ f.system_name || f.systemName }}</div>
                 </div>
                 <div class="flex flex-col items-end gap-1 shrink-0">
                   <button @click="toggleFactionFacility(f)"
@@ -232,8 +268,8 @@
 
           <!-- Buildable types -->
           <h4 class="text-xs font-semibold text-space-text-dim uppercase mb-2">Build New Facility</h4>
-          <div v-if="unbuildableTypes.length > 0" class="grid grid-cols-5 gap-2">
-            <div v-for="bt in unbuildableTypes" :key="bt.id"
+          <div v-if="allBuildableTypes.length > 0" class="grid grid-cols-5 gap-2">
+            <div v-for="bt in allBuildableTypes" :key="bt.id"
               class="bg-space-bg border border-[#21262d] rounded-md p-2 mb-2 text-xs transition-opacity"
               :class="[!bt.buildable && !hasFacility(bt.id) ? 'opacity-50' : '', !bt.buildable && hasFacility(bt.id) ? 'border-green-900/30' : '']">
               <div class="flex items-start justify-between gap-2">
@@ -510,11 +546,11 @@
             <div class="grid grid-cols-2 gap-2">
               <div>
                 <label class="text-[11px] text-space-text-dim block mb-1">Item ID</label>
-                <input v-model="submitIntel.item_id" type="text" placeholder="ore_iron" class="input text-xs w-full" />
+                <input v-model="submitIntel.item_id" type="text" placeholder="iron_ore" class="input text-xs w-full" />
               </div>
               <div>
                 <label class="text-[11px] text-space-text-dim block mb-1">System ID</label>
-                <input v-model="submitIntel.system_id" type="text" placeholder="sol" class="input text-xs w-full" />
+                <input v-model="submitIntel.system_id" type="text" placeholder="sol_star" class="input text-xs w-full" />
               </div>
               <div>
                 <label class="text-[11px] text-space-text-dim block mb-1">Buy Price</label>
@@ -618,14 +654,18 @@ const createTag = ref('');
 const createDesc = ref('');
 const inviteUsername = ref('');
 
+// Treasury deposit/withdraw
+const treasuryAmount = ref(0);
+const treasuryLoading = ref(false);
+
 const sections = [
-  { id: 'members', label: 'Members' },
-  { id: 'storage', label: 'Storage' },
-  { id: 'buildings', label: 'Buildings' },
+  { id: 'members', label: ' Members' },
+  { id: 'storage', label: ' Storage' },
+  { id: 'buildings', label: '🏠 Buildings' },
   { id: 'diplomacy', label: 'Diplomacy' },
   { id: 'missions', label: '📋 Missions' },
   { id: 'intel', label: '📡 Intel' },
-  { id: 'activity', label: 'Activity' },
+  { id: 'activity', label: '📜 Activity' },
 ];
 
 // ── Faction Missions ─────────────────────────────────────────
@@ -769,9 +809,59 @@ function hasMaterial(itemId: string, qty: number): boolean {
 }
 
 // Computed
-const members = computed(() => factionData.value?.members || []);
+const members = computed(() => {
+  const raw: any[] = factionData.value?.members || [];
+  return [...raw].sort((a, b) => {
+    const aOn = a.is_online ?? a.online ?? false;
+    const bOn = b.is_online ?? b.online ?? false;
+    return (bOn ? 1 : 0) - (aOn ? 1 : 0);
+  });
+});
 const memberCount = computed(() => factionData.value?.member_count ?? members.value.length);
-const onlineCount = computed(() => members.value.filter((m: any) => m.is_online).length);
+const onlineCount = computed(() => members.value.filter((m: any) => (m.is_online ?? m.online)).length);
+
+// Derive promotable roles from API (available_roles field) or from unique member roles as fallback.
+const availableRoles = computed<string[]>(() => {
+  const apiRoles = factionData.value?.available_roles as string[] | undefined;
+  if (Array.isArray(apiRoles) && apiRoles.length) return apiRoles;
+  const fromMembers = [...new Set<string>(members.value.map((m: any) => m.role).filter(Boolean))];
+  return fromMembers.length ? fromMembers : ['recruit', 'member', 'officer', 'leader'];
+});
+
+function roleColorClass(role?: string): string {
+  const r = (role || '').toLowerCase();
+  if (r === 'leader') return 'bg-yellow-900/30 text-yellow-400 border-yellow-700/30';
+  if (r === 'officer') return 'bg-blue-900/30 text-blue-400 border-blue-700/30';
+  return 'bg-[#30363d] text-space-text-dim border-transparent';
+}
+
+/** Storage items grouped by category, sorted by quantity desc. */
+const storageByCategory = computed(() => {
+  const items: any[] = factionStorage.value;
+  const cats: Record<string, any[]> = {};
+  for (const item of items) {
+    const id: string = item.item_id || item.itemId || '';
+    const cat = id.startsWith('ore_') ? 'Ores'
+      : id.startsWith('refined_') ? 'Refined'
+      : id.startsWith('component_') ? 'Components'
+      : id.startsWith('module_') ? 'Modules'
+      : 'Other';
+    if (!cats[cat]) cats[cat] = [];
+    cats[cat].push(item);
+  }
+  for (const cat of Object.keys(cats)) {
+    cats[cat].sort((a, b) => b.quantity - a.quantity);
+  }
+  return cats;
+});
+
+const CATEGORY_COLORS: Record<string, string> = {
+  Ores: 'text-orange-400',
+  Refined: 'text-space-cyan',
+  Components: 'text-space-magenta',
+  Modules: 'text-space-accent',
+  Other: 'text-space-text-dim',
+};
 
 /** Only the facilities that belong to the current bot's faction. */
 const ownFacilities = computed(() => {
@@ -781,10 +871,8 @@ const ownFacilities = computed(() => {
   return own.length > 0 ? own : factionFacilities.value;
 });
 
-/** Types from the buildable list that haven't been built yet. */
-const unbuildableTypes = computed(() =>
-  buildableTypes.value.filter((bt: any) => !hasFacility(bt.id))
-);
+/** All buildable types — shown with status badges (built / locked / available). */
+const allBuildableTypes = computed(() => buildableTypes.value);
 
 // ── Bot selection ───────────────────────────────────────────
 function selectBot(username: string) {
@@ -829,8 +917,8 @@ function refreshData() {
     if (selectedBot.value !== username) return;
     if (result.ok && result.data) {
       factionData.value = result.data;
-      // Determine membership: if we got members array, we're in the faction
-      isMember.value = !!(result.data.members && result.data.members.length > 0);
+      // Membership: own faction always has an id + members array defined (even if empty)
+      isMember.value = !!(result.data.id && result.data.members !== undefined);
     } else {
       factionData.value = null;
       isMember.value = false;
@@ -1135,6 +1223,53 @@ function checkInvites() {
   });
 }
 
+async function depositCredits() {
+  const amount = treasuryAmount.value;
+  if (!amount || amount <= 0) return;
+  treasuryLoading.value = true;
+  const r = await execAsync('faction_deposit_credits', { amount });
+  treasuryLoading.value = false;
+  if (r.ok) {
+    setStatus(`Deposited ${fmt(amount)} cr to treasury`);
+    treasuryAmount.value = 0;
+    refreshData();
+  } else {
+    setError(r.error || 'Deposit failed');
+  }
+}
+
+async function withdrawCredits() {
+  const amount = treasuryAmount.value;
+  if (!amount || amount <= 0) return;
+  treasuryLoading.value = true;
+  const r = await execAsync('faction_withdraw_credits', { amount });
+  treasuryLoading.value = false;
+  if (r.ok) {
+    setStatus(`Withdrew ${fmt(amount)} cr from treasury`);
+    treasuryAmount.value = 0;
+    refreshData();
+  } else {
+    setError(r.error || 'Withdraw failed');
+  }
+}
+
+async function inviteOwnBots() {
+  const currentMembers = new Set(
+    (factionData.value?.members || []).map((m: any) => m.username)
+  );
+  const ownBots = botStore.bots
+    .map(b => b.username)
+    .filter(u => u !== selectedBot.value && !currentMembers.has(u));
+  if (ownBots.length === 0) { setStatus('All your bots are already members'); return; }
+  for (const username of ownBots) {
+    const r = await execAsync('faction_invite', { player_id: username });
+    if (!r.ok && !r.error?.includes('already')) {
+      setError(`Could not invite ${username}: ${r.error || 'unknown error'}`);
+    }
+  }
+  setStatus(`Sent invites to: ${ownBots.join(', ')}`);
+}
+
 function doInvite() {
   if (!selectedBot.value || !inviteUsername.value || loading.value) return;
   loading.value = true;
@@ -1153,7 +1288,8 @@ function doInvite() {
 function promoteMember(member: any, role: string) {
   if (!selectedBot.value || !role || !member.player_id || loading.value) return;
   loading.value = true;
-  botStore.sendExec(selectedBot.value, 'faction_promote', { player_id: member.player_id, role }, (result: any) => {
+  const role_id = role.toLowerCase();
+  botStore.sendExec(selectedBot.value, 'faction_promote', { player_id: member.player_id, role_id }, (result: any) => {
     loading.value = false;
     if (result.ok) { setStatus(`${member.username} promoted to ${role}`); refreshData(); }
     else setError(result.error || 'Failed to promote');

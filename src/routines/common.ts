@@ -81,6 +81,21 @@ export function isScenicPoi(type: string): boolean {
   return t === "sun" || t === "star" || t === "wormhole" || t === "jump_gate";
 }
 
+/**
+ * Parse station IDs from a `not_docked` error message returned by `view_storage`.
+ * Example message: "... 1,660 items in storage at alpha_centauri_colonial_station, grand_exchange_station, confederacy_central_command"
+ * Returns the list of station IDs and also updates bot.storageStations.
+ */
+export function parseStorageLocations(bot: RoutineContext["bot"], errorMessage: string): string[] {
+  const match = errorMessage.match(/in storage at (.+)$/m);
+  if (!match) return [];
+  const stations = match[1].split(",").map(s => s.trim()).filter(Boolean);
+  if (stations.length > 0) {
+    for (const s of stations) bot.storageStations.add(s);
+  }
+  return stations;
+}
+
 // ── Item size helpers ────────────────────────────────────────
 
 /** Get the cargo size (weight per unit) of an item from the catalog. Defaults to 1 if unknown. */
@@ -357,6 +372,9 @@ export async function collectFromStorage(ctx: RoutineContext): Promise<void> {
   const storageResp = await bot.exec("view_storage");
   if (storageResp.error?.code === "not_docked" || storageResp.error?.message?.includes("not_docked")) {
     bot.docked = false;
+    const msg = storageResp.error.message || "";
+    const stations = parseStorageLocations(bot, msg);
+    if (stations.length > 0) ctx.log("info", `Storage detected at: ${stations.join(", ")}`);
     return;
   }
   if (!storageResp.result || typeof storageResp.result !== "object") return;
@@ -388,55 +406,70 @@ export async function collectFromStorage(ctx: RoutineContext): Promise<void> {
  * Credits are kept on the bot (not transferred).
  * Assumes docked at a station with both storage and faction storage access.
  */
-export async function transferStationToFaction(ctx: RoutineContext): Promise<void> {
+export async function transferStationToFaction(ctx: RoutineContext): Promise<number> {
   const { bot } = ctx;
-  if (!bot.docked) return;
+  if (!bot.docked) return 0;
 
   await bot.refreshStorage();
-  if (bot.storage.length === 0) return;
+  if (bot.storage.length === 0) return 0;
 
-  await bot.refreshStatus();
-  const transferred: string[] = [];
+  let totalTransferred = 0;
+  const MAX_PASSES = 20;
 
-  for (const item of bot.storage) {
-    if (item.quantity <= 0) continue;
+  for (let pass = 0; pass < MAX_PASSES; pass++) {
+    await bot.refreshStorage();
+    if (bot.storage.length === 0) break;
+    await bot.refreshStatus();
 
-    // Check available cargo space — items pass through cargo as intermediary
-    const freeSpace = bot.cargoMax > 0 ? bot.cargoMax - bot.cargo : 0;
-    if (freeSpace <= 0) break; // cargo full, can't transfer any more
+    // ── Withdraw pass: fill cargo from station storage ──
+    let withdrawnThisPass = 0;
+    for (const item of [...bot.storage]) {
+      if (item.quantity <= 0) continue;
 
-    const qty = Math.min(item.quantity, maxItemsForCargo(freeSpace, item.itemId));
-    if (qty <= 0) continue;
+      const freeSpace = bot.cargoMax > 0 ? bot.cargoMax - bot.cargo : 0;
+      if (freeSpace <= 0) break;
 
-    // Withdraw from station storage into cargo
-    const wResp = await bot.exec("withdraw_items", { item_id: item.itemId, quantity: qty });
-    if (wResp.error) {
-      if (wResp.error.code === "not_docked" || wResp.error.message?.includes("not_docked")) {
-        bot.docked = false;
-        break;
+      const qty = Math.min(item.quantity, maxItemsForCargo(freeSpace, item.itemId));
+      if (qty <= 0) continue;
+
+      const wResp = await bot.exec("withdraw_items", { item_id: item.itemId, quantity: qty });
+      if (wResp.error) {
+        if (wResp.error.code === "not_docked" || wResp.error.message?.includes("not_docked")) {
+          bot.docked = false;
+          return totalTransferred;
+        }
+        continue;
       }
-      continue;
+      withdrawnThisPass += qty;
+      await bot.refreshStatus();
     }
 
-    // Deposit into faction storage
-    const dResp = await bot.exec("faction_deposit_items", { item_id: item.itemId, quantity: qty });
-    if (!dResp.error) {
-      transferred.push(`${qty}x ${item.name}`);
-      logFactionActivity(ctx, "deposit", `Transferred ${qty}x ${item.name} from station → faction storage`);
-    } else {
-      // Failed to deposit to faction — put back in station storage
-      await bot.exec("deposit_items", { item_id: item.itemId, quantity: qty });
+    if (withdrawnThisPass === 0) break; // nothing left to withdraw
+
+    // ── Deposit pass: flush cargo → faction storage ──
+    await bot.refreshCargo();
+    for (const item of [...bot.inventory]) {
+      if (item.quantity <= 0) continue;
+
+      const dResp = await bot.exec("faction_deposit_items", { item_id: item.itemId, quantity: item.quantity });
+      if (!dResp.error) {
+        totalTransferred += item.quantity;
+        logFactionActivity(ctx, "deposit", `Transferred ${item.quantity}x ${item.name} from station → faction storage`);
+      } else {
+        // Fallback: return to station storage so nothing is lost
+        await bot.exec("deposit_items", { item_id: item.itemId, quantity: item.quantity });
+      }
     }
 
-    await bot.refreshStatus(); // update cargo count for next iteration
+    await bot.refreshStatus();
   }
 
-  if (transferred.length > 0) {
-    ctx.log("trade", `Transferred to faction storage: ${transferred.join(", ")}`);
-    await bot.refreshCargo();
+  if (totalTransferred > 0) {
+    ctx.log("trade", `Transferred ${totalTransferred} item(s) to faction storage`);
     await bot.refreshStorage();
     await bot.refreshFactionStorage();
   }
+  return totalTransferred;
 }
 
 // ── Refueling ────────────────────────────────────────────────
@@ -865,8 +898,8 @@ export async function ensureFueled(
 // ── Cargo deposit ──────────────────────────────────────────
 
 /** Default home station for depositing cargo. */
-const HOME_SYSTEM = "sol";
-const HOME_STATION_POI = "sol_station";
+const HOME_SYSTEM = "sol_star";
+const HOME_STATION_POI = "sol_central";
 const HOME_STATION_NAME = "Sol Central";
 
 /**
@@ -1339,14 +1372,14 @@ export async function refuelAtStation(
 
 // ── Security ─────────────────────────────────────────────────
 
-/** Try to fetch security level from get_location and update mapStore. */
+/** Try to fetch security level from get_system and update mapStore. */
 export async function fetchSecurityLevel(ctx: RoutineContext, systemId: string): Promise<void> {
   const { bot } = ctx;
-  const locResp = await bot.exec("get_location");
+  const locResp = await bot.exec("get_system");
   if (!locResp.result || typeof locResp.result !== "object") return;
 
   const loc = locResp.result as Record<string, unknown>;
-  const locSys = loc.system as Record<string, unknown> | undefined;
+  const locSys = (loc.system as Record<string, unknown> | undefined) ?? loc;
   const secLevel = (locSys?.security_level as string) || (locSys?.security_status as string)
     || (locSys?.lawfulness as string) || (locSys?.security as string)
     || (loc.security_level as string) || (loc.security_status as string)

@@ -24,6 +24,8 @@ import { shipUpgradeRoutine } from "./routines/ship_upgrade.js";
 import { scavengerRoutine } from "./routines/scavenger.js";
 import { piCommanderRoutine } from "./routines/pi_commander.js";
 import { aiCommanderRoutine } from "./routines/ai_commander.js";
+import { stationToFactionRoutine } from "./routines/station_to_faction.js";
+import { smartSelectorRoutine } from "./routines/smart_selector.js";
 import { mapStore } from "./mapstore.js";
 import { catalogStore } from "./catalogstore.js";
 import { publicCatalog } from "./publicCatalog.js";
@@ -42,15 +44,20 @@ import type { FleetSummary } from "./commander/types.js";
 import { GoalsStore } from "./data/goals-store.js";
 import { GoalSchema } from "./types/config.js";
 import { AdvisoryCommander } from "./commander/advisory-commander.js";
+import { initDataSync, DataSyncClient } from "./datasync.js";
 
 const BASE_DIR = process.cwd();
 const SESSIONS_DIR = join(BASE_DIR, "sessions");
-const FILE_LOG_DIR = join(BASE_DIR, "logs");
+const FILE_LOG_DIR = join(BASE_DIR, "data", "logs");
 const VERSION = version;
 
+// Load config early so the file-logging block and server port can use it.
+const _startupConfig = loadConfig();
+
 // ── File Logging (daily rotating console tee) ────────────────
-// Tees all console output to logs/hex-bots-{date}.log with timestamps.
-{
+// Tees all console output to data/logs/hex-bots-{date}.log with timestamps.
+// Controlled by [logging] file_logging in config.toml.
+if (_startupConfig.logging.file_logging) {
   mkdirSync(FILE_LOG_DIR, { recursive: true });
   const date = new Date().toISOString().slice(0, 10);
   const logPath = join(FILE_LOG_DIR, `hex-bots-${date}.log`);
@@ -93,28 +100,30 @@ let server: WebServer;
 let sessionStore: SessionStore;
 
 const ROUTINES: Record<string, { name: string; fn: Routine }> = {
-  ai: { name: "AI", fn: aiRoutine },
-  cleanup: { name: "Cleanup", fn: cleanupRoutine },
-  coordinator: { name: "Coordinator", fn: coordinatorRoutine },
+  trader: { name: "Trader", fn: traderRoutine },
+  miner: { name: "Miner", fn: minerRoutineV2 },
   crafter: { name: "Crafter", fn: crafterRoutine },
   explorer: { name: "Explorer", fn: explorerRoutine },
   faction_trader: { name: "FactionTrader", fn: factionTraderRoutine },
-  rescue: { name: "FuelRescue", fn: rescueRoutine },
+  coordinator: { name: "Coordinator", fn: coordinatorRoutine },
+  mission_runner: { name: "MissionRunner", fn: missionRunnerRoutine },
   gatherer: { name: "Gatherer", fn: gathererRoutine },
   gas_harvester: { name: "GasHarvester", fn: gasHarvesterRoutine },
-  hunter: { name: "Hunter", fn: hunterRoutine },
   ice_harvester: { name: "IceHarvester", fn: iceHarvesterRoutine },
-  miner: { name: "Miner", fn: minerRoutineV2 },
+  hunter: { name: "Hunter", fn: hunterRoutine },
   quartermaster: { name: "Quartermaster", fn: quartermasterRoutine },
-  return_home: { name: "ReturnHome", fn: returnHomeRoutine },
-  scout: { name: "Scout", fn: scoutRoutine },
-  trader: { name: "Trader", fn: traderRoutine },
   salvager: { name: "Salvager", fn: salvagerRoutine },
-  mission_runner: { name: "MissionRunner", fn: missionRunnerRoutine },
-  ship_upgrade: { name: "ShipUpgrade", fn: shipUpgradeRoutine },
   scavenger: { name: "Scavenger", fn: scavengerRoutine },
+  scout: { name: "Scout", fn: scoutRoutine },
+  cleanup: { name: "Cleanup", fn: cleanupRoutine },
+  return_home: { name: "ReturnHome", fn: returnHomeRoutine },
+  ship_upgrade: { name: "ShipUpgrade", fn: shipUpgradeRoutine },
+  station_to_faction: { name: "StationToFaction", fn: stationToFactionRoutine },
+  rescue: { name: "FuelRescue", fn: rescueRoutine },
+  ai: { name: "AI", fn: aiRoutine },
   pi_commander: { name: "PI Commander", fn: piCommanderRoutine },
-  ai_commander: { name: "AI Commander", fn: aiCommanderRoutine }, // Add aiCommanderRoutine to ROUTINES
+  ai_commander: { name: "AI Commander", fn: aiCommanderRoutine },
+  smart_selector: { name: "SmartSelector", fn: smartSelectorRoutine },
 };
 
 // ── Auto-discover existing sessions ─────────────────────────
@@ -657,7 +666,7 @@ async function main(): Promise<void> {
   const commander = new AdvisoryCommander();
   commander.setRoutines(Object.keys(ROUTINES));
 
-  const port = parseInt(process.env.PORT || String(config.server.port), 10);
+  const port = config.server.port;
   server = new WebServer(port);
   server.routines = Object.keys(ROUTINES);
   server.onAction = handleAction;
@@ -727,6 +736,20 @@ async function main(): Promise<void> {
   const startupApiLogging = server.settings?.general?.enableApiLogging;
   if (typeof startupApiLogging === "boolean") {
     setApiLoggingEnabled(startupApiLogging);
+  }
+
+  // Initialize DataSync (shared game knowledge across VMs)
+  const dataSync = initDataSync(mapStore, catalogStore, config.datasync);
+  if (dataSync) {
+    server.dataSyncMode = config.datasync.mode;
+    server.logSystem(`[DataSync] mode=${config.datasync.mode} enabled`);
+    if (dataSync instanceof DataSyncClient) {
+      dataSync.onStatusChange = (offline: boolean) => {
+        server.broadcastDataSyncStatus(offline);
+        if (offline) server.logSystem("[DataSync] Tunnel appears DOWN — cannot reach master");
+        else server.logSystem("[DataSync] Tunnel restored — connected to master");
+      };
+    }
   }
 
   server.logSystem(`Hex-Bots v${VERSION}`);

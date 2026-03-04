@@ -102,6 +102,35 @@ export const StockTargetSchema = z.object({
 
 export type StockTarget = z.infer<typeof StockTargetSchema>;
 
+// ── DataSync Config (shared game knowledge across VMs) ──
+
+export const DataSyncConfigSchema = z.object({
+  /** Enable the data sync service. */
+  enabled: z.boolean().default(false),
+  /** "master" — expose HTTP sync API; "client" — connect to a master. */
+  mode: z.enum(["master", "client"]).default("master"),
+  /** (client only) Base URL of the master DataSync server, e.g. http://127.0.0.1:4001 via SSH tunnel */
+  master_url: z.string().default(""),
+  /** Shared secret sent as Authorization: Bearer <api_key> on all requests. */
+  api_key: z.string().default(""),
+  /** (master only) Host/IP the sync server binds to. Defaults to 127.0.0.1 (SSH-tunnel model — not exposed to internet). */
+  host: z.string().default("127.0.0.1"),
+  /** (master only) Port the sync HTTP server listens on. */
+  port: z.number().int().default(4001),
+  /** (client only) How often to pull updates from master, in seconds. */
+  pull_interval_sec: z.number().default(300),
+  /** (client only) How often to push market+pirate fast-data to master, in seconds. */
+  push_interval_sec: z.number().default(60),
+  /** (client only) How often to push full topology (connections, POI structure) to master, in seconds. */
+  slow_push_interval_sec: z.number().default(600),
+  /** (master only) Reject incoming records whose last_updated is this many seconds in the future (clock skew guard). */
+  max_clock_skew_sec: z.number().default(30),
+  /** (client only) If the client has been offline longer than this many hours, force a full pull instead of a delta. */
+  max_stale_hours: z.number().default(24),
+});
+
+export type DataSyncConfig = z.infer<typeof DataSyncConfigSchema>;
+
 // ── Full Config ──
 
 export const AppConfigSchema = z.object({
@@ -110,6 +139,7 @@ export const AppConfigSchema = z.object({
   logging: LoggingConfigSchema.default({}),
   commander: CommanderConfigSchema.default({}),
   economy: EconomyConfigSchema.default({}),
+  datasync: DataSyncConfigSchema.default({}),
   goals: z.array(GoalSchema).default([]),
   inventory_targets: z.array(StockTargetSchema).default([]),
 });

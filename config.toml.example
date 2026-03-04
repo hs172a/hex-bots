@@ -3,8 +3,8 @@
 # All values shown are defaults — omit any section to use defaults.
 
 [server]
-port = 3000
-host = "localhost"
+port = 3210              # HTTP + WebSocket port
+host = "localhost"     # bind address (use "0.0.0.0" to expose on LAN)
 
 [fleet]
 max_bots = 20
@@ -17,8 +17,8 @@ faction_donate_pct = 0               # 0-100
 min_bot_credits = 0                  # 0 = disabled
 
 [logging]
-api_logging = false
-file_logging = true
+api_logging = false    # log every API request/response to data/api-logs/
+file_logging = true    # tee console output to data/logs/hex-bots-{date}.log (set false to disable)
 
 # ── Future: Commander (auto-assignment) ──
 # [commander]

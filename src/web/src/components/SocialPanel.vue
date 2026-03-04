@@ -66,7 +66,7 @@
           </div>
           <div>
             <label class="text-xs text-space-text-dim block mb-1">Items (item_id: quantity, one per line)</label>
-            <textarea v-model="offerItemsText" rows="4" placeholder="ore_iron: 50&#10;fuel_cell: 5" class="input text-xs w-full resize-y font-mono"></textarea>
+            <textarea v-model="offerItemsText" rows="4" placeholder="iron_ore: 50&#10;fuel_cell: 5" class="input text-xs w-full resize-y font-mono"></textarea>
           </div>
           <button @click="sendOffer" :disabled="!offerTarget.trim() || acting === 'offer'" class="btn btn-primary text-xs px-4">
             {{ acting === 'offer' ? '⏳ Sending…' : '📨 Send Offer' }}
@@ -94,7 +94,7 @@
           <div>
             <label class="text-xs text-space-text-dim block mb-1">Item (optional)</label>
             <div class="flex gap-2">
-              <input v-model="giftItemId" placeholder="item_id (e.g. ore_iron)" class="input text-xs flex-1" />
+              <input v-model="giftItemId" placeholder="item_id (e.g. iron_ore)" class="input text-xs flex-1" />
               <input v-model.number="giftQty" type="number" min="1" placeholder="qty" class="input text-xs w-20" />
             </div>
           </div>

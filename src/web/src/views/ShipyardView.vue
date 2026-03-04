@@ -433,7 +433,7 @@
             <div v-if="selectedShipCatalog" class="flex-[2] bg-space-bg border border-[#21262d] rounded-md p-3 text-xs space-y-2 min-w-0">
               <div class="flex items-start justify-between gap-2">
                 <div>
-                  <div class="text-space-text font-semibold">{{ selectedShipCatalog.name }}</div>
+                  <div class="text-space-text font-semibold">{{ selectedShipCatalog.name }} | {{ selectedShipCatalog.id }}</div>
                   <div class="text-space-text-dim text-[11px]">{{ selectedShipCatalog.class }} · {{ selectedShipCatalog.empire_name }}</div>
                 </div>
                 <div class="text-right shrink-0">
