@@ -89,20 +89,42 @@ function sanitizeFastPatch(raw: unknown, maxSkewSec: number): FastPatch | null {
 
 // ── DataSyncServer ────────────────────────────────────────────────────────────
 
+export interface StatsSyncOpts {
+  /** Returns this pool's current daily stats (bot → date → DayStats). */
+  getMyStats: () => Record<string, any>;
+  /** Pool name to identify this VM in aggregated results. */
+  poolName: string;
+}
+
 export class DataSyncServer {
   private map: MapStore;
   private catalog: CatalogStore;
   private cfg: DataSyncConfig;
   private server: ReturnType<typeof Bun.serve> | null = null;
 
-  constructor(map: MapStore, catalog: CatalogStore, cfg: DataSyncConfig) {
+  private statsOpts: StatsSyncOpts | null;
+  /** Per-pool stats received from client VMs: poolName → daily. */
+  private clientPoolStats: Map<string, Record<string, any>> = new Map();
+
+  constructor(map: MapStore, catalog: CatalogStore, cfg: DataSyncConfig, statsOpts?: StatsSyncOpts) {
     this.map = map;
     this.catalog = catalog;
     this.cfg = cfg;
+    this.statsOpts = statsOpts ?? null;
+  }
+
+  /** Returns aggregated stats from all pools (own + all connected clients). */
+  getAllPoolsStats(): Record<string, Record<string, any>> {
+    const result: Record<string, Record<string, any>> = {};
+    if (this.statsOpts) result[this.statsOpts.poolName] = this.statsOpts.getMyStats();
+    for (const [name, daily] of this.clientPoolStats) result[name] = daily;
+    return result;
   }
 
   start(): void {
     const { map, catalog, cfg } = this;
+    const statsOpts = this.statsOpts;
+    const clientPoolStats = this.clientPoolStats;
 
     this.server = Bun.serve({
       hostname: cfg.host,
@@ -126,6 +148,28 @@ export class DataSyncServer {
             status,
             headers: { "Content-Type": "application/json" },
           });
+
+        // ── GET /sync/stats ───────────────────────────────────────────────
+        // Returns this master pool's own stats (useful for clients to mirror)
+        if (req.method === "GET" && url.pathname === "/sync/stats") {
+          const myStats = statsOpts ? statsOpts.getMyStats() : {};
+          return json({ pool: statsOpts?.poolName ?? "master", daily: myStats });
+        }
+
+        // ── POST /sync/stats ──────────────────────────────────────────────
+        // Client VMs push their stats here; master aggregates
+        if (req.method === "POST" && url.pathname === "/sync/stats") {
+          try {
+            const body = await req.json() as { pool?: string; daily?: unknown };
+            if (typeof body.pool === "string" && body.pool && body.daily && typeof body.daily === "object") {
+              clientPoolStats.set(body.pool, body.daily as Record<string, any>);
+              return json({ ok: true });
+            }
+            return json({ error: "Missing pool or daily" }, 400);
+          } catch {
+            return json({ error: "Invalid JSON" }, 400);
+          }
+        }
 
         // ── GET /sync/status ──────────────────────────────────────────────
         if (req.method === "GET" && url.pathname === "/sync/status") {
@@ -242,6 +286,8 @@ export class DataSyncClient {
   private catalog: CatalogStore;
   private cfg: DataSyncConfig;
 
+  private statsOpts: StatsSyncOpts | null;
+
   private lastFastPullAt = new Date(0);
   private lastSlowPullAt = new Date(0);
   private lastFastPushAt = new Date(0);
@@ -249,6 +295,7 @@ export class DataSyncClient {
 
   private fastPushTimer: ReturnType<typeof setInterval> | null = null;
   private slowPushTimer: ReturnType<typeof setInterval> | null = null;
+  private statsPushTimer: ReturnType<typeof setInterval> | null = null;
   private pullTimer: ReturnType<typeof setInterval> | null = null;
 
   /** Consecutive network failure counter across all sync operations. */
@@ -259,10 +306,11 @@ export class DataSyncClient {
   /** Called when the offline status changes. Wire this to broadcastDataSyncStatus(). */
   onStatusChange?: (offline: boolean) => void;
 
-  constructor(map: MapStore, catalog: CatalogStore, cfg: DataSyncConfig) {
+  constructor(map: MapStore, catalog: CatalogStore, cfg: DataSyncConfig, statsOpts?: StatsSyncOpts) {
     this.map = map;
     this.catalog = catalog;
     this.cfg = cfg;
+    this.statsOpts = statsOpts ?? null;
   }
 
   async start(): Promise<void> {
@@ -303,6 +351,15 @@ export class DataSyncClient {
         console.warn("[DataSync] Slow push error:", e instanceof Error ? e.message : e));
     }, slowPushMs);
 
+    // Stats push: own pool stats → master (same cadence as fast push)
+    if (this.statsOpts) {
+      this.pushStats().catch(() => { /* ignore first-run errors */ });
+      this.statsPushTimer = setInterval(() => {
+        this.pushStats().catch(e =>
+          console.warn("[DataSync] Stats push error:", e instanceof Error ? e.message : e));
+      }, fastPushMs);
+    }
+
     console.log(
       `[DataSync] Client running — pull every ${pull_interval_sec}s, ` +
       `fast-push every ${push_interval_sec}s, slow-push every ${slow_push_interval_sec}s`
@@ -312,6 +369,7 @@ export class DataSyncClient {
   stop(): void {
     if (this.fastPushTimer) { clearInterval(this.fastPushTimer); this.fastPushTimer = null; }
     if (this.slowPushTimer) { clearInterval(this.slowPushTimer); this.slowPushTimer = null; }
+    if (this.statsPushTimer) { clearInterval(this.statsPushTimer); this.statsPushTimer = null; }
     if (this.pullTimer) { clearInterval(this.pullTimer); this.pullTimer = null; }
     console.log("[DataSync] Client stopped");
   }
@@ -403,6 +461,24 @@ export class DataSyncClient {
     console.log("[DataSync] Pulled catalog from master");
   }
 
+  private async pushStats(): Promise<void> {
+    if (!this.statsOpts) return;
+    const { poolName, getMyStats } = this.statsOpts;
+    const daily = getMyStats();
+    const resp = await fetch(`${this.cfg.master_url}/sync/stats`, {
+      method: "POST",
+      headers: this.headers(),
+      body: JSON.stringify({ pool: poolName, daily }),
+      signal: AbortSignal.timeout(10_000),
+    });
+    if (resp.ok) {
+      this.recordSuccess();
+    } else {
+      this.recordFailure();
+      console.warn(`[DataSync] POST /sync/stats → ${resp.status}`);
+    }
+  }
+
   private async pushFast(): Promise<void> {
     const patches = this.map.getFastPatchesSince(this.lastFastPushAt);
     if (patches.length === 0) return;
@@ -452,17 +528,18 @@ export function initDataSync(
   map: MapStore,
   catalog: CatalogStore,
   cfg: DataSyncConfig,
+  statsOpts?: StatsSyncOpts,
 ): DataSyncServer | DataSyncClient | null {
   if (!cfg.enabled) return null;
 
   if (cfg.mode === "master") {
-    const server = new DataSyncServer(map, catalog, cfg);
+    const server = new DataSyncServer(map, catalog, cfg, statsOpts);
     server.start();
     return server;
   }
 
   if (cfg.mode === "client") {
-    const client = new DataSyncClient(map, catalog, cfg);
+    const client = new DataSyncClient(map, catalog, cfg, statsOpts);
     client.start().catch((e) => console.error("[DataSync] Client start error:", e));
     return client;
   }

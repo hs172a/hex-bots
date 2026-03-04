@@ -1,5 +1,5 @@
 import { existsSync, readdirSync, appendFileSync, mkdirSync, rmSync } from "fs";
-import { join } from "path";
+import { join, basename } from "path";
 import { Bot, type Routine } from "./bot.js";
 import { SessionManager } from "./session.js";
 import { minerRoutineV2 } from "./routines/miner-v2.js";
@@ -26,6 +26,7 @@ import { piCommanderRoutine } from "./routines/pi_commander.js";
 import { aiCommanderRoutine } from "./routines/ai_commander.js";
 import { stationToFactionRoutine } from "./routines/station_to_faction.js";
 import { smartSelectorRoutine } from "./routines/smart_selector.js";
+import { combatSelectorRoutine } from "./routines/combat_selector.js";
 import { mapStore } from "./mapstore.js";
 import { catalogStore } from "./catalogstore.js";
 import { publicCatalog } from "./publicCatalog.js";
@@ -44,7 +45,7 @@ import type { FleetSummary } from "./commander/types.js";
 import { GoalsStore } from "./data/goals-store.js";
 import { GoalSchema } from "./types/config.js";
 import { AdvisoryCommander } from "./commander/advisory-commander.js";
-import { initDataSync, DataSyncClient } from "./datasync.js";
+import { initDataSync, DataSyncClient, DataSyncServer } from "./datasync.js";
 
 const BASE_DIR = process.cwd();
 const SESSIONS_DIR = join(BASE_DIR, "sessions");
@@ -123,7 +124,8 @@ const ROUTINES: Record<string, { name: string; fn: Routine }> = {
   ai: { name: "AI", fn: aiRoutine },
   pi_commander: { name: "PI Commander", fn: piCommanderRoutine },
   ai_commander: { name: "AI Commander", fn: aiCommanderRoutine },
-  smart_selector: { name: "SmartSelector", fn: smartSelectorRoutine },
+  smart_selector:   { name: "SmartSelector",   fn: smartSelectorRoutine },
+  combat_selector:  { name: "CombatSelector",  fn: combatSelectorRoutine },
 };
 
 // ── Auto-discover existing sessions ─────────────────────────
@@ -741,10 +743,17 @@ async function main(): Promise<void> {
   }
 
   // Initialize DataSync (shared game knowledge across VMs)
-  const dataSync = initDataSync(mapStore, catalogStore, config.datasync);
+  const statsOpts = {
+    poolName: basename(process.cwd()),
+    getMyStats: () => server.getStatsData(),
+  };
+  const dataSync = initDataSync(mapStore, catalogStore, config.datasync, statsOpts);
   if (dataSync) {
     server.dataSyncMode = config.datasync.mode;
     server.logSystem(`[DataSync] mode=${config.datasync.mode} enabled`);
+    if (dataSync instanceof DataSyncServer) {
+      server.onAllPoolsStats = () => dataSync.getAllPoolsStats();
+    }
     if (dataSync instanceof DataSyncClient) {
       dataSync.onStatusChange = (offline: boolean) => {
         server.broadcastDataSyncStatus(offline);

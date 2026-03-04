@@ -61,8 +61,8 @@
       </div>
     </div>
 
-    <!-- Mission Analytics -->
-    <div class="bg-space-card border border-space-border rounded-lg">
+    <!-- Mission Analytics (current pool only) -->
+    <div v-if="!selectedPool" class="bg-space-card border border-space-border rounded-lg">
       <div class="px-3 py-2 border-b border-space-border flex items-center justify-between">
         <span class="text-xs font-semibold text-space-text-dim uppercase">🎯 Mission Analytics</span>
         <div class="flex items-center gap-3">
@@ -120,8 +120,14 @@
       </div>
     </div>
 
-    <!-- Credits/hr row -->
-    <div class="bg-space-card border border-space-border rounded-lg">
+    <!-- Other-pool notice -->
+    <div v-if="selectedPool" class="flex items-center gap-2 px-3 py-2 bg-[#0d1a0d] border border-[#1a3a1a] rounded-lg text-xs text-space-green">
+      <span class="text-base">ℹ️</span>
+      <span>Viewing <strong>{{ selectedPool }}</strong> pool — showing economic stats from saved file. Live data (skills, credits/hr, missions) is only available for the <strong>current</strong> pool.</span>
+    </div>
+
+    <!-- Credits/hr row (current pool only) -->
+    <div v-if="!selectedPool" class="bg-space-card border border-space-border rounded-lg">
       <div class="px-3 py-2 border-b border-space-border flex items-center justify-between">
         <span class="text-xs font-semibold text-space-text-dim uppercase">💰 Credits / Hour (rolling 1h)</span>
         <span class="text-[11px] text-space-text-dim">Live — updates with each bot status</span>
@@ -205,8 +211,8 @@
       </div>
     </div>
 
-    <!-- Skills Breakdown -->
-    <div class="bg-space-card border border-space-border rounded-lg">
+    <!-- Skills Breakdown (current pool only — live data from bot status) -->
+    <div v-if="!selectedPool" class="bg-space-card border border-space-border rounded-lg">
       <div class="px-3 py-2 border-b border-space-border flex items-center justify-between">
         <span class="text-xs font-semibold text-space-text-dim uppercase">🎓 Skill Levels</span>
         <span class="text-[11px] text-space-text-dim">From last status update</span>
@@ -232,7 +238,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, onMounted } from 'vue';
+import { ref, computed, onMounted, watch } from 'vue';
 import { useBotStore } from '../stores/botStore';
 
 // ── Mission Analytics state ─────────────────────────────
@@ -257,6 +263,11 @@ async function loadAllPools() {
     selectedPool.value = null;
   }
 }
+
+// Auto-switch to All Time when selecting another pool — today/week may be all zeros
+watch(selectedPool, (val) => {
+  if (val !== null) statsPeriod.value = 'all';
+});
 
 onMounted(() => { botStore.fetchAllPoolsStats(); });
 

@@ -646,6 +646,54 @@
         <div class="save-bar"><button @click="saveHunter" class="btn btn-primary">Save Settings</button></div>
       </div>
 
+      <!-- CombatSelector Settings -->
+      <div v-else-if="activeTab === 'combat_selector'">
+        <h3 class="text-[15px] font-semibold text-space-text-bright mb-1">Combat Selector Settings</h3>
+        <p class="text-xs text-space-text-dim mb-5">Rule-based orchestrator for combat bots. Scores hunter, missions, scout, explorer, and salvager each cycle and delegates to the best match.</p>
+
+        <div class="setting-row">
+          <div><div class="text-sm text-space-text">Min Hull for Hunting (%)</div><div class="text-xs text-space-text-dim mt-0.5">Hunter is only enabled when hull is above this %. Below this it falls back to missions/scout.</div></div>
+          <input type="number" v-model.number="combatSelectorForm.minHullForHunting" min="30" max="90" class="input text-sm w-24" />
+        </div>
+        <div class="setting-row">
+          <div><div class="text-sm text-space-text">Min Fuel for Hunting (%)</div><div class="text-xs text-space-text-dim mt-0.5">Hunter is disabled when fuel is below this %. Ensures reserves for combat.</div></div>
+          <input type="number" v-model.number="combatSelectorForm.minFuelForHunting" min="10" max="70" class="input text-sm w-24" />
+        </div>
+        <div class="setting-row">
+          <div><div class="text-sm text-space-text">Min Mission Reward (cr)</div><div class="text-xs text-space-text-dim mt-0.5">Ignore available missions below this credit reward.</div></div>
+          <input type="number" v-model.number="combatSelectorForm.minMissionReward" min="0" max="100000" step="100" class="input text-sm w-28" />
+        </div>
+        <div class="setting-row">
+          <div><div class="text-sm text-space-text">Enable Salvager</div><div class="text-xs text-space-text-dim mt-0.5">Include salvager and scavenger as candidate routines between patrols.</div></div>
+          <input type="checkbox" v-model="combatSelectorForm.enableSalvager" class="w-4 h-4" />
+        </div>
+        <div class="setting-row">
+          <div><div class="text-sm text-space-text">Enable PvP</div><div class="text-xs text-space-text-dim mt-0.5">Allow hunter to attack player ships. Disabled by default (NPC only).</div></div>
+          <input type="checkbox" v-model="combatSelectorForm.enablePvP" class="w-4 h-4" />
+        </div>
+        <div class="setting-row">
+          <div><div class="text-sm text-space-text">Patrol System</div><div class="text-xs text-space-text-dim mt-0.5">Fixed system to patrol. Leave empty to use Hunter's own setting.</div></div>
+          <select v-model="combatSelectorForm.patrolSystem" class="input text-sm min-w-[200px]">
+            <option value="">(use Hunter setting)</option>
+            <option v-for="sys in botStore.knownSystems" :key="sys.id" :value="sys.id">{{ sys.name || sys.id }}</option>
+          </select>
+        </div>
+        <div class="setting-row">
+          <div><div class="text-sm text-space-text">Forced Routine</div><div class="text-xs text-space-text-dim mt-0.5">Bypass scoring and always run this routine. Leave empty for auto.</div></div>
+          <select v-model="combatSelectorForm.forcedRoutine" class="input text-sm min-w-[200px]">
+            <option value="">(auto)</option>
+            <option value="hunter">Hunter</option>
+            <option value="mission_runner">Mission Runner</option>
+            <option value="scout">Scout</option>
+            <option value="explorer">Explorer</option>
+            <option value="salvager">Salvager</option>
+            <option value="scavenger">Scavenger</option>
+            <option value="return_home">Return Home</option>
+          </select>
+        </div>
+        <div class="save-bar"><button @click="saveCombatSelector" class="btn btn-primary">Save Settings</button></div>
+      </div>
+
       <!-- Scout Settings -->
       <div v-else-if="activeTab === 'scout'">
         <h3 class="text-[15px] font-semibold text-space-text-bright mb-1">Scout Settings</h3>
@@ -1060,7 +1108,8 @@ const settingsTabs = [
   { id: 'ice_harvester',  name: '🧊 Ice Harvester',  group: 'Harvesting' },
   { id: 'scavenger',      name: '♻️ Scavenger',       group: 'Harvesting' },
   { id: 'salvager',       name: '🔩 Salvager',        group: 'Harvesting' },
-  { id: 'hunter',         name: '🎯 Hunter',          group: 'Combat' },
+  { id: 'hunter',           name: '🎯 Hunter',           group: 'Combat' },
+  { id: 'combat_selector', name: '⚔️ Combat Selector', group: 'Combat' },
   { id: 'pi_commander',   name: '🤖 PI Commander',    group: 'AI' },
   { id: 'ai',             name: '🧠 AI Agent',        group: 'AI' },
   { id: 'ai_commander',   name: '🌐 AI Commander',    group: 'AI' },
@@ -1269,6 +1318,17 @@ const iceForm = ref({
   cargoThreshold: 80,
   refuelThreshold: 50,
   repairThreshold: 40,
+});
+
+// ── CombatSelector form ────────────────────────────────────
+const combatSelectorForm = ref({
+  minHullForHunting: 60,
+  minFuelForHunting: 30,
+  enablePvP: false,
+  patrolSystem: '',
+  forcedRoutine: '',
+  enableSalvager: true,
+  minMissionReward: 300,
 });
 
 // ── Hunter form ─────────────────────────────────────────────
@@ -1517,6 +1577,16 @@ watch(() => botStore.settings, (s) => {
     salvagerForm.value.refuelThreshold = sv.refuelThreshold ?? 50;
     salvagerForm.value.repairThreshold = sv.repairThreshold ?? 40;
   }
+  if (s.combat_selector) {
+    const cs = s.combat_selector;
+    combatSelectorForm.value.minHullForHunting = cs.minHullForHunting ?? 60;
+    combatSelectorForm.value.minFuelForHunting = cs.minFuelForHunting ?? 30;
+    combatSelectorForm.value.enablePvP = cs.enablePvP === true;
+    combatSelectorForm.value.patrolSystem = cs.patrolSystem || '';
+    combatSelectorForm.value.forcedRoutine = cs.forcedRoutine || '';
+    combatSelectorForm.value.enableSalvager = cs.enableSalvager !== false;
+    combatSelectorForm.value.minMissionReward = cs.minMissionReward ?? 300;
+  }
   if (s.hunter) {
     const h = s.hunter;
     hunterForm.value.system = h.system || '';
@@ -1722,6 +1792,10 @@ function saveSalvager() {
     refuelThreshold: salvagerForm.value.refuelThreshold,
     repairThreshold: salvagerForm.value.repairThreshold,
   });
+}
+
+function saveCombatSelector() {
+  botStore.saveSettings('combat_selector', { ...combatSelectorForm.value });
 }
 
 function saveHunter() {

@@ -117,12 +117,10 @@ import BotProfile from './components/BotProfile.vue';
 import SettingsView from './views/SettingsView.vue';
 import MarketView from './views/MarketView.vue';
 import MissionsView from './views/MissionsView.vue';
-import StatsView from './views/StatsView.vue';
 import FactionView from './views/FactionView.vue';
 import MapView from './views/MapView.vue';
 import ShipyardView from './views/ShipyardView.vue';
 import CommanderView from './views/CommanderView.vue';
-import ActionLogView from './views/ActionLogView.vue';
 import { version } from '../../../package.json';
 
 const tabs = [
@@ -133,8 +131,6 @@ const tabs = [
   { id: 'faction', label: 'Faction', component: FactionView, icon: '🏛️' },
   { id: 'shipyard', label: 'Shipyard', component: ShipyardView, icon: '🛠️' },
   { id: 'commander', label: 'Commander', component: CommanderView, icon: '🧠' },
-  { id: 'actionlog', label: 'Action Log', component: ActionLogView, icon: '📜' },
-  { id: 'stats', label: 'Stats', component: StatsView, icon: '📊' },
   { id: 'settings', label: 'Settings', component: SettingsView, icon: '⚙️' },
 ];
 

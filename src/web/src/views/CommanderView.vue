@@ -2,13 +2,10 @@
   <div class="flex-1 flex flex-col overflow-hidden">
     <!-- Tab bar -->
     <div class="flex border-b border-space-border bg-space-card px-3 shrink-0">
-      <button @click="activeTab = 'advisory'" class="px-4 py-2 text-xs font-medium border-b-2 transition-all"
-        :class="activeTab === 'advisory' ? 'text-space-text-bright border-space-accent' : 'text-space-text-dim border-transparent hover:text-space-text'">
-        📊 Advisory
-      </button>
-      <button @click="activeTab = 'agent'" class="px-4 py-2 text-xs font-medium border-b-2 transition-all"
-        :class="activeTab === 'agent' ? 'text-space-text-bright border-space-accent' : 'text-space-text-dim border-transparent hover:text-space-text'">
-        🤖 AI Agent
+      <button v-for="t in TABS" :key="t.id" @click="activeTab = t.id"
+        class="px-4 py-2 text-xs font-medium border-b-2 transition-all"
+        :class="activeTab === t.id ? 'text-space-text-bright border-space-accent' : 'text-space-text-dim border-transparent hover:text-space-text'">
+        {{ t.label }}
       </button>
     </div>
 
@@ -187,6 +184,12 @@
     </div>
   </div>
 
+  <!-- Stats Tab -->
+  <StatsView v-else-if="activeTab === 'stats'" />
+
+  <!-- Action Log Tab -->
+  <ActionLogView v-else-if="activeTab === 'log'" />
+
   <!-- AI Agent Tab -->
   <div v-else-if="activeTab === 'agent'" class="flex-1 flex flex-col gap-3 p-4 overflow-auto scrollbar-dark">
     <!-- Bot Selector -->
@@ -255,6 +258,8 @@
 <script setup lang="ts">
 import { ref, computed, watch, onMounted, onUnmounted } from 'vue'
 import { useBotStore } from '../stores/botStore'
+import StatsView from './StatsView.vue'
+import ActionLogView from './ActionLogView.vue'
 
 interface EconomyData {
   deficits: Array<{ itemId: string; shortfall: number; priority: string }>
@@ -291,7 +296,15 @@ interface Goal {
 }
 
 const botStore = useBotStore()
-const activeTab = ref<'advisory' | 'agent'>('advisory')
+const TABS = [
+  { id: 'advisory', label: '📊 Advisory' },
+  { id: 'stats',    label: '📈 Stats'    },
+  { id: 'log',      label: '📜 Action Log' },
+  { id: 'agent',    label: '🤖 AI Agent'  },
+] as const
+type TabId = typeof TABS[number]['id']
+
+const activeTab = ref<TabId>('advisory')
 const economyData = ref<EconomyData>({ deficits: [], surpluses: [], totalRevenue: 0, totalCosts: 0, netProfit: 0 })
 const suggestions = ref<Suggestion[]>([])
 const commanderReasoning = ref('')

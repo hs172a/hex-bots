@@ -154,6 +154,9 @@ export class WebServer {
   // DataSync mode — set by botmanager when datasync is enabled
   dataSyncMode: 'master' | 'client' | 'disabled' = 'disabled';
 
+  // When DataSync is in master mode, botmanager wires this to DataSyncServer.getAllPoolsStats()
+  onAllPoolsStats: (() => Record<string, Record<string, any>>) | null = null;
+
   // Commander advisory data — set by botmanager
   onCommanderData: (() => unknown) | null = null;
 
@@ -248,6 +251,11 @@ export class WebServer {
           return Response.json(this.statsData.daily);
         }
         if (url.pathname === "/api/stats/all-pools") {
+          // DataSync master mode: return aggregated stats from all connected VMs
+          if (this.onAllPoolsStats) {
+            return Response.json(this.onAllPoolsStats());
+          }
+          // Standalone mode: scan local sibling directories on same machine
           const poolName = basename(process.cwd());
           const allPools: Record<string, Record<string, any>> = { [poolName]: this.statsData.daily };
           try {

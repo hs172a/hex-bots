@@ -1,6 +1,6 @@
 {
   "name": "hex-bots",
-  "version": "1.7.0",
+  "version": "1.7.2",
   "type": "module",
   "scripts": {
     "start": "bun run src/botmanager.ts",
