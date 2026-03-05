@@ -2,6 +2,7 @@ import type { Routine, RoutineContext } from "../bot.js";
 import type { CargoItem } from "../bot.js";
 import type { MapStore } from "../mapstore.js";
 import type { CatalogStore } from "../catalogstore.js";
+import { claimMiningSystem, releaseMiningClaim, miningClaimCount } from "../miningclaims.js";
 import {
   type SystemPOI,
   isOreBeltPoi,
@@ -25,6 +26,7 @@ import {
   readSettings,
   scavengeWrecks,
   sleep,
+  logAgentEvent,
 } from "./common.js";
 
 // ── Settings ─────────────────────────────────────────────────
@@ -46,7 +48,7 @@ function defaultOreQuotas(ms: MapStore): Record<string, number> {
 
 /** Read miner settings from data/settings.json.
  *  Per-bot overrides for targetOre, depositMode, depositBot are checked first. */
-function getMinerSettings(username?: string, ms?: MapStore): {
+function getMinerV2Settings(username?: string, ms?: MapStore): {
   depositMode: DepositMode;
   depositFallback: DepositMode;
   cargoThreshold: number;
@@ -208,7 +210,13 @@ async function completeActiveMissions(ctx: RoutineContext): Promise<void> {
     if (!completeResp.error) {
       const reward = (mission.reward as number) || (mission.reward_credits as number) || 0;
       ctx.log("trade", `Mission complete: ${(mission.name as string) || missionId}${reward > 0 ? ` (+${reward} credits)` : ""}`);
-      await bot.refreshStatus();
+      // Update credits from mission completion without full refresh
+      if (completeResp.result && typeof completeResp.result === 'object') {
+        const result = completeResp.result as any;
+        if (result.player?.credits !== undefined) {
+          bot.credits = result.player.credits;
+        }
+      }
     }
   }
 }
@@ -232,60 +240,225 @@ async function isBeltDepleted(ctx: RoutineContext): Promise<boolean> {
   return depletedCount === resources.length;
 }
 
-// ── Miner routine ────────────────────────────────────────────
+// ── Optimized Cargo Handling ──────────────────────────────────
+
+/** Optimized cargo handling - processes items from get_cargo response */
+async function handleCargoFromResponse(
+  ctx: RoutineContext,
+  cargoItems: Array<Record<string, unknown>>,
+  settings: ReturnType<typeof getMinerV2Settings>
+): Promise<string[]> {
+  const { bot } = ctx;
+  const unloadedItems: string[] = [];
+  const cachedFac = bot.poi ? ctx.mapStore.hasFactionStorage(bot.poi) : null;
+  let noFactionStorage = cachedFac === false;
+
+  // Deposit helper: attempts primary mode, falls back on error
+  async function depositItem(itemId: string, quantity: number, displayName: string, mode: DepositMode, recipient: string): Promise<boolean> {
+    if (mode === "gift" || recipient) {
+      const target = recipient || settings.depositBot;
+      if (target) {
+        const giftResp = await bot.exec("send_gift", { recipient: target, item_id: itemId, quantity });
+        if (!giftResp.error) return true;
+        ctx.log("trade", `Gift to ${target} failed for ${displayName}: ${giftResp.error.message}`);
+        return false;
+      }
+    }
+    if (mode === "sell") {
+      const sellResp = await bot.exec("sell", { item_id: itemId, quantity });
+      if (!sellResp.error) {
+        // Update credits from sale result
+        if (sellResp.result && typeof sellResp.result === 'object') {
+          const result = sellResp.result as any;
+          if (result.total_earned !== undefined) {
+            bot.credits += result.total_earned;
+          }
+        }
+        return true;
+      }
+      ctx.log("trade", `Sell failed for ${displayName}: ${sellResp.error.message}`);
+      return false;
+    }
+    if (mode === "faction") {
+      if (noFactionStorage) return false;
+      const factionResp = await bot.exec("faction_deposit_items", { item_id: itemId, quantity });
+      if (!factionResp.error) {
+        if (bot.poi) ctx.mapStore.setFactionStorage(bot.poi, true);
+        return true;
+      }
+      const ec = factionResp.error.code ?? "";
+      const em = factionResp.error.message ?? "";
+      if (ec === "no_faction_storage" || em.includes("no_faction_storage") || em.includes("faction_lockbox")) {
+        noFactionStorage = true;
+        if (bot.poi) ctx.mapStore.setFactionStorage(bot.poi, false);
+      } else {
+        ctx.log("trade", `Faction deposit failed for ${displayName}: ${em}`);
+      }
+      return false;
+    }
+    // Default: personal storage
+    const storeResp = await bot.exec("deposit_items", { item_id: itemId, quantity });
+    if (storeResp.error) {
+      ctx.log("trade", `Station deposit failed for ${displayName}: ${storeResp.error.message}`);
+    }
+    return !storeResp.error;
+  }
+
+  const modeLabel: Record<string, string> = {
+    storage: "station storage", faction: "faction storage", sell: "market",
+  };
+  const primaryLabel = settings.depositBot
+    ? `${settings.depositBot}'s storage`
+    : (modeLabel[settings.depositMode] || "storage");
+
+  for (const item of cargoItems) {
+    const itemId = (item.item_id as string) || "";
+    const quantity = (item.quantity as number) || 0;
+    if (!itemId || quantity <= 0) continue;
+    const displayName = (item.name as string) || itemId;
+
+    const ok = await depositItem(itemId, quantity, displayName, settings.depositMode, settings.depositBot);
+    if (!ok) {
+      const ok2 = await depositItem(itemId, quantity, displayName, settings.depositFallback, "");
+      if (!ok2) {
+        const storeResp = await bot.exec("deposit_items", { item_id: itemId, quantity });
+        if (storeResp.error) {
+          const factionResp = await bot.exec("faction_deposit_items", { item_id: itemId, quantity });
+          if (factionResp.error) {
+            ctx.log("error", `All deposit methods failed for ${displayName}: ${factionResp.error.message}`);
+            continue; // item stays in cargo — skip the push below
+          }
+        }
+      }
+    }
+    unloadedItems.push(`${quantity}x ${displayName}`); // only reached when at least one method succeeded
+  }
+
+  if (unloadedItems.length > 0) {
+    ctx.log("trade", `Unloaded ${unloadedItems.join(", ")} → ${primaryLabel}`);
+  }
+
+  return unloadedItems;
+}
+
+// ── Optimized Status Updates ─────────────────────────────────
+
+/** Batch status update - combines multiple refreshes into one */
+async function batchStatusUpdate(ctx: RoutineContext, updateFactionStorage: boolean = false): Promise<void> {
+  const { bot } = ctx;
+  
+  // Get status once
+  const statusResp = await bot.exec("get_status");
+  if (!statusResp.error && statusResp.result) {
+    const result = statusResp.result as any;
+    
+    // Update all status fields from single response
+    if (result.player) {
+      bot.credits = result.player.credits ?? bot.credits;
+      bot.system = result.player.current_system ?? bot.system;
+      bot.poi = result.player.current_poi ?? bot.poi;
+      bot.docked = !!result.player.docked_at_base;
+    }
+    
+    if (result.ship) {
+      bot.fuel = result.ship.fuel ?? bot.fuel;
+      bot.maxFuel = result.ship.max_fuel ?? bot.maxFuel;
+      bot.hull = result.ship.hull ?? bot.hull;
+      bot.maxHull = result.ship.max_hull ?? bot.maxHull;
+      bot.cargo = result.ship.cargo_used ?? bot.cargo;
+      bot.cargoMax = result.ship.cargo_capacity ?? bot.cargoMax;
+    }
+  }
+  
+  // Get faction storage only if needed
+  if (updateFactionStorage) {
+    await bot.refreshFactionStorage();
+  }
+}
+
+/** Update cargo from mining response without additional API call */
+function updateCargoFromMineResult(bot: any, mineResult: any): void {
+  if (mineResult.result && typeof mineResult.result === 'object') {
+    const result = mineResult.result;
+    if (result.ship?.cargo_used !== undefined) {
+      bot.cargo = result.ship.cargo_used;
+    }
+  }
+}
+
+// ── Miner routine v2 ────────────────────────────────────────────
 
 /**
- * Miner routine — supports targeted ore seeking across systems:
- *
- * If targetOre is set:
- *   1. Look up ore locations in mapStore
- *   2. Navigate to best belt (cross-system jumps if needed)
- *   3. Mine target ore until cargo full
- *   4. Navigate back to home station
- *   5. Sell/deposit, refuel, repair
- *
- * If no targetOre:
- *   Mine at nearest belt in current/configured system
+ * Optimized Miner routine v2 - reduced API calls:
+ * 
+ * Key optimizations:
+ * 1. Batch status updates instead of individual refresh calls
+ * 2. Use mining response to update cargo without get_status
+ * 3. Combine cargo handling with single get_cargo call
+ * 4. Cache system info and reuse when possible
+ * 5. Reduce redundant refresh calls in loops
  */
-export const minerRoutine: Routine = async function* (ctx: RoutineContext) {
+export const minerRoutineV2: Routine = async function* (ctx: RoutineContext) {
   const { bot } = ctx;
 
-  await bot.refreshStatus();
-  const settings0 = getMinerSettings(bot.username, ctx.mapStore);
-  // Home system: from settings, or wherever the bot is now as fallback
+  // Initial status update
+  await batchStatusUpdate(ctx, false);
+  const settings0 = getMinerV2Settings(bot.username, ctx.mapStore);
   const homeSystem = settings0.homeSystem || bot.system;
-  /** Systems where all belts were depleted for the current target ore. Cleared each cycle when ore target changes. */
   const depletedSystems = new Set<string>();
   let lastTargetOre = "";
+  const wrongModulePois = new Set<string>();
+  let cachedSystemInfo: { pois: any[]; systemId: string } | null = null;
+  let lastSystemRefresh = 0;
+  const SYSTEM_CACHE_DURATION = 30000; // 30 seconds
 
   // ── Startup: return home and dump non-fuel cargo to storage ──
-  await bot.refreshCargo();
-  const nonFuelCargo = bot.inventory.filter(i => {
-    const lower = i.itemId.toLowerCase();
-    return !lower.includes("fuel") && !lower.includes("energy_cell") && i.quantity > 0;
-  });
-  if (nonFuelCargo.length > 0) {
-    // Navigate to home system first so deposits go to the right station
-    if (bot.system !== homeSystem) {
-      ctx.log("mining", `Startup: returning to home system ${homeSystem} to deposit cargo...`);
-      const fueled = await ensureFueled(ctx, 50);
-      if (fueled) {
-        await navigateToSystem(ctx, homeSystem, { fuelThresholdPct: 50, hullThresholdPct: 30 });
-      }
-    }
-    await ensureDocked(ctx);
-    for (const item of nonFuelCargo) {
-      if (settings0.depositMode === "faction") {
-        const fResp = await bot.exec("faction_deposit_items", { item_id: item.itemId, quantity: item.quantity });
-        if (fResp.error) {
-          await bot.exec("deposit_items", { item_id: item.itemId, quantity: item.quantity });
+  const cargoResp = await bot.exec("get_cargo");
+  if (cargoResp.result && typeof cargoResp.result === "object") {
+    const result = cargoResp.result as Record<string, unknown>;
+    const cargoItems = (
+      Array.isArray(result) ? result :
+      Array.isArray(result.items) ? result.items :
+      Array.isArray(result.cargo) ? result.cargo :
+      []
+    ) as Array<Record<string, unknown>>;
+
+    const nonFuelCargo = cargoItems.filter(i => {
+      const itemId = (i.item_id as string) || "";
+      const quantity = (i.quantity as number) || 0;
+      const lower = itemId.toLowerCase();
+      return quantity > 0 && !lower.includes("fuel") && !lower.includes("energy_cell");
+    });
+
+    if (nonFuelCargo.length > 0) {
+      // Navigate to home system first
+      if (bot.system !== homeSystem) {
+        ctx.log("mining", `Startup: returning to home system ${homeSystem} to deposit cargo...`);
+        const fueled = await ensureFueled(ctx, 50);
+        if (fueled) {
+          await navigateToSystem(ctx, homeSystem, { fuelThresholdPct: 50, hullThresholdPct: 30 });
         }
-      } else {
-        await bot.exec("deposit_items", { item_id: item.itemId, quantity: item.quantity });
       }
+      // Navigate to station POI in current system before docking
+      if (!bot.docked) {
+        const { pois: startupPois } = await getSystemInfo(ctx);
+        const startupStation = findStation(startupPois);
+        if (startupStation) {
+          const travelResp = await bot.exec("travel", { target_poi: startupStation.id });
+          if (travelResp.error && !travelResp.error.message.includes("already")) {
+            ctx.log("error", `Startup: travel to station failed: ${travelResp.error.message}`);
+          }
+        }
+      }
+      await ensureDocked(ctx);
+      const unloaded = await handleCargoFromResponse(ctx, nonFuelCargo, settings0);
+      if (unloaded.length > 0) {
+        ctx.log("mining", `Startup: deposited ${unloaded.join(", ")} — cargo clear for mining`);
+      } else {
+        ctx.log("error", `Startup: failed to deposit cargo — will retry in main loop`);
+      }
+      await bot.refreshCargo();
     }
-    const names = nonFuelCargo.map(i => `${i.quantity}x ${i.name}`).join(", ");
-    ctx.log("mining", `Startup: deposited ${names} — cargo clear for mining`);
   }
 
   while (bot.state === "running") {
@@ -293,8 +466,8 @@ export const minerRoutine: Routine = async function* (ctx: RoutineContext) {
     const alive = await detectAndRecoverFromDeath(ctx);
     if (!alive) { await sleep(30000); continue; }
 
-    // Re-read settings each cycle so changes take effect without restart
-    const settings = getMinerSettings(bot.username, ctx.mapStore);
+    // Re-read settings each cycle
+    const settings = getMinerV2Settings(bot.username, ctx.mapStore);
     const cargoThresholdRatio = settings.cargoThreshold / 100;
     const safetyOpts = {
       fuelThresholdPct: settings.refuelThreshold,
@@ -312,7 +485,6 @@ export const minerRoutine: Routine = async function* (ctx: RoutineContext) {
         const oreName = ctx.catalogStore.resolveItemName(pick.oreId);
         ctx.log("mining", `Quota pick: ${oreName} (${pick.current}/${pick.target}, deficit ${pick.deficit})`);
       } else if (pick.target > 0) {
-        // All quotas met — clear targetOre so we mine locally
         targetOre = "";
         ctx.log("mining", "All ore quotas met — mining locally");
       }
@@ -324,9 +496,9 @@ export const minerRoutine: Routine = async function* (ctx: RoutineContext) {
       lastTargetOre = targetOre;
     }
 
-    // ── Status + fuel/hull checks ──
-    yield "get_status";
-    await bot.refreshStatus();
+    // ── Batch status update + fuel/hull checks ──
+    yield "status_check";
+    await batchStatusUpdate(ctx, false);
 
     // Ensure fuel before doing anything
     yield "fuel_check";
@@ -338,7 +510,6 @@ export const minerRoutine: Routine = async function* (ctx: RoutineContext) {
     }
 
     // Hull check — repair immediately if low
-    await bot.refreshStatus();
     const hullPct = bot.maxHull > 0 ? Math.round((bot.hull / bot.maxHull) * 100) : 100;
     if (hullPct <= 40) {
       ctx.log("system", `Hull critical (${hullPct}%) — returning to station for repair`);
@@ -357,23 +528,30 @@ export const minerRoutine: Routine = async function* (ctx: RoutineContext) {
 
     if (targetOre) {
       const allOreLocations = ctx.mapStore.findOreLocations(targetOre);
-      // Filter to ore belts only — exclude ice fields, gas clouds, etc.
       const oreLocations = allOreLocations.filter((loc: { systemId: string; poiId: string; systemName?: string; hasStation?: boolean }) => {
         const sys = ctx.mapStore.getSystem(loc.systemId);
         const poi = sys?.pois.find(p => p.id === loc.poiId);
-        return poi ? isOreBeltPoi(poi.type) : true; // keep if type unknown
+        return poi ? isOreBeltPoi(poi.type) : true;
       });
+
       if (oreLocations.length === 0) {
         ctx.log("error", `Target ore "${targetOre}" not found at any ore belt — mining locally`);
       } else {
-        const inCurrentSystem = oreLocations.find(loc => loc.systemId === bot.system);
+        // Anti-collision: prefer systems not already claimed by other bots
+        const unclaimedLocations = oreLocations.filter(loc => miningClaimCount(loc.systemId) === 0);
+        const candidateLocations = unclaimedLocations.length > 0 ? unclaimedLocations : oreLocations;
+        if (unclaimedLocations.length === 0 && oreLocations.length > 0) {
+          ctx.log("mining", "All ore locations claimed by other miners — sharing nearest available");
+        }
+
+        const inCurrentSystem = candidateLocations.find(loc => loc.systemId === bot.system);
         if (inCurrentSystem) {
           targetSystemId = inCurrentSystem.systemId;
           targetBeltId = inCurrentSystem.poiId;
           targetBeltName = inCurrentSystem.poiName;
         } else {
-          const withStation = oreLocations.filter(loc => loc.hasStation);
-          const best = withStation.length > 0 ? withStation[0] : oreLocations[0];
+          const withStation = candidateLocations.filter(loc => loc.hasStation);
+          const best = withStation.length > 0 ? withStation[0] : candidateLocations[0];
 
           const route = ctx.mapStore.findRoute(bot.system, best.systemId);
           if (route) {
@@ -398,6 +576,10 @@ export const minerRoutine: Routine = async function* (ctx: RoutineContext) {
       targetSystemId = miningSystem;
     }
 
+    // Register mining claim for chosen system
+    const claimSystemId = targetSystemId || bot.system;
+    claimMiningSystem(bot.username, claimSystemId);
+
     // ── Navigate to target system if needed ──
     if (targetSystemId && targetSystemId !== bot.system) {
       yield "navigate_to_target";
@@ -411,20 +593,25 @@ export const minerRoutine: Routine = async function* (ctx: RoutineContext) {
 
     if (bot.state !== "running") break;
 
-    // ── Find asteroid belt and station in current system ──
+    // ── Get system info (with caching) ──
     yield "find_belt";
-    const { pois, systemId } = await getSystemInfo(ctx);
-    if (systemId) bot.system = systemId;
+    const now = Date.now();
+    if (!cachedSystemInfo || bot.system !== cachedSystemInfo.systemId || now - lastSystemRefresh > SYSTEM_CACHE_DURATION) {
+      const { pois, systemId } = await getSystemInfo(ctx);
+      cachedSystemInfo = { pois, systemId };
+      lastSystemRefresh = now;
+      if (systemId) bot.system = systemId;
+    }
 
     let beltPoi: { id: string; name: string } | null = null;
     let stationPoi: { id: string; name: string } | null = null;
 
-    const station = findStation(pois);
+    const station = findStation(cachedSystemInfo.pois);
     if (station) stationPoi = { id: station.id, name: station.name };
 
-    // If targeting a specific belt, prefer it — but only if it's an ore belt
+    // Find target belt
     if (targetBeltId) {
-      const match = pois.find(p => p.id === targetBeltId);
+      const match = cachedSystemInfo.pois.find(p => p.id === targetBeltId);
       if (match && isOreBeltPoi(match.type)) {
         beltPoi = { id: match.id, name: match.name };
       } else if (match) {
@@ -432,9 +619,8 @@ export const minerRoutine: Routine = async function* (ctx: RoutineContext) {
       }
     }
 
-    // Fallback: find belt with target ore
     if (!beltPoi && targetOre) {
-      for (const poi of pois) {
+      for (const poi of cachedSystemInfo.pois) {
         if (isOreBeltPoi(poi.type)) {
           const sysData = ctx.mapStore.getSystem(bot.system);
           const storedPoi = sysData?.pois.find(p => p.id === poi.id);
@@ -446,9 +632,8 @@ export const minerRoutine: Routine = async function* (ctx: RoutineContext) {
       }
     }
 
-    // Fallback: any minable POI
     if (!beltPoi) {
-      const minable = pois.find(p => isOreBeltPoi(p.type));
+      const minable = cachedSystemInfo.pois.find(p => isOreBeltPoi(p.type) && !wrongModulePois.has(p.id));
       if (minable) beltPoi = { id: minable.id, name: minable.name };
     }
 
@@ -468,10 +653,10 @@ export const minerRoutine: Routine = async function* (ctx: RoutineContext) {
     }
     bot.poi = beltPoi.id;
 
-    // ── Check belt depletion — switch to an alternative if exhausted ──
+    // ── Check belt depletion ──
     yield "check_belt";
     if (await isBeltDepleted(ctx)) {
-      const altBelt = pois.find(p => isOreBeltPoi(p.type) && p.id !== beltPoi!.id);
+      const altBelt = cachedSystemInfo.pois.find(p => isOreBeltPoi(p.type) && p.id !== beltPoi!.id);
       if (altBelt) {
         ctx.log("mining", `${beltPoi.name} depleted, switching to ${altBelt.name}`);
         const altTravel = await bot.exec("travel", { target_poi: altBelt.id });
@@ -486,20 +671,25 @@ export const minerRoutine: Routine = async function* (ctx: RoutineContext) {
     yield "scavenge";
     await scavengeWrecks(ctx);
 
-    // ── Mine loop: mine until cargo threshold ──
+    // ── Optimized mine loop: mine until cargo threshold ──
     yield "mine_loop";
     let miningCycles = 0;
     let stopReason = "";
     const oresMinedMap = new Map<string, number>();
 
     while (bot.state === "running") {
-      await bot.refreshStatus();
-
+      // Use cached status, only refresh if needed for critical checks
       const midHull = bot.maxHull > 0 ? Math.round((bot.hull / bot.maxHull) * 100) : 100;
       if (midHull <= 40) { stopReason = `hull critical (${midHull}%)`; break; }
 
       const midFuel = bot.maxFuel > 0 ? Math.round((bot.fuel / bot.maxFuel) * 100) : 100;
       if (midFuel < safetyOpts.fuelThresholdPct) { stopReason = `fuel low (${midFuel}%)`; break; }
+
+      // Check cargo using current value
+      const fillRatio = bot.cargoMax > 0 ? bot.cargo / bot.cargoMax : 0;
+      if (fillRatio >= cargoThresholdRatio) {
+        stopReason = `cargo at ${Math.round(fillRatio * 100)}%`; break;
+      }
 
       const mineResp = await bot.exec("mine");
 
@@ -510,6 +700,11 @@ export const minerRoutine: Routine = async function* (ctx: RoutineContext) {
         }
         if (msg.includes("cargo") && msg.includes("full")) {
           stopReason = "cargo full"; break;
+        }
+        if (msg.includes("gas harvester") || msg.includes("ice harvester") || msg.includes("harvester module") || msg.includes("survey capability")) {
+          ctx.log("mining", `${beltPoi.name} requires a specialized module — blacklisting as non-ore POI`);
+          wrongModulePois.add(beltPoi.id);
+          stopReason = "wrong_module"; break;
         }
         ctx.log("error", `Mine error: ${mineResp.error.message}`);
         break;
@@ -524,11 +719,8 @@ export const minerRoutine: Routine = async function* (ctx: RoutineContext) {
         bot.stats.totalMined++;
       }
 
-      await bot.refreshStatus();
-      const fillRatio = bot.cargoMax > 0 ? bot.cargo / bot.cargoMax : 0;
-      if (fillRatio >= cargoThresholdRatio) {
-        stopReason = `cargo at ${Math.round(fillRatio * 100)}%`; break;
-      }
+      // Update cargo from mine result (no additional API call)
+      updateCargoFromMineResult(bot, mineResp);
 
       yield "mining";
     }
@@ -540,6 +732,9 @@ export const minerRoutine: Routine = async function* (ctx: RoutineContext) {
     } else if (stopReason) {
       ctx.log("mining", `Stopped before mining — ${stopReason}`);
     }
+
+    // Release claim before returning home / docking
+    releaseMiningClaim(bot.username);
 
     if (bot.state !== "running") break;
 
@@ -576,12 +771,36 @@ export const minerRoutine: Routine = async function* (ctx: RoutineContext) {
       }
     }
 
+    // ── Wrong module (gas/ice POI mistaken for ore belt): skip unload, find real belt ──
+    if (stopReason === "wrong_module" && miningCycles === 0 && bot.state === "running") {
+      const hasAltBelt = cachedSystemInfo?.pois.some(p => isOreBeltPoi(p.type) && !wrongModulePois.has(p.id));
+      if (hasAltBelt) {
+        // Retry this system — outer loop will pick a different, non-blacklisted belt
+        continue;
+      }
+      // All local POIs blacklisted as non-ore — navigate to a system with a real ore belt
+      ctx.log("error", `No ore belt in ${bot.system} (all POIs require special modules) — navigating to ore-belt system`);
+      cachedSystemInfo = null; // force refresh after arriving
+      const allSystems = ctx.mapStore.getAllSystems ? ctx.mapStore.getAllSystems() : {};
+      const beltSystemEntry = Object.entries(allSystems).find(([sysId, sys]) =>
+        sysId !== bot.system && sys.pois.some(p => isOreBeltPoi(p.type) && !wrongModulePois.has(p.id))
+      );
+      if (beltSystemEntry) {
+        const arrived = await navigateToSystem(ctx, beltSystemEntry[0], safetyOpts);
+        if (arrived) {
+          wrongModulePois.clear(); // may be different POI types in new system
+          continue;
+        }
+      }
+      await sleep(30_000);
+      continue;
+    }
+
     // ── Return to home system if we traveled away ──
     if ((targetOre || Object.keys(settings.oreQuotas).length > 0) && bot.system !== homeSystem && homeSystem) {
       yield "return_home";
 
       // Ensure fueled before the journey home
-      yield "pre_return_fuel";
       const returnFueled = await ensureFueled(ctx, safetyOpts.fuelThresholdPct);
       if (!returnFueled && stationPoi) {
         await refuelAtStation(ctx, stationPoi, safetyOpts.fuelThresholdPct);
@@ -592,8 +811,9 @@ export const minerRoutine: Routine = async function* (ctx: RoutineContext) {
         ctx.log("error", "Failed to return to home system — docking at nearest station");
       }
 
-      // Re-find station in current system
+      // Refresh system info after returning home
       const { pois: homePois } = await getSystemInfo(ctx);
+      cachedSystemInfo = { pois: homePois, systemId: homeSystem };
       const homeStation = findStation(homePois);
       stationPoi = homeStation ? { id: homeStation.id, name: homeStation.name } : null;
     }
@@ -621,88 +841,46 @@ export const minerRoutine: Routine = async function* (ctx: RoutineContext) {
     await collectFromStorage(ctx);
     const creditsBefore = bot.credits;
 
-    // ── Complete active missions before unloading (while cargo is still intact) ──
+    // ── Complete active missions before unloading ──
     if (settings.acceptMissions) {
       yield "complete_missions";
       await completeActiveMissions(ctx);
     }
 
-    // ── Sell or Deposit cargo ──
+    // ── Optimized cargo handling ──
     yield "unload_cargo";
-    const cargoResp = await bot.exec("get_cargo");
-    if (cargoResp.result && typeof cargoResp.result === "object") {
-      const result = cargoResp.result as Record<string, unknown>;
-      const cargoItems = (
+    const cargoUnloadResp = await bot.exec("get_cargo");
+    let cargoUnloadItems: Array<Record<string, unknown>>;
+    if (cargoUnloadResp.result && typeof cargoUnloadResp.result === "object") {
+      const result = cargoUnloadResp.result as Record<string, unknown>;
+      cargoUnloadItems = (
         Array.isArray(result) ? result :
         Array.isArray(result.items) ? result.items :
         Array.isArray(result.cargo) ? result.cargo :
         []
       ) as Array<Record<string, unknown>>;
-
-      // Deposit helper: attempts primary mode, falls back on error
-      async function depositItem(itemId: string, quantity: number, displayName: string, mode: DepositMode, recipient: string): Promise<boolean> {
-        if (mode === "gift" || recipient) {
-          const target = recipient || settings.depositBot;
-          if (target) {
-            const giftResp = await bot.exec("send_gift", { recipient: target, item_id: itemId, quantity });
-            if (!giftResp.error) return true;
-            ctx.log("trade", `Gift to ${target} failed for ${displayName}: ${giftResp.error.message}`);
-            return false;
-          }
-        }
-        if (mode === "sell") {
-          const sellResp = await bot.exec("sell", { item_id: itemId, quantity });
-          if (!sellResp.error) return true;
-          ctx.log("trade", `Sell failed for ${displayName}: ${sellResp.error.message}`);
-          return false;
-        }
-        if (mode === "faction") {
-          const factionResp = await bot.exec("faction_deposit_items", { item_id: itemId, quantity });
-          if (!factionResp.error) return true;
-          ctx.log("trade", `Faction deposit failed for ${displayName}: ${factionResp.error.message}`);
-          return false;
-        }
-        // Default: personal storage
-        await bot.exec("deposit_items", { item_id: itemId, quantity });
-        return true;
-      }
-
-      const modeLabel: Record<string, string> = {
-        storage: "station storage", faction: "faction storage", sell: "market",
-      };
-      const primaryLabel = settings.depositBot
-        ? `${settings.depositBot}'s storage`
-        : (modeLabel[settings.depositMode] || "storage");
-
-      const unloadedItems: string[] = [];
-      for (const item of cargoItems) {
-        const itemId = (item.item_id as string) || "";
-        const quantity = (item.quantity as number) || 0;
-        if (!itemId || quantity <= 0) continue;
-        const displayName = (item.name as string) || itemId;
-
-        const ok = await depositItem(itemId, quantity, displayName, settings.depositMode, settings.depositBot);
-        if (!ok) {
-          const ok2 = await depositItem(itemId, quantity, displayName, settings.depositFallback, "");
-          if (!ok2) {
-            await bot.exec("deposit_items", { item_id: itemId, quantity });
-          }
-        }
-        unloadedItems.push(`${quantity}x ${displayName}`);
-        yield "unloading";
-      }
-
-      if (unloadedItems.length > 0) {
-        ctx.log("trade", `Unloaded ${unloadedItems.join(", ")} → ${primaryLabel}`);
-      }
+    } else {
+      if (cargoUnloadResp.error) ctx.log("error", `get_cargo failed: ${cargoUnloadResp.error.message} — using cached inventory`);
+      cargoUnloadItems = bot.inventory.map(i => ({ item_id: i.itemId, name: i.name, quantity: i.quantity } as Record<string, unknown>));
+    }
+    if (cargoUnloadItems.length > 0) {
+      await handleCargoFromResponse(ctx, cargoUnloadItems, settings);
     }
 
-    await bot.refreshStatus();
-    await bot.refreshStorage();
+    // Update status after unloading (single call instead of multiple)
+    await batchStatusUpdate(ctx, false);
 
     // ── Faction donation (10% of earnings from sales + mission rewards) ──
     const earnings = bot.credits - creditsBefore;
     await factionDonateProfit(ctx, earnings);
+
+    if (earnings >= 50_000) {
+      const oreList = [...oresMinedMap.entries()].map(([name, qty]) => `${qty}x ${name}`).join(", ");
+      logAgentEvent(ctx, "economy", "info",
+        `Mining trip: +${earnings}cr (${oreList || "cargo"})`,
+        { earnings, mining_cycles: miningCycles, ores: Object.fromEntries(oresMinedMap) },
+      );
+    }
 
     // ── Accept mining missions for the next cycle ──
     if (settings.acceptMissions) {
@@ -724,8 +902,10 @@ export const minerRoutine: Routine = async function* (ctx: RoutineContext) {
     yield "check_skills";
     await bot.checkSkills();
 
-    await bot.refreshStatus();
+    // Final status update for cycle summary
+    await batchStatusUpdate(ctx, false);
     const endFuel = bot.maxFuel > 0 ? Math.round((bot.fuel / bot.maxFuel) * 100) : 100;
     ctx.log("info", `Cycle done — ${bot.credits} credits, ${endFuel}% fuel, ${bot.cargo}/${bot.cargoMax} cargo`);
   }
+  releaseMiningClaim(bot.username);
 };

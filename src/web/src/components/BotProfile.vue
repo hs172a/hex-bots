@@ -262,9 +262,9 @@ const SKILL_CATEGORY_MAP: Record<string, string> = {
   corporation_management:'faction', faction_warfare:'faction', station_management:'faction',
   mining:'mining', advanced_mining:'mining', advanced_refinement:'mining', biological_processing:'mining',
   deep_core_mining:'mining', gas_harvesting:'mining', gas_processing:'mining',
-  ice_mining:'mining', ice_refining:'mining', mining:'mining', ore_refinement:'mining', radioactive_handling:'mining',
+  ice_mining:'mining', ice_refining:'mining', ore_refinement:'mining', radioactive_handling:'mining',
   fuel_efficiency:'navigation', jump_calibration:'navigation', jump_drive_operation:'navigation',
-  jump_drive_operation:'navigation', navigation:'navigation', warp_efficiency:'navigation',
+  shield_operation:'ships', navigation:'navigation', warp_efficiency:'navigation',
   grand_admiral:'prestige', industrial_magnate:'prestige', legendary_pilot:'prestige',
   master_craftsman:'prestige', master_trader:'prestige', pathfinder:'prestige',
   shadow_operative:'prestige', titan_pilot:'prestige', warlord:'prestige',
@@ -279,7 +279,7 @@ const SKILL_CATEGORY_MAP: Record<string, string> = {
   auction_mastery:'trading', black_market_trading:'trading', bulk_trading:'trading',
   contracts:'trading', hauling:'trading', insurance_brokering:'trading',
   loan_management:'trading', negotiation:'trading', rare_goods_expertise:'trading',
-  smuggling:'trading', trading:'trading',
+  smuggling:'trading', trading:'trading', armor_hardening:'ships',
 };
 const CATEGORY_ICON: Record<string, string> = {
   crafting:'🔨', drones:'🤖', empire:'⚜️', engineering:'🔧', exploration:'🔭',

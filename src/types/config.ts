@@ -127,6 +127,11 @@ export const DataSyncConfigSchema = z.object({
   max_clock_skew_sec: z.number().default(30),
   /** (client only) If the client has been offline longer than this many hours, force a full pull instead of a delta. */
   max_stale_hours: z.number().default(24),
+  /** (client only) How often to check master for source code updates (seconds). 0 = disabled. */
+  code_sync_interval_sec: z.number().default(0),
+  /** Unique name for this pool/VM used in multi-pool stats aggregation.
+   *  If omitted, defaults to "<hostname>/<dir>". MUST differ across VMs. */
+  pool_name: z.string().default(""),
 });
 
 export type DataSyncConfig = z.infer<typeof DataSyncConfigSchema>;

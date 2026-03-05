@@ -23,7 +23,7 @@
  */
 
 import type { Routine, RoutineContext } from "../bot.js";
-import { minerRoutineV2 } from "./miner-v2.js";
+import { minerRoutineV2 } from "./miner.js";
 import { traderRoutine } from "./trader.js";
 import { missionRunnerRoutine } from "./mission_runner.js";
 import { explorerRoutine } from "./explorer.js";
@@ -199,6 +199,7 @@ async function scoreTrading(
 async function buildCandidates(
   ctx: RoutineContext,
   settings: SmartSelectorSettings,
+  lastRunMs: Map<string, number>,
 ): Promise<RoutineCandidate[]> {
   const { bot } = ctx;
 
@@ -217,78 +218,179 @@ async function buildCandidates(
     ctx.log("warn", `SmartSelector: trading restricted for ~${minutesLeft} more minute(s) — skipping trader`);
   }
 
-  const [missionScore, tradeScore] = await Promise.all([
+  const [missionScore, tradeScore, nearbyResp] = await Promise.all([
     scoreMissions(ctx, settings.minMissionReward),
     isTradeRestricted
       ? Promise.resolve(0)
       : tradingLevel >= 3 && bot.docked
         ? scoreTrading(ctx, tradingLevel, settings.minTradeMargin)
         : Promise.resolve(tradingLevel * 10),
+    bot.exec("get_nearby").catch(() => null),
   ]);
+
+  // Parse nearby entities to determine threat level
+  let nearbyEnemyCount = 0;
+  let nearbyAllyCount = 0;
+  if (nearbyResp && !nearbyResp.error && nearbyResp.result) {
+    const nr = nearbyResp.result as Record<string, unknown>;
+    const entities = (Array.isArray(nr) ? nr : Array.isArray(nr.entities) ? nr.entities : []) as Array<Record<string, unknown>>;
+    for (const e of entities) {
+      const isPlayer = (e.type as string) === "player" || (e.is_player as boolean);
+      if (!isPlayer) continue;
+      const eFactionId = (e.faction_id as string) || "";
+      const isAlly = eFactionId === bot.factionId && bot.factionId;
+      const isHostile = (e.is_hostile as boolean) || (e.stance as string) === "hostile";
+      if (isAlly) nearbyAllyCount++;
+      else if (isHostile || (!isAlly && eFactionId && eFactionId !== bot.factionId)) nearbyEnemyCount++;
+    }
+  }
 
   const hasGasPoi = currentSystemHasPoi(ctx, "gas");
   const hasIcePoi = currentSystemHasPoi(ctx, "ice") || currentSystemHasPoi(ctx, "asteroid belt");
+
+  // Enemy penalty: hostile players nearby reduce score of passive routines
+  const enemyPenalty = Math.min(40, nearbyEnemyCount * 12);
+  // Ally bonus: faction allies nearby slightly boost economic routines (safe environment)
+  const allyBonus = Math.min(10, nearbyAllyCount * 3);
+  if (nearbyEnemyCount > 0) {
+    ctx.log("system", `SmartSelector: ${nearbyEnemyCount} hostile(s) nearby — applying -${enemyPenalty} penalty to passive routines`);
+  }
 
   const candidates: RoutineCandidate[] = [
     {
       key: "mission_runner",
       name: "MissionRunner",
       fn: missionRunnerRoutine,
-      score: missionScore,
+      score: Math.max(0, missionScore - enemyPenalty + allyBonus),
     },
     {
       key: "trader",
       name: "Trader",
       fn: traderRoutine,
-      score: tradeScore,
+      score: Math.max(0, tradeScore - enemyPenalty + allyBonus),
     },
     {
       key: "gas_harvester",
       name: "GasHarvester",
       fn: gasHarvesterRoutine,
-      score: hasGasPoi ? harvestLevel * 12 + 5 : 0,
+      score: hasGasPoi ? Math.max(0, harvestLevel * 12 + 5 - enemyPenalty + allyBonus) : 0,
     },
     {
       key: "ice_harvester",
       name: "IceHarvester",
       fn: iceHarvesterRoutine,
-      score: hasIcePoi ? harvestLevel * 11 + 4 : 0,
+      score: hasIcePoi ? Math.max(0, harvestLevel * 11 + 4 - enemyPenalty + allyBonus) : 0,
     },
     {
       key: "explorer",
       name: "Explorer",
       fn: explorerRoutine,
-      score: explorationLevel * 5 + (ctx.mapStore.getAllSystems
+      score: Math.max(0, explorationLevel * 5 + (ctx.mapStore.getAllSystems
         ? Math.min(18, Object.keys(ctx.mapStore.getAllSystems()).length < 3 ? 18 : 6)
-        : 6),
+        : 6) - enemyPenalty),
     },
     {
       key: "miner",
       name: "Miner",
       fn: minerRoutineV2,
-      score: scoreMiner(ctx, miningLevel),
+      score: Math.max(0, scoreMiner(ctx, miningLevel) - enemyPenalty + allyBonus),
     },
   ];
 
-  // Crafter — dynamic score based on profitable craftable recipes in catalog cache
+  // Crafter — dynamic score based on profitable craftable recipes in catalog cache.
+  // Apply a cooldown penalty if crafter ran recently (< 5 min ago) to prevent monopolisation.
   const craftingLevel = skillLevel(ctx, "crafting", "crafting_basic", "manufacturing");
   if (craftingLevel > 0) {
-    candidates.push({
-      key: "crafter",
-      name: "Crafter",
-      fn: crafterRoutine,
-      score: scoreCrafter(ctx, settings.minCrafterProfitPct),
-    });
+    const CRAFTER_COOLDOWN_MS = 5 * 60 * 1000;
+    const lastCraft = lastRunMs.get("crafter") ?? 0;
+    const crafterElapsed = Date.now() - lastCraft;
+    const crafterCooldownPenalty = lastCraft > 0 && crafterElapsed < CRAFTER_COOLDOWN_MS
+      ? Math.round((1 - crafterElapsed / CRAFTER_COOLDOWN_MS) * 30)
+      : 0;
+    const rawCraftScore = scoreCrafter(ctx, settings.minCrafterProfitPct);
+    const finalCraftScore = Math.max(0, rawCraftScore - crafterCooldownPenalty);
+    if (crafterCooldownPenalty > 0) {
+      ctx.log("system", `SmartSelector: crafter cooldown -${crafterCooldownPenalty} (ran ${Math.round(crafterElapsed / 1000)}s ago)`);
+    }
+    candidates.push({ key: "crafter", name: "Crafter", fn: crafterRoutine, score: finalCraftScore });
+  }
+
+  // Single faction intel query — results applied to both trader (trade signal) and hunter (threat)
+  let factionIntelResult: Record<string, unknown> | null = null;
+  if (bot.factionId && bot.system) {
+    const intelResp = await bot.exec("faction_query_intel", { system_id: bot.system }).catch(() => null);
+    if (intelResp && !intelResp.error && intelResp.result && typeof intelResp.result === "object") {
+      factionIntelResult = intelResp.result as Record<string, unknown>;
+    }
+  }
+
+  // Phase 7.2 — Ship module awareness: boost routines matching installed modules
+  if (bot.installedMods.length > 0) {
+    const mods = bot.installedMods.map(m => m.toLowerCase());
+    const hasCombatMod  = mods.some(m => m.includes("weapon") || m.includes("laser_cannon") || m.includes("railgun") || m.includes("missile"));
+    const hasMiningMod  = mods.some(m => m.includes("mining_laser") || m.includes("drill") || m.includes("ore_extractor"));
+    const hasGasMod     = mods.some(m => m.includes("gas_harvester") || m.includes("gas_collector"));
+    const hasIceMod     = mods.some(m => m.includes("ice_harvester") || m.includes("ice_drill"));
+    const hasLargeCargo = mods.some(m => m.includes("cargo_hold") || m.includes("cargo_bay") || m.includes("extended_cargo"));
+
+    if (hasCombatMod && settings.enableHunter) {
+      const hunterCand = candidates.find(c => c.key === "hunter");
+      if (hunterCand) { hunterCand.score += 15; ctx.log("system", "SmartSelector: combat modules +15 to hunter"); }
+    }
+    if (hasMiningMod) {
+      const minerCand = candidates.find(c => c.key === "miner");
+      if (minerCand) { minerCand.score += 12; ctx.log("system", "SmartSelector: mining modules +12 to miner"); }
+    }
+    if (hasGasMod) {
+      const gasCand = candidates.find(c => c.key === "gas_harvester");
+      if (gasCand) { gasCand.score += 14; ctx.log("system", "SmartSelector: gas modules +14 to gas_harvester"); }
+    }
+    if (hasIceMod) {
+      const iceCand = candidates.find(c => c.key === "ice_harvester");
+      if (iceCand) { iceCand.score += 14; ctx.log("system", "SmartSelector: ice modules +14 to ice_harvester"); }
+    }
+    if (hasLargeCargo) {
+      const traderCand = candidates.find(c => c.key === "trader");
+      if (traderCand) { traderCand.score += 10; ctx.log("system", "SmartSelector: cargo modules +10 to trader"); }
+    }
+  }
+
+  // Trade signal boost from faction intel
+  if (factionIntelResult && tradingLevel > 0) {
+    const tradeActivity = (factionIntelResult.trade_activity as number) ?? (factionIntelResult.market_activity as number) ?? 0;
+    if (tradeActivity > 0) {
+      const tradeBonus = Math.min(25, tradeActivity * 5);
+      const traderCand = candidates.find(c => c.key === "trader");
+      if (traderCand) {
+        traderCand.score += tradeBonus;
+        ctx.log("trade", `SmartSelector: trade signal +${tradeBonus} to trader (activity=${tradeActivity})`);
+      }
+    }
   }
 
   if (settings.enableHunter) {
     const combatLevel = skillLevel(ctx, "combat", "fighting", "battle");
-    candidates.push({
-      key: "hunter",
-      name: "Hunter",
-      fn: hunterRoutine,
-      score: combatLevel * 14,
-    });
+    let hunterScore = combatLevel * 14;
+
+    // Boost hunter score from faction intel threat data
+    if (factionIntelResult) {
+      const threat = (factionIntelResult.threat_level as number) ?? 0;
+      const pirateActivity = (factionIntelResult.pirate_activity as number) ?? (factionIntelResult.enemy_count as number) ?? 0;
+      if (threat > 0 || pirateActivity > 0) {
+        const intelBonus = Math.min(30, (threat + pirateActivity) * 5);
+        hunterScore += intelBonus;
+        ctx.log("combat", `SmartSelector: faction intel +${intelBonus} to hunter (threat=${threat}, activity=${pirateActivity})`);
+      }
+    }
+
+    // Boost hunter further when hostile players are directly visible via get_nearby
+    if (nearbyEnemyCount > 0) {
+      const nearbyBoost = Math.min(35, nearbyEnemyCount * 15);
+      hunterScore += nearbyBoost;
+      ctx.log("combat", `SmartSelector: nearby enemies +${nearbyBoost} to hunter (${nearbyEnemyCount} hostile(s))`);
+    }
+
+    candidates.push({ key: "hunter", name: "Hunter", fn: hunterRoutine, score: hunterScore });
   }
 
   return candidates.sort((a, b) => b.score - a.score);
@@ -314,6 +416,8 @@ export const smartSelectorRoutine: Routine = async function* (ctx: RoutineContex
 
   ctx.log("system", "SmartSelector: starting rule-based routine orchestrator");
   yield "init";
+
+  const lastRunMs = new Map<string, number>();
 
   while (bot.state === "running") {
     await bot.refreshStatus();
@@ -361,12 +465,27 @@ export const smartSelectorRoutine: Routine = async function* (ctx: RoutineContex
       const docked = await ensureDocked(ctx);
       if (docked) {
         await bot.refreshCargo();
+        const cachedFac = bot.poi ? ctx.mapStore.hasFactionStorage(bot.poi) : null;
+        let noFacStorage = cachedFac === false;
         for (const item of [...bot.inventory]) {
           if (item.quantity <= 0) continue;
           const sellResp = await bot.exec("sell", { item_id: item.itemId, quantity: item.quantity });
           if (sellResp.error) {
-            const facResp = await bot.exec("faction_deposit_items", { item_id: item.itemId, quantity: item.quantity });
-            if (facResp.error) {
+            let deposited = false;
+            if (!noFacStorage) {
+              const facResp = await bot.exec("faction_deposit_items", { item_id: item.itemId, quantity: item.quantity });
+              if (!facResp.error) {
+                if (bot.poi) ctx.mapStore.setFactionStorage(bot.poi, true);
+                deposited = true;
+              } else {
+                const em = facResp.error.message ?? "";
+                if (em.includes("no_faction_storage") || em.includes("faction_lockbox")) {
+                  noFacStorage = true;
+                  if (bot.poi) ctx.mapStore.setFactionStorage(bot.poi, false);
+                }
+              }
+            }
+            if (!deposited) {
               await bot.exec("deposit_items", { item_id: item.itemId, quantity: item.quantity });
             }
           }
@@ -386,7 +505,7 @@ export const smartSelectorRoutine: Routine = async function* (ctx: RoutineContex
 
     // ── Score and select ─────────────────────────────────────
     yield "evaluating";
-    const candidates = await buildCandidates(ctx, settings);
+    const candidates = await buildCandidates(ctx, settings, lastRunMs);
     const winner = candidates[0];
 
     if (!winner || winner.score <= 0) {
@@ -404,6 +523,7 @@ export const smartSelectorRoutine: Routine = async function* (ctx: RoutineContex
     );
 
     yield `running:${winner.key}`;
+    lastRunMs.set(winner.key, Date.now());
     yield* winner.fn(ctx);
 
     ctx.log("system", `SmartSelector: ${winner.name} completed — re-evaluating in 5s`);

@@ -21,6 +21,7 @@ import {
   readSettings,
   sleep,
   logStatus,
+  logAgentEvent,
 } from "./common.js";
 import type { MapStore } from "../mapstore.js";
 
@@ -781,6 +782,10 @@ export const missionRunnerRoutine: Routine = async function* (ctx: RoutineContex
       } else {
         sessCompleted++;
         ctx.log("info", `✓ Done: "${mission.title}" (+${mission.reward_credits}cr) — session: ${sessCompleted} done, ${sessFailed} failed`);
+        logAgentEvent(ctx, "missions", "info",
+          `Mission complete: "${mission.title}" (+${mission.reward_credits}cr)`,
+          { reward: mission.reward_credits, session_completed: sessCompleted },
+        );
       }
     }
 

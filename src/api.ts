@@ -8,11 +8,37 @@ export interface ApiSession {
   expiresAt: string;
 }
 
+export interface GameNotification {
+  type?: string;
+  msg_type?: string;
+  data?: Record<string, unknown> | string;
+  message?: string;
+  [key: string]: unknown;
+}
+
 export interface ApiResponse {
   result?: unknown;
-  notifications?: unknown[];
+  notifications?: GameNotification[];
   session?: ApiSession;
   error?: { code: string; message: string; wait_seconds?: number; retry_after?: number } | null;
+  /** v2 async action: server has queued this action for the next game tick. Poll with get_queue. */
+  pending?: boolean;
+}
+
+/**
+ * Typed response from v2 API endpoints.
+ * `structuredContent` carries the machine-readable payload; `result` is a human-readable text summary.
+ */
+export interface V2Response<T = unknown> {
+  /** Human-readable text summary. */
+  result?: string;
+  /** Machine-readable structured payload — prefer this over result. */
+  structuredContent?: T;
+  notifications?: GameNotification[];
+  session?: ApiSession;
+  error?: { code: string; message: string; wait_seconds?: number; retry_after?: number } | null;
+  /** True when the server queued the action for the next game tick (async actions). */
+  pending?: boolean;
 }
 
 const DEFAULT_BASE_URL = "https://game.spacemolt.com/api/v1";
@@ -48,7 +74,7 @@ const ACTION_COMMANDS = new Set([
   "install_mod", "uninstall_mod", "buy_ship", "sell_ship", "switch_ship", "set_colors",
   "accept_mission", "complete_mission", "decline_mission", "abandon_mission",
   "chat", "send_gift", "trade_offer",
-  "facility",
+  "facility", "battle",
   "register",
 ]);
 
@@ -151,6 +177,7 @@ const COMMAND_TTL: Record<string, number> = {
   view_faction_storage:   30_000,
   find_route:            300_000,
   survey_system:          60_000,
+  search_systems:         60_000,
   get_queue:               5_000,
   view_market:            30_000,
   view_orders:            30_000,
@@ -162,6 +189,8 @@ const COMMAND_TTL: Record<string, number> = {
   v2_get_skills:         120_000,
   v2_get_queue:            5_000,
   v2_get_missions:        60_000,
+  v2_get_state:           15_000,
+  v2_battle_status:        3_000,
 };
 
 // Cache groups for mutation invalidation
@@ -205,18 +234,20 @@ const MUTATION_INVALIDATIONS: Record<string, string[]> = {
   decline_mission:  [...INV_STATUS, ...INV_MISSIONS],
   cloak:  INV_STATUS,
   attack: [...INV_STATUS, ...INV_SHIP],
+  battle: [...INV_STATUS, ...INV_SHIP],
 };
 
 // Commands with sub-actions that route through v2 endpoints instead of v1.
 // v1: POST /api/v1/{command} { action: "sub", ...params }
 // v2: POST /api/v2/spacemolt_{command}/{action} { ...params }
-const V2_ROUTED_COMMANDS = new Set(["facility"]);
+const V2_ROUTED_COMMANDS = new Set(["facility", "battle"]);
 
 // Commands that always route directly to v2 (no sub-action needed).
 // v2: POST /api/v2/spacemolt_{command} { ...params }
 const V2_DIRECT_COMMANDS = new Set([
   "v2_get_cargo", "v2_get_player",
   "v2_get_queue", "v2_get_skills", "v2_get_missions",
+  "v2_get_state", "v2_battle_status",
 ]);
 const MAX_RECONNECT_ATTEMPTS = 6;
 const RECONNECT_BASE_DELAY = 5_000; // 5s, 10s, 20s, 40s, 80s, 160s
@@ -263,7 +294,7 @@ export class SpaceMoltAPI {
       || (V2_ROUTED_COMMANDS.has(command) && !!payload?.action && typeof payload.action === "string");
   }
 
-  async execute(command: string, payload?: Record<string, unknown>): Promise<ApiResponse> {
+  async execute(command: string, payload?: Record<string, unknown>, _tickRetry = 0): Promise<ApiResponse> {
     // Return cached response for read-only commands when fresh
     const cacheTtl = COMMAND_TTL[command];
     const cacheKey = `${command}:${JSON.stringify(payload ?? {})}`;
@@ -328,6 +359,13 @@ export class SpaceMoltAPI {
         log("wait", `Rate limited — sleeping ${secs}s... (retry ${this._rateLimitRetries}/5)`);
         await sleep(Math.ceil(secs * 1000));
         return this.execute(command, payload);
+      }
+
+      if (code === "action_in_progress" || (resp.error.message ?? "").includes("Another action is already in progress")) {
+        if (_tickRetry < 3) {
+          await sleep(11_000);
+          return this.execute(command, payload, _tickRetry + 1);
+        }
       }
 
       if (code === "session_invalid" || code === "session_expired" || code === "not_authenticated") {
@@ -569,6 +607,59 @@ export class SpaceMoltAPI {
       }
     }
     throw lastError || new Error("Failed to connect to v2 server");
+  }
+
+  /**
+   * Call any v2 API endpoint directly.
+   * Usage: callV2("spacemolt_battle", "engage", { target_id: "..." })
+   * → POST /api/v2/spacemolt_battle/engage
+   *
+   * Handles v2 session, throttling for action commands, and one retry on session expiry.
+   */
+  async callV2<T = unknown>(namespace: string, cmd: string, body?: Record<string, unknown>): Promise<V2Response<T>> {
+    await this.ensureV2Session();
+
+    const v2Base = this.baseUrl.replace("/api/v1", "/api/v2");
+    const url = `${v2Base}/${namespace}/${cmd}`;
+
+    // Throttle action commands (non-query)
+    const isQuery = /^(get_|list_|view_|find_|search_|survey_|browse_|estimate_)/.test(cmd);
+    if (!isQuery) await this._throttler.throttle();
+
+    const doFetch = (): Promise<Response> =>
+      fetch(url, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "X-Session-Id": this.v2Session!.id,
+          "User-Agent": USER_AGENT,
+        },
+        body: body ? JSON.stringify(body) : undefined,
+      });
+
+    let resp = await doFetch();
+
+    // Session expired — refresh once and retry
+    if (resp.status === 401) {
+      this.v2Session = null;
+      await this.ensureV2Session();
+      resp = await doFetch();
+    }
+
+    // Rate limited
+    if (resp.status === 429) {
+      const retry = parseInt(resp.headers.get("Retry-After") ?? "10", 10);
+      await sleep(retry * 1000);
+      resp = await doFetch();
+    }
+
+    try {
+      const data = await resp.json() as V2Response<T>;
+      logApiResponse(this.label, url, resp.status, 0, data as unknown as Record<string, unknown>);
+      return data;
+    } catch {
+      return { error: { code: "http_error", message: `HTTP ${resp.status}: ${resp.statusText}` } } as V2Response<T>;
+    }
   }
 
   async getPlayerProfile(playerId: string): Promise<unknown> {

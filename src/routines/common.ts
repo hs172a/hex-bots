@@ -237,45 +237,101 @@ export function parseOreFromMineResult(result: unknown): { oreId: string; oreNam
 
 // ── Docking ──────────────────────────────────────────────────
 
-/** Ensure the bot is docked at a station. Finds one in current system,
- *  or navigates to the nearest known station system if none is available.
+/**
+ * Return POIs for the bot's current system from the MapStore cache
+ * (no API call). Returns null if the system is unknown or has no POI data.
+ */
+export function getSystemPoisFromDb(ctx: RoutineContext): SystemPOI[] | null {
+  const sys = ctx.mapStore.getSystem(ctx.bot.system);
+  if (!sys || sys.pois.length === 0) return null;
+  return sys.pois.map(p => ({
+    id: p.id,
+    name: p.name,
+    type: p.type,
+    has_base: p.has_base,
+    base_id: p.base_id,
+    services: p.services as BaseServices | null,
+  }));
+}
+
+/** Helper: attempt to dock at a specific POI. Returns true on success.
+ *  On "No base at this location" marks the POI in MapStore so BFS skips it. */
+async function tryDockAt(
+  ctx: RoutineContext,
+  systemId: string,
+  poiId: string,
+  poiName: string,
+): Promise<boolean> {
+  const { bot } = ctx;
+  if (bot.poi !== poiId) {
+    ctx.log("travel", `Traveling to ${poiName}...`);
+    await bot.exec("travel", { target_poi: poiId });
+    bot.poi = poiId;
+  }
+  ctx.log("system", "Docking...");
+  const dResp = await bot.exec("dock");
+  if (!dResp.error || dResp.error.message.includes("already")) {
+    bot.docked = true;
+    await collectFromStorage(ctx);
+    await recordMarketData(ctx);
+    await analyzeMarket(ctx);
+    await ensureInsured(ctx);
+    return true;
+  }
+  const msg = dResp.error?.message ?? "";
+  if (msg.toLowerCase().includes("no base") || msg.includes("no_base")) {
+    ctx.log("error", `${poiName} has no dockable base — invalidating in map DB`);
+    ctx.mapStore.markNoBase(systemId, poiId);
+  } else {
+    ctx.log("error", `Dock failed at ${poiName}: ${msg}`);
+  }
+  return false;
+}
+
+/** Ensure the bot is docked at a station.
+ *
+ *  Priority:
+ *  1. Already docked → done.
+ *  2. MapStore DB has a station in current system → travel+dock (no API call).
+ *  3. DB miss → refresh via get_system API, then try DB station again.
+ *  4. No local station → BFS from MapStore to find nearest station system,
+ *     jump there, and dock.
+ *
+ *  When dock fails with "No base at this location" the POI is invalidated in
+ *  the MapStore so the next BFS pass skips it automatically.
+ *
  *  Returns true if successfully docked. */
 export async function ensureDocked(ctx: RoutineContext): Promise<boolean> {
   const { bot } = ctx;
   if (bot.docked) return true;
 
-  const { pois } = await getSystemInfo(ctx);
-  const station = findStation(pois);
+  // ── Step 1: check DB for local station (no API call) ──────────────────────
+  let dbPois = getSystemPoisFromDb(ctx);
+  let station = dbPois ? findStation(dbPois) : null;
 
-  if (station) {
-    if (bot.poi !== station.id) {
-      ctx.log("travel", `Traveling to ${station.name}...`);
-      await bot.exec("travel", { target_poi: station.id });
-      bot.poi = station.id;
-    }
-    ctx.log("system", "Docking...");
-    const dockResp = await bot.exec("dock");
-    if (!dockResp.error || dockResp.error.message.includes("already")) {
-      bot.docked = true;
-      await collectFromStorage(ctx);
-      await recordMarketData(ctx);
-      await analyzeMarket(ctx);
-      await ensureInsured(ctx);
-      return true;
-    }
+  // ── Step 2: DB miss — refresh system data from API ────────────────────────
+  if (!station) {
+    const { pois } = await getSystemInfo(ctx);
+    station = findStation(pois);
+    dbPois = pois; // may have been updated by parseSystemData
   }
 
-  // No station in current system — find nearest known station
-  ctx.log("system", "No station in current system — searching for nearest station...");
+  if (station) {
+    if (await tryDockAt(ctx, bot.system, station.id, station.name)) return true;
+    // Dock failed (and markNoBase called if "no base") — fall through to BFS
+  }
+
+  // ── Step 3: BFS across MapStore to find nearest system with a station ──────
+  ctx.log("system", `No station in ${bot.system} — searching map for nearest station...`);
   const nearest = ctx.mapStore.findNearestStationSystem(bot.system);
   if (!nearest) {
     ctx.log("error", "No known station in mapped systems — cannot dock");
     return false;
   }
 
-  ctx.log("travel", `Nearest station: ${nearest.poiName} in ${nearest.systemId} (${nearest.hops} hops)`);
+  ctx.log("travel", `Nearest station: ${nearest.poiName} in ${nearest.systemId} (${nearest.hops} hops away)`);
 
-  // Navigate there
+  // Navigate to that system if needed
   if (nearest.systemId !== bot.system) {
     await ensureUndocked(ctx);
     const route = ctx.mapStore.findRoute(bot.system, nearest.systemId);
@@ -298,24 +354,7 @@ export async function ensureDocked(ctx: RoutineContext): Promise<boolean> {
     }
   }
 
-  // Travel to station POI and dock
-  ctx.log("travel", `Traveling to ${nearest.poiName}...`);
-  await bot.exec("travel", { target_poi: nearest.poiId });
-  bot.poi = nearest.poiId;
-
-  ctx.log("system", "Docking...");
-  const dResp = await bot.exec("dock");
-  if (!dResp.error || dResp.error.message.includes("already")) {
-    bot.docked = true;
-    await collectFromStorage(ctx);
-    await recordMarketData(ctx);
-    await analyzeMarket(ctx);
-    await ensureInsured(ctx);
-    return true;
-  }
-
-  ctx.log("error", `Dock failed at ${nearest.poiName}: ${dResp.error?.message}`);
-  return false;
+  return tryDockAt(ctx, nearest.systemId, nearest.poiId, nearest.poiName);
 }
 
 /** Ensure the bot is undocked. */
@@ -340,6 +379,15 @@ export async function recordMarketData(ctx: RoutineContext): Promise<void> {
   const marketResp = await bot.exec("view_market");
   if (marketResp.result && typeof marketResp.result === "object") {
     ctx.mapStore.updateMarket(bot.system, bot.poi, marketResp.result as Record<string, unknown>);
+
+    // Submit trade intel to faction (fire-and-forget)
+    if (bot.factionId) {
+      bot.exec("faction_submit_trade_intel", {
+        system_id: bot.system,
+        poi_id: bot.poi,
+        market_snapshot: marketResp.result,
+      }).catch(() => {});
+    }
   }
 }
 
@@ -399,6 +447,16 @@ export async function collectFromStorage(ctx: RoutineContext): Promise<void> {
     }
   }
 
+  // Probe faction storage availability for this station and cache result
+  if (bot.poi && ctx.mapStore.hasFactionStorage(bot.poi) === null) {
+    const fvResp = await bot.exec("view_faction_storage");
+    const available = !fvResp.error ||
+      !(fvResp.error.code === "no_faction_storage" ||
+        (fvResp.error.message ?? "").includes("no_faction_storage"));
+    ctx.mapStore.setFactionStorage(bot.poi, available);
+    if (!available) ctx.log("trade", `No faction storage at ${bot.poi} (cached for 15 min)`);
+  }
+
   // Transfer all station storage items → faction storage (shared pool)
   await transferStationToFaction(ctx);
 
@@ -456,14 +514,29 @@ export async function transferStationToFaction(ctx: RoutineContext): Promise<num
 
     // ── Deposit pass: flush cargo → faction storage ──
     await bot.refreshCargo();
+    const cachedFacStorage = bot.poi ? ctx.mapStore.hasFactionStorage(bot.poi) : null;
+    let noFacStorage = cachedFacStorage === false;
     for (const item of [...bot.inventory]) {
       if (item.quantity <= 0) continue;
 
-      const dResp = await bot.exec("faction_deposit_items", { item_id: item.itemId, quantity: item.quantity });
-      if (!dResp.error) {
-        totalTransferred += item.quantity;
-        logFactionActivity(ctx, "deposit", `Transferred ${item.quantity}x ${item.name} from station → faction storage`);
-      } else {
+      let deposited = false;
+      if (!noFacStorage) {
+        const dResp = await bot.exec("faction_deposit_items", { item_id: item.itemId, quantity: item.quantity });
+        if (!dResp.error) {
+          if (bot.poi) ctx.mapStore.setFactionStorage(bot.poi, true);
+          totalTransferred += item.quantity;
+          logFactionActivity(ctx, "deposit", `Transferred ${item.quantity}x ${item.name} from station → faction storage`);
+          deposited = true;
+        } else {
+          const ec = dResp.error.code ?? "";
+          const em = dResp.error.message ?? "";
+          if (ec === "no_faction_storage" || em.includes("no_faction_storage") || em.includes("faction_lockbox")) {
+            noFacStorage = true;
+            if (bot.poi) ctx.mapStore.setFactionStorage(bot.poi, false);
+          }
+        }
+      }
+      if (!deposited) {
         // Fallback: return to station storage so nothing is lost
         await bot.exec("deposit_items", { item_id: item.itemId, quantity: item.quantity });
       }
@@ -623,6 +696,7 @@ export async function tryRefuel(ctx: RoutineContext): Promise<void> {
 
   // Call refuel repeatedly until full or until it fails
   let consecutiveErrors = 0;
+  let brokeAttempts = 0; // tracks no-credits failures with nothing to sell
   for (let i = 0; i < 10 && bot.state === "running"; i++) {
     const resp = await bot.exec("refuel");
     if (resp.error) {
@@ -634,8 +708,15 @@ export async function tryRefuel(ctx: RoutineContext): Promise<void> {
       if (msg.includes("credit") || msg.includes("fuel_source") || msg.includes("insufficient")) {
         const sold = await sellAllCargo(ctx);
         if (sold > 0) {
+          brokeAttempts = 0;
           await bot.refreshStatus();
           continue;
+        }
+        // No cargo to sell and no credits — permanently broke
+        brokeAttempts++;
+        if (brokeAttempts >= 2) {
+          ctx.log("error", `Cannot refuel — no credits and no cargo to sell. Stopping routine until rescue arrives.`);
+          throw new Error("no_fuel_source: bankrupt — no credits and no cargo to sell");
         }
       }
       if (consecutiveErrors >= 2) break;
@@ -685,11 +766,12 @@ export async function repairShip(ctx: RoutineContext): Promise<void> {
   if (hullPct < 95) {
     const startHull = Math.round(hullPct);
 
-    // Check if current station has repair service
-    const { pois } = await getSystemInfo(ctx);
-    const currentStation = pois.find(p => isStationPoi(p) && p.id === bot.poi);
+    // Check if current station has repair service — prefer DB cache, fall back to API
+    const repairDbPois = getSystemPoisFromDb(ctx);
+    const repairPois = repairDbPois ?? (await getSystemInfo(ctx)).pois;
+    const currentStation = repairPois.find(p => isStationPoi(p) && p.id === bot.poi);
     if (currentStation?.services && currentStation.services.repair === false) {
-      const repairStation = findStation(pois, "repair");
+      const repairStation = findStation(repairPois, "repair");
       if (repairStation && repairStation.id !== currentStation.id) {
         await bot.exec("undock");
         bot.docked = false;
@@ -760,9 +842,13 @@ export async function ensureFueled(
 
   ctx.log("system", `Fuel low (${fuelPct}%) — need to refuel (threshold: ${thresholdPct}%)...`);
 
-  // Step 1: Try local station first — dock and refuel with credits, no cargo loss
-  const { pois } = await getSystemInfo(ctx);
-  const localStation = findStation(pois);
+  // Step 1: Try local station first — prefer DB cache, fall back to API if needed
+  const dbPois = getSystemPoisFromDb(ctx);
+  let localStation = dbPois ? findStation(dbPois) : null;
+  if (!localStation) {
+    const { pois } = await getSystemInfo(ctx);
+    localStation = findStation(pois);
+  }
 
   if (localStation) {
     ctx.log("system", `Station found in current system: ${localStation.name}`);
@@ -1035,6 +1121,9 @@ export async function depositNonFuelCargo(ctx: RoutineContext): Promise<boolean>
     []
   );
 
+  // Pre-check cache: if faction storage is known-unavailable at this station, skip all faction attempts
+  const cachedFac = bot.poi ? ctx.mapStore.hasFactionStorage(bot.poi) : null;
+  let noFactionStorage = cachedFac === false;
   let deposited = 0;
   for (const item of cargoItems) {
     const itemId = (item.item_id as string) || "";
@@ -1044,14 +1133,28 @@ export async function depositNonFuelCargo(ctx: RoutineContext): Promise<boolean>
     if (lower.includes("fuel") || lower.includes("energy_cell")) continue;
 
     const displayName = (item.name as string) || itemId;
-    // Try faction storage first (shared pool), fall back to station storage
-    const fResp = await bot.exec("faction_deposit_items", { item_id: itemId, quantity });
-    if (!fResp.error) {
-      ctx.log("trade", `Deposited ${quantity}x ${displayName} to faction storage`);
-      logFactionActivity(ctx, "deposit", `Deposited ${quantity}x ${displayName} to faction storage`);
-    } else {
+    let usedFaction = false;
+    if (!noFactionStorage) {
+      const fResp = await bot.exec("faction_deposit_items", { item_id: itemId, quantity });
+      if (!fResp.error) {
+        if (bot.poi) ctx.mapStore.setFactionStorage(bot.poi, true);
+        ctx.log("trade", `Deposited ${quantity}x ${displayName} to faction storage`);
+        logFactionActivity(ctx, "deposit", `Deposited ${quantity}x ${displayName} to faction storage`);
+        usedFaction = true;
+      } else {
+        const errCode = fResp.error.code ?? "";
+        const errMsg = fResp.error.message ?? "";
+        if (errCode === "no_faction_storage" || errMsg.includes("no_faction_storage") || errMsg.includes("faction_lockbox")) {
+          noFactionStorage = true;
+          if (bot.poi) ctx.mapStore.setFactionStorage(bot.poi, false);
+        } else {
+          ctx.log("trade", `Faction deposit failed for ${displayName}: ${errMsg}`);
+        }
+      }
+    }
+    if (!usedFaction) {
       await bot.exec("deposit_items", { item_id: itemId, quantity });
-      ctx.log("trade", `Deposited ${quantity}x ${displayName} to station storage (faction full/unavailable)`);
+      ctx.log("trade", `Deposited ${quantity}x ${displayName} to station storage`);
     }
     deposited += quantity;
   }
@@ -1367,8 +1470,8 @@ export async function refuelAtStation(
 
   await bot.refreshStatus();
   newFuelPct = bot.maxFuel > 0 ? Math.round((bot.fuel / bot.maxFuel) * 100) : 100;
-  if (newFuelPct < 10) {
-    ctx.log("error", `Fuel critically low (${newFuelPct}%) — staying docked at ${station.name}`);
+  if (newFuelPct < thresholdPct) {
+    ctx.log("error", `Fuel still at ${newFuelPct}% after all retries — cannot proceed. Staying docked at ${station.name}.`);
     return false;
   }
 
@@ -1922,4 +2025,31 @@ export async function factionDonateProfit(ctx: RoutineContext, profit: number): 
     ctx.log("trade", `Donated ${donation}cr to faction treasury (${pct}% of ${profit}cr profit)`);
     logFactionActivity(ctx, "donation", `Deposited ${donation}cr (${pct}% of ${profit}cr profit)`);
   }
+}
+
+/**
+ * Post a structured event to the game's agentLogs endpoint (fire-and-forget).
+ * Used for key bot milestones: kills, profitable trades, mining trips, etc.
+ *
+ * @param category - e.g. "combat", "economy", "navigation"
+ * @param severity  - "info" | "warn" | "error"
+ * @param message   - human-readable description of the event
+ * @param data      - optional structured payload
+ */
+export function logAgentEvent(
+  ctx: RoutineContext,
+  category: string,
+  severity: "info" | "warn" | "error",
+  message: string,
+  data?: Record<string, unknown>,
+): void {
+  const { bot } = ctx;
+  bot.exec("agent_logs", {
+    category,
+    severity,
+    message,
+    system_id: bot.system || undefined,
+    poi_id: bot.poi || undefined,
+    ...(data ? { data } : {}),
+  }).catch(() => {});
 }

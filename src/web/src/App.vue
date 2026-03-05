@@ -82,6 +82,17 @@
           <span :class="refreshing.catalog ? 'animate-spin inline-block' : ''" style="display:inline-block">📦</span>
         </button>
 
+        <!-- Sync Code (DataSync client mode only) -->
+        <button
+          v-if="dataSyncMode === 'client'"
+          @click="adminSyncCode"
+          :disabled="refreshing.code"
+          :title="syncCodeResult || 'Pull source code updates from DataSync master'"
+          class="flex items-center justify-center w-7 h-7 rounded border border-space-border text-space-text-dim hover:border-space-accent hover:text-space-accent transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+        >
+          <span :class="refreshing.code ? 'animate-spin inline-block' : ''" style="display:inline-block">🔄</span>
+        </button>
+
         <!-- Separator -->
         <div class="w-px h-5 bg-space-border mx-1" />
 
@@ -157,7 +168,8 @@ const blockCountdownText = computed(() => {
 let countdownTick: ReturnType<typeof setInterval> | null = null;
 
 // ── Admin refresh state ──
-const refreshing = reactive({ catalog: false, map: false });
+const refreshing = reactive({ catalog: false, map: false, code: false });
+const syncCodeResult = ref('');
 
 async function adminRefreshCatalog() {
   if (refreshing.catalog) return;
@@ -176,6 +188,27 @@ async function adminRefreshMap() {
     await fetch('/api/admin/refresh-map', { method: 'POST' });
   } finally {
     refreshing.map = false;
+  }
+}
+
+async function adminSyncCode() {
+  if (refreshing.code) return;
+  refreshing.code = true;
+  syncCodeResult.value = '';
+  try {
+    const resp = await fetch('/api/sync-code', { method: 'POST' });
+    const data = await resp.json() as { ok?: boolean; updated?: string[]; failed?: string[]; error?: string };
+    if (data.error) {
+      syncCodeResult.value = `Error: ${data.error}`;
+    } else {
+      const u = data.updated?.length ?? 0;
+      const f = data.failed?.length ?? 0;
+      syncCodeResult.value = u > 0 ? `Synced ${u} file(s)${f > 0 ? `, ${f} failed` : ''}` : 'Already up to date';
+    }
+  } catch (e) {
+    syncCodeResult.value = 'Sync failed';
+  } finally {
+    refreshing.code = false;
   }
 }
 

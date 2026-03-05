@@ -9,6 +9,7 @@ import {
   scavengeWrecks,
   sleep,
   logFactionActivity,
+  logAgentEvent,
 } from "./common.js";
 
 // ── Settings ─────────────────────────────────────────────────
@@ -936,6 +937,12 @@ export const crafterRoutine: Routine = async function* (ctx: RoutineContext) {
       ctx.log("craft", parts.join(". "));
     } else {
       ctx.log("craft", "Nothing to craft");
+    }
+    if (totalCrafted > 0) {
+      logAgentEvent(ctx, "economy", "info",
+        `Crafted ${craftedSummary.join(", ")} (${totalCrafted} items)`,
+        { total_crafted: totalCrafted, items: craftedSummary },
+      );
     }
 
     // ── Refuel + Repair ──

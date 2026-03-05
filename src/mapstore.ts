@@ -618,6 +618,17 @@ export class MapStore {
     return Object.keys(this.data.systems);
   }
 
+  /** Mark a POI as having no dockable base — called when dock returns "No base at this location". */
+  markNoBase(systemId: string, poiId: string): void {
+    const sys = this.data.systems[systemId];
+    if (!sys) return;
+    const poi = sys.pois.find(p => p.id === poiId);
+    if (poi && poi.has_base) {
+      poi.has_base = false;
+      this.scheduleSystemSave(systemId);
+    }
+  }
+
   /** Find nearest station POI within a known system. */
   findNearestStation(systemId: string): StoredPOI | null {
     const sys = this.data.systems[systemId];
@@ -1141,6 +1152,27 @@ export class MapStore {
    * Apply lightweight fast-patches from a remote VM.
    * Only updates market/orders/pirate data; never overwrites topology or ore records.
    */
+  // ── Faction storage availability cache ───────────────────────────────────
+
+  private factionStorageCache = new Map<string, { available: boolean; checkedAt: number }>();
+  private static readonly FACTION_STORAGE_TTL_MS = 15 * 60 * 1000; // 15 minutes
+
+  /** Record whether a station has faction storage. Call after any faction_deposit_items attempt. */
+  setFactionStorage(stationId: string, available: boolean): void {
+    this.factionStorageCache.set(stationId, { available, checkedAt: Date.now() });
+  }
+
+  /**
+   * Check cached faction storage availability for a station.
+   * Returns true/false if known and fresh, null if unknown or stale.
+   */
+  hasFactionStorage(stationId: string): boolean | null {
+    const rec = this.factionStorageCache.get(stationId);
+    if (!rec) return null;
+    if (Date.now() - rec.checkedAt > MapStore.FACTION_STORAGE_TTL_MS) return null;
+    return rec.available;
+  }
+
   applyFastPatches(patches: FastPatch[]): void {
     for (const patch of patches) {
       const sys = this.data.systems[patch.system_id];

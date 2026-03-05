@@ -24,6 +24,8 @@
  * Security: api_key required as Bearer token. Master defaults to 127.0.0.1 binding.
  */
 
+import { readdir, readFile, writeFile, mkdir } from "node:fs/promises";
+import { join, relative, dirname } from "node:path";
 import type { MapStore, StoredSystem, FastPatch } from "./mapstore.js";
 import type { CatalogStore, CatalogItem, CatalogShip, CatalogSkill, CatalogRecipe } from "./catalogstore.js";
 import type { DataSyncConfig } from "./types/config.js";
@@ -86,6 +88,59 @@ function sanitizeFastPatch(raw: unknown, maxSkewSec: number): FastPatch | null {
   }
   return p as unknown as FastPatch;
 }
+
+// ── Code sync utilities ────────────────────────────────────────────────────────
+
+export interface CodeManifestEntry {
+  /** Relative path from src/ root, forward-slash separated. */
+  path: string;
+  /** SHA-256 hex hash of file contents. */
+  hash: string;
+  /** Byte size of the file. */
+  size: number;
+}
+
+/** SHA-256 hex hash of a string. Uses Bun's built-in hasher. */
+function hashString(content: string): string {
+  return new Bun.CryptoHasher("sha256").update(content).digest("hex");
+}
+
+/** Recursively walk a directory yielding file paths relative to baseDir.
+ *  Only includes .ts and .vue source files; skips node_modules, dist, etc. */
+async function* walkSrcDir(dir: string, baseDir: string): AsyncGenerator<string> {
+  const SKIP_DIRS = new Set(["node_modules", ".git", ".txt"]);
+  let entries;
+  try {
+    entries = await readdir(dir, { withFileTypes: true });
+  } catch { return; }
+
+  for (const entry of entries) {
+    if (entry.isDirectory()) {
+      if (SKIP_DIRS.has(entry.name)) continue;
+      yield* walkSrcDir(join(dir, entry.name), baseDir);
+    } else if (entry.isFile()) {
+      if (!/\.(ts|vue)$/.test(entry.name)) continue;
+      if (entry.name.endsWith(".d.ts")) continue; // skip declaration files
+      const rel = relative(baseDir, join(dir, entry.name)).replace(/\\/g, "/");
+      yield rel;
+    }
+  }
+}
+
+/** Build a manifest of all source files with their hashes. */
+async function buildCodeManifest(srcDir: string): Promise<CodeManifestEntry[]> {
+  const entries: CodeManifestEntry[] = [];
+  for await (const relPath of walkSrcDir(srcDir, srcDir)) {
+    try {
+      const content = await Bun.file(join(srcDir, relPath)).text();
+      entries.push({ path: relPath, hash: hashString(content), size: content.length });
+    } catch { /* skip unreadable */ }
+  }
+  return entries.sort((a, b) => a.path.localeCompare(b.path));
+}
+
+/** The src/ directory — same folder this datasync module lives in. */
+const CODE_SRC_DIR: string = import.meta.dir;
 
 // ── DataSyncServer ────────────────────────────────────────────────────────────
 
@@ -169,6 +224,15 @@ export class DataSyncServer {
           } catch {
             return json({ error: "Invalid JSON" }, 400);
           }
+        }
+
+        // ── GET /sync/all-stats ───────────────────────────────────────────
+        // Returns aggregated stats from all known pools (master + all clients)
+        if (req.method === "GET" && url.pathname === "/sync/all-stats") {
+          const result: Record<string, Record<string, any>> = {};
+          if (statsOpts) result[statsOpts.poolName] = statsOpts.getMyStats();
+          for (const [name, daily] of clientPoolStats) result[name] = daily;
+          return json(result);
         }
 
         // ── GET /sync/status ──────────────────────────────────────────────
@@ -265,6 +329,30 @@ export class DataSyncServer {
           }
         }
 
+        // ── GET /sync/code/manifest ────────────────────────────────────────
+        // Returns SHA-256 hash + size for every .ts/.vue file in src/
+        if (req.method === "GET" && url.pathname === "/sync/code/manifest") {
+          const manifest = await buildCodeManifest(CODE_SRC_DIR);
+          return json({ files: manifest, ts: new Date().toISOString() });
+        }
+
+        // ── GET /sync/code/file?path=<relPath> ─────────────────────────────
+        // Returns the raw content of a single source file
+        if (req.method === "GET" && url.pathname === "/sync/code/file") {
+          const relPath = url.searchParams.get("path") ?? "";
+          // Security: no path traversal, no absolute paths, only .ts/.vue
+          if (!relPath || relPath.includes("..") || /^[/\\]/.test(relPath) || !/\.(ts|vue)$/.test(relPath)) {
+            return json({ error: "Invalid path" }, 400);
+          }
+          const safePath = relPath.replace(/\\/g, "/");
+          try {
+            const content = await Bun.file(join(CODE_SRC_DIR, safePath)).text();
+            return json({ path: safePath, content });
+          } catch {
+            return json({ error: "File not found" }, 404);
+          }
+        }
+
         return json({ error: "Not Found" }, 404);
       },
     });
@@ -297,6 +385,10 @@ export class DataSyncClient {
   private slowPushTimer: ReturnType<typeof setInterval> | null = null;
   private statsPushTimer: ReturnType<typeof setInterval> | null = null;
   private pullTimer: ReturnType<typeof setInterval> | null = null;
+  private codeSyncTimer: ReturnType<typeof setInterval> | null = null;
+
+  /** Cached aggregated stats from all pools (pulled from master). */
+  private cachedRemotePoolsStats: Record<string, Record<string, any>> = {};
 
   /** Consecutive network failure counter across all sync operations. */
   private consecutiveFailures = 0;
@@ -360,6 +452,23 @@ export class DataSyncClient {
       }, fastPushMs);
     }
 
+    // All-pools stats pull: fetch aggregated stats from master periodically
+    this.pullAllStats().catch(() => { /* ignore first-run errors */ });
+    setInterval(() => {
+      this.pullAllStats().catch(e =>
+        console.warn("[DataSync] All-stats pull error:", e instanceof Error ? e.message : e));
+    }, fastPushMs);
+
+    // Code sync: periodically check master for source code updates
+    const codeSyncMs = (this.cfg.code_sync_interval_sec || 0) * 1000;
+    if (codeSyncMs > 0) {
+      this.codeSyncTimer = setInterval(() => {
+        this.syncCode().catch(e =>
+          console.warn("[DataSync] Code sync error:", e instanceof Error ? e.message : e));
+      }, codeSyncMs);
+      console.log(`[DataSync] Code sync enabled — checking every ${this.cfg.code_sync_interval_sec}s`);
+    }
+
     console.log(
       `[DataSync] Client running — pull every ${pull_interval_sec}s, ` +
       `fast-push every ${push_interval_sec}s, slow-push every ${slow_push_interval_sec}s`
@@ -371,7 +480,76 @@ export class DataSyncClient {
     if (this.slowPushTimer) { clearInterval(this.slowPushTimer); this.slowPushTimer = null; }
     if (this.statsPushTimer) { clearInterval(this.statsPushTimer); this.statsPushTimer = null; }
     if (this.pullTimer) { clearInterval(this.pullTimer); this.pullTimer = null; }
+    if (this.codeSyncTimer) { clearInterval(this.codeSyncTimer); this.codeSyncTimer = null; }
     console.log("[DataSync] Client stopped");
+  }
+
+  /**
+   * Pull source code from master and write any changed files to disk.
+   * If the project runs with Bun --watch or --hot, changed files trigger an auto-restart.
+   *
+   * Returns a summary { updated, failed } with relative paths.
+   */
+  async syncCode(): Promise<{ updated: string[]; failed: string[] }> {
+    const updated: string[] = [];
+    const failed: string[] = [];
+
+    // Step 1: get manifest from master
+    const mResp = await fetch(`${this.cfg.master_url}/sync/code/manifest`, {
+      headers: this.headers(),
+      signal: AbortSignal.timeout(30_000),
+    });
+    if (!mResp.ok) {
+      console.warn(`[CodeSync] GET /sync/code/manifest → ${mResp.status}`);
+      this.recordFailure();
+      return { updated, failed };
+    }
+    const body = await mResp.json() as { files?: CodeManifestEntry[] };
+    const manifest = body.files ?? [];
+    if (manifest.length === 0) return { updated, failed };
+
+    // Step 2: compare local hashes and download only changed files
+    const srcDir = CODE_SRC_DIR;
+    for (const entry of manifest) {
+      const localPath = join(srcDir, entry.path);
+      try {
+        let localContent: string | null = null;
+        try {
+          localContent = await Bun.file(localPath).text();
+        } catch { /* file doesn't exist locally */ }
+
+        const localHash = localContent !== null ? hashString(localContent) : "";
+        if (localHash === entry.hash) continue; // up to date
+
+        // Download the file from master
+        const fResp = await fetch(
+          `${this.cfg.master_url}/sync/code/file?path=${encodeURIComponent(entry.path)}`,
+          { headers: this.headers(), signal: AbortSignal.timeout(15_000) },
+        );
+        if (!fResp.ok) {
+          console.warn(`[CodeSync] Failed to download ${entry.path}: HTTP ${fResp.status}`);
+          failed.push(entry.path);
+          continue;
+        }
+        const fBody = await fResp.json() as { content?: string };
+        if (typeof fBody.content !== "string") { failed.push(entry.path); continue; }
+
+        // Ensure directory exists and write
+        await mkdir(dirname(localPath), { recursive: true });
+        await writeFile(localPath, fBody.content, "utf-8");
+        console.log(`[CodeSync] Updated ${entry.path} (${entry.size} bytes)`);
+        updated.push(entry.path);
+      } catch (err) {
+        console.warn(`[CodeSync] Error syncing ${entry.path}:`, err instanceof Error ? err.message : err);
+        failed.push(entry.path);
+      }
+    }
+
+    if (updated.length > 0) {
+      console.log(`[CodeSync] Sync complete — ${updated.length} file(s) updated, ${failed.length} failed`);
+      this.recordSuccess();
+    }
+    return { updated, failed };
   }
 
   // ── Private helpers ───────────────────────────────────────────────────────
@@ -459,6 +637,46 @@ export class DataSyncClient {
       Object.values(body.recipes ?? {}),
     );
     console.log("[DataSync] Pulled catalog from master");
+  }
+
+  /** Returns aggregated stats: own pool + remote pools pulled from master. */
+  getAllPoolsStats(): Record<string, Record<string, any>> {
+    const result: Record<string, Record<string, any>> = {};
+    if (this.statsOpts) result[this.statsOpts.poolName] = this.statsOpts.getMyStats();
+    for (const [pool, daily] of Object.entries(this.cachedRemotePoolsStats)) {
+      if (!this.statsOpts || pool !== this.statsOpts.poolName) result[pool] = daily;
+    }
+    return result;
+  }
+
+  private async pullAllStats(): Promise<void> {
+    // Try the aggregated endpoint first (added in the multi-pool stats patch)
+    const resp = await fetch(`${this.cfg.master_url}/sync/all-stats`, {
+      headers: this.headers(),
+      signal: AbortSignal.timeout(10_000),
+    });
+    if (resp.ok) {
+      this.cachedRemotePoolsStats = await resp.json() as Record<string, Record<string, any>>;
+      this.recordSuccess();
+      return;
+    }
+    // Fallback: master may be running older code without /sync/all-stats.
+    // Use /sync/stats which returns the master pool's own stats only.
+    if (resp.status === 404) {
+      const fallback = await fetch(`${this.cfg.master_url}/sync/stats`, {
+        headers: this.headers(),
+        signal: AbortSignal.timeout(10_000),
+      });
+      if (fallback.ok) {
+        const body = await fallback.json() as { pool?: string; daily?: Record<string, any> };
+        if (body.pool && body.daily) {
+          this.cachedRemotePoolsStats = { [body.pool]: body.daily };
+          this.recordSuccess();
+        }
+      }
+      return;
+    }
+    this.recordFailure();
   }
 
   private async pushStats(): Promise<void> {

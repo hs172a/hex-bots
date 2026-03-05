@@ -1,8 +1,9 @@
 import { existsSync, readdirSync, appendFileSync, mkdirSync, rmSync } from "fs";
 import { join, basename } from "path";
+import { hostname } from "os";
 import { Bot, type Routine } from "./bot.js";
 import { SessionManager } from "./session.js";
-import { minerRoutineV2 } from "./routines/miner-v2.js";
+import { minerRoutineV2 } from "./routines/miner.js";
 import { explorerRoutine } from "./routines/explorer.js";
 import { crafterRoutine } from "./routines/crafter.js";
 import { rescueRoutine } from "./routines/rescue.js";
@@ -25,6 +26,9 @@ import { scavengerRoutine } from "./routines/scavenger.js";
 import { piCommanderRoutine } from "./routines/pi_commander.js";
 import { aiCommanderRoutine } from "./routines/ai_commander.js";
 import { stationToFactionRoutine } from "./routines/station_to_faction.js";
+import { shipManagerRoutine } from "./routines/ship_manager.js";
+import { facilityManagerRoutine } from "./routines/facility_manager.js";
+import { tradeBrokerRoutine } from "./routines/trade_broker.js";
 import { smartSelectorRoutine } from "./routines/smart_selector.js";
 import { combatSelectorRoutine } from "./routines/combat_selector.js";
 import { mapStore } from "./mapstore.js";
@@ -101,6 +105,8 @@ let server: WebServer;
 let sessionStore: SessionStore;
 
 const ROUTINES: Record<string, { name: string; fn: Routine }> = {
+  smart_selector: { name: "SmartSelector", fn: smartSelectorRoutine },
+  combat_selector: { name: "CombatSelector", fn: combatSelectorRoutine },
   trader: { name: "Trader", fn: traderRoutine },
   miner: { name: "Miner", fn: minerRoutineV2 },
   crafter: { name: "Crafter", fn: crafterRoutine },
@@ -119,13 +125,14 @@ const ROUTINES: Record<string, { name: string; fn: Routine }> = {
   cleanup: { name: "Cleanup", fn: cleanupRoutine },
   return_home: { name: "ReturnHome", fn: returnHomeRoutine },
   ship_upgrade: { name: "ShipUpgrade", fn: shipUpgradeRoutine },
+  ship_manager: { name: "ShipManager", fn: shipManagerRoutine },
+  facility_manager: { name: "FacilityManager", fn: facilityManagerRoutine },
+  trade_broker: { name: "TradeBroker", fn: tradeBrokerRoutine },
   station_to_faction: { name: "StationToFaction", fn: stationToFactionRoutine },
   rescue: { name: "FuelRescue", fn: rescueRoutine },
   ai: { name: "AI", fn: aiRoutine },
   pi_commander: { name: "PI Commander", fn: piCommanderRoutine },
   ai_commander: { name: "AI Commander", fn: aiCommanderRoutine },
-  smart_selector:   { name: "SmartSelector",   fn: smartSelectorRoutine },
-  combat_selector:  { name: "CombatSelector",  fn: combatSelectorRoutine },
 };
 
 // ── Auto-discover existing sessions ─────────────────────────
@@ -670,7 +677,7 @@ async function main(): Promise<void> {
 
   const port = config.server.port;
   server = new WebServer(port);
-  server.routines = Object.keys(ROUTINES);
+  server.routines = Object.entries(ROUTINES).map(([id, { name }]) => ({ id, name }));
   server.onAction = handleAction;
   server.onPlayerInfo = async (playerId: string) => {
     const bot = [...bots.values()][0];
@@ -743,10 +750,19 @@ async function main(): Promise<void> {
   }
 
   // Initialize DataSync (shared game knowledge across VMs)
+  // Unique pool name per VM — required for multi-pool stats to work correctly.
+  // If all VMs share the same dirname (e.g. "hex-bots"), stats would overwrite each other.
+  // Priority: explicit config > hostname/dirname
+  const resolvedPoolName = config.datasync.pool_name
+    ? config.datasync.pool_name
+    : `${hostname()}/${basename(process.cwd())}`;
   const statsOpts = {
-    poolName: basename(process.cwd()),
+    poolName: resolvedPoolName,
     getMyStats: () => server.getStatsData(),
   };
+  if (config.datasync.enabled) {
+    console.log(`[DataSync] pool_name: ${resolvedPoolName}`);
+  }
   const dataSync = initDataSync(mapStore, catalogStore, config.datasync, statsOpts);
   if (dataSync) {
     server.dataSyncMode = config.datasync.mode;
@@ -755,6 +771,8 @@ async function main(): Promise<void> {
       server.onAllPoolsStats = () => dataSync.getAllPoolsStats();
     }
     if (dataSync instanceof DataSyncClient) {
+      server.onAllPoolsStats = () => dataSync.getAllPoolsStats();
+      server.onSyncCode = () => dataSync.syncCode();
       dataSync.onStatusChange = (offline: boolean) => {
         server.broadcastDataSyncStatus(offline);
         if (offline) server.logSystem("[DataSync] Tunnel appears DOWN — cannot reach master");

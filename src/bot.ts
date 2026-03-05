@@ -1,4 +1,4 @@
-import { SpaceMoltAPI, type ApiResponse } from "./api.js";
+import { SpaceMoltAPI, type ApiResponse, type GameNotification } from "./api.js";
 import { SessionManager } from "./session.js";
 import { mapStore, MapStore } from "./mapstore.js";
 import { catalogStore, CatalogStore } from "./catalogstore.js";
@@ -202,6 +202,20 @@ export class Bot extends EventEmitter {
   /** Whether the bot's ship is dead (hull <= 0). */
   isDead = false;
 
+  /**
+   * Optional hook called for every notification received from the server.
+   * Routines can set this to react to in-progress events (e.g., combat, trade offers).
+   * Called with (type, data) where type is e.g. "combat", "trade", "system".
+   */
+  onNotification: ((type: string, data: Record<string, unknown>) => void) | null = null;
+
+  /**
+   * When true, the bot will automatically take a defensive brace/retreat stance
+   * upon receiving an unexpected combat notification while running any routine.
+   * Set by hunter.ts (and any other combat-aware routine) based on its autoDefend setting.
+   */
+  autoDefend = false;
+
   /** Cached installed mod IDs from last refreshShipMods(). */
   installedMods: string[] = [];
 
@@ -283,6 +297,12 @@ export class Bot extends EventEmitter {
 
   /** Execute an API command, log the result, handle notifications. */
   async exec(command: string, payload?: Record<string, unknown>): Promise<ApiResponse> {
+    // Fast-fail all routine API calls when a stop has been requested.
+    // This causes any nested await chain (navigateToSystem, ensureFueled, etc.)
+    // to unwind within milliseconds instead of waiting minutes for long operations.
+    if (this._state === "stopping") {
+      return { error: { code: "stopped", message: "Bot is stopping" } } as ApiResponse;
+    }
     this._lastAction = command;
 
     // Fleet-wide shared market cache (L1) — avoid redundant API calls when multiple
@@ -301,6 +321,23 @@ export class Bot extends EventEmitter {
                 command === "create_sell_order" || command === "create_buy_order" ||
                 command === "cancel_order") && this.poi && !resp.error) {
       sharedMarketCache.invalidate(this.poi);
+    }
+
+    // v2 PendingActionResponse — action queued for next game tick.
+    // Wait for the tick then poll get_queue until the action resolves.
+    if (resp.pending === true) {
+      await sleep(10_000);
+      for (let p = 0; p < 6; p++) {
+        const qResp = await this.api.execute("v2_get_queue");
+        const queue = qResp.result as Record<string, unknown> | undefined;
+        const queued = Array.isArray(queue?.queue) ? queue!.queue as Array<Record<string, unknown>> : [];
+        const stillPending = queued.some((a: Record<string, unknown>) => a.command === command);
+        if (!stillPending) {
+          resp = await this.api.execute(command, payload);
+          break;
+        }
+        await sleep(5_000);
+      }
     }
 
     // Action pending — a previous game action is still resolving (10s tick).
@@ -373,6 +410,7 @@ export class Bot extends EventEmitter {
       // Suppress noisy expected errors — callers handle these gracefully
       const code = resp.error.code || "";
       const quiet =
+        code === "stopped" || // routine is stopping — not an unexpected error
         code === "mission_incomplete" ||
         (command === "view_faction_storage" && code !== "session_invalid") ||
         (command === "get_missions" && code !== "session_invalid") ||
@@ -779,7 +817,7 @@ export class Bot extends EventEmitter {
    * Route notifications to the bot's own activity log and detect hull damage.
    * Uses this.api.execute() directly (not this.exec()) to avoid recursion.
    */
-  private async handleNotifications(notifications: unknown[]): Promise<void> {
+  private async handleNotifications(notifications: GameNotification[]): Promise<void> {
     for (const n of notifications) {
       if (typeof n !== "object" || !n) {
         if (typeof n === "string") this.log("info", `[NOTIFY] ${n}`);
@@ -861,8 +899,45 @@ export class Bot extends EventEmitter {
         const d = data as Record<string, unknown>;
         const message = (d.message as string) || "";
         if (message) this.log("combat", `[COMBAT] ${message}`);
+        this.onNotification?.("combat", d);
+
+        // Phase 2.3: Auto-defend — brace when hit unexpectedly while any routine is running
+        if (this.autoDefend && this.state === "running") {
+          const hullPct = this.maxHull > 0 ? (this.hull / this.maxHull) * 100 : 100;
+          const defStance = hullPct < 25 ? "flee" : "brace";
+          this.api.execute("battle", { action: "stance", stance: defStance }).catch(() => {});
+          this.log("combat", `[AUTO-DEFEND] Unexpected combat — auto-stance: ${defStance}`);
+        }
+
+      } else if (type === "trade" && data && typeof data === "object") {
+        const d = data as Record<string, unknown>;
+        const tradeId = (d.trade_id as string) || "";
+        const from = (d.from_username as string) || (d.from as string) || "?";
+        const items = Array.isArray(d.offered_items) ? (d.offered_items as Array<Record<string, unknown>>) : [];
+        const credits = (d.offered_credits as number) ?? 0;
+        const itemSummary = items.map(i => `${i.quantity ?? 1}x ${i.item_id ?? i.name ?? "?"}`).join(", ");
+        const summary = [itemSummary, credits > 0 ? `${credits}cr` : ""].filter(Boolean).join(" + ");
+        this.log("trade", `[TRADE OFFER] ${from} offers: ${summary || "(nothing)"} (id: ${tradeId})`);
+        this.onNotification?.("trade", d);
+
+      } else if (type === "system" && data && typeof data === "object") {
+        this.onNotification?.("system", data as Record<string, unknown>);
       }
     }
+  }
+
+  /**
+   * Refresh bot state using v2 get_state (single combined call).
+   * Falls back to refreshStatus() if get_state is unavailable or errors.
+   * TODO Phase 0.3: extract _parseStateResult() to parse get_state response directly
+   * without the fallback refreshStatus() call once the v2 get_state shape is confirmed.
+   */
+  async refreshState(): Promise<ApiResponse> {
+    const resp = await this.exec("v2_get_state");
+    if (!resp.error && resp.result && typeof resp.result === "object") {
+      return resp; // got combined state — caller can use it directly
+    }
+    return this.refreshStatus();
   }
 
   /** Post a faction chat alert with attack details, location, and nearby entities. */

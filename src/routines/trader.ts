@@ -20,6 +20,7 @@ import {
   getItemSize,
   readSettings,
   sleep,
+  logAgentEvent,
 } from "./common.js";
 
 /** Free cargo weight (not item count — callers must divide by item size). */
@@ -1224,6 +1225,12 @@ export const traderRoutine: Routine = async function* (ctx: RoutineContext) {
       await recordMarketData(ctx);
       ctx.log("trade", `Trade run complete: ${buyQty}x ${route.itemName} — profit ${localProfit}cr (${localRevenue}cr trade + ${extraRevenue}cr other sales)`);
       await factionDonateProfit(ctx, localProfit);
+      if (localProfit > 0) {
+        logAgentEvent(ctx, "economy", "info",
+          `Trade: +${localProfit}cr (${buyQty}x ${route.itemName}, in-station)`,
+          { profit: localProfit, item: route.itemId, quantity: buyQty, jumps: 0 },
+        );
+      }
       yield "post_trade_maintenance";
       await tryRefuel(ctx);
       await repairShip(ctx);
@@ -1271,7 +1278,13 @@ export const traderRoutine: Routine = async function* (ctx: RoutineContext) {
       if (!arrived2) {
         ctx.log("error", "Failed to reach destination — selling at nearest station");
         await ensureDocked(ctx);
-        await bot.exec("sell", { item_id: route.itemId, quantity: buyQty });
+        await bot.refreshCargo();
+        const fallbackQty = bot.inventory.find(i => i.itemId === route.itemId)?.quantity ?? 0;
+        if (fallbackQty > 0) {
+          await bot.exec("sell", { item_id: route.itemId, quantity: fallbackQty });
+        } else {
+          ctx.log("trade", `${route.itemName} no longer in cargo — skipping sell`);
+        }
         await bot.refreshStatus();
         continue;
       }
@@ -1462,6 +1475,12 @@ export const traderRoutine: Routine = async function* (ctx: RoutineContext) {
 
     // ── Faction donation (10% of profit) ──
     await factionDonateProfit(ctx, actualProfit);
+    if (actualProfit > 0) {
+      logAgentEvent(ctx, "economy", "info",
+        `Trade: +${actualProfit}cr (${totalSold}x ${route.itemName}, ${route.jumps} jump${route.jumps !== 1 ? "s" : ""})`,
+        { profit: actualProfit, item: route.itemId, quantity: totalSold, jumps: route.jumps },
+      );
+    }
 
     // ── Maintenance ──
     yield "post_trade_maintenance";

@@ -468,7 +468,13 @@ export const factionTraderRoutine: Routine = async function* (ctx: RoutineContex
         if (!arrived) {
           ctx.log("error", "Failed to reach destination — selling locally");
           await ensureDocked(ctx);
-          await bot.exec("sell", { item_id: route.itemId, quantity: qty });
+          await bot.refreshCargo();
+          const fallbackQty = bot.inventory.find(i => i.itemId === route.itemId)?.quantity ?? 0;
+          if (fallbackQty > 0) {
+            await bot.exec("sell", { item_id: route.itemId, quantity: fallbackQty });
+          } else {
+            ctx.log("trade", `${route.itemId} no longer in cargo — skipping sell`);
+          }
           await bot.refreshStatus();
           continue;
         }

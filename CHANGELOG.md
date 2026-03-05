@@ -5,6 +5,72 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [1.8.0] - 2026-03-04
+
+### Added
+
+#### New Routines
+- **`facility_manager.ts`** — Personal facility monitoring and management:
+  - Lists all owned facilities; alerts when rent expiration is within `rentAlertTicks` cycles (default 5)
+  - Auto-renew: navigates to the facility base, docks, toggles off → on to reset rent timer
+  - Faction facility upgrades: queries available upgrades and applies them when `autoUpgradeFacilities = true`
+  - Settings: `autoRenew`, `autoUpgradeFacilities`, `rentAlertTicks`, `cycleIntervalSec`
+  - Registered in `botmanager.ts`, `strategies.ts`, `advisory-commander.ts`, `SettingsView.vue`
+- **`trade_broker.ts`** — P2P trade offer automation:
+  - Hooks `bot.onNotification` to intercept incoming trade offers in real time
+  - Auto-accepts offers matching configured `acceptItems` list or `minAcceptCredits` threshold
+  - Auto-declines all other offers when `autoDecline = true`
+  - Faction redistribution: offers surplus items to faction members docked at the same station
+  - Settings: `acceptItems`, `minAcceptCredits`, `autoDecline`, `redistributeToFaction`
+  - Registered in `botmanager.ts`, `strategies.ts`, `advisory-commander.ts`
+
+#### SmartSelector Enhancements (Phase 7)
+- **Phase 7.1 — `get_nearby` enemy awareness** (`smart_selector.ts`):
+  - `get_nearby` called in parallel with existing scoring calls (zero extra latency)
+  - Hostile players detected → `-12 pts × enemy_count` (max −40) on all passive routines (miner, trader, harvesters, explorer, mission runner)
+  - Faction allies nearby → `+3 pts × ally_count` (max +10) safety bonus on economic routines
+  - Enemy count → `+15 pts × enemy_count` (max +35) boost to hunter score
+  - All applied before faction-intel and module-awareness adjustments
+- **Phase 7.2 — Ship module awareness** (`smart_selector.ts`):
+  - Reads `bot.installedMods` (populated from `get_status`) — no extra API call
+  - Combat modules (weapon/laser_cannon/railgun/missile) → +15 to hunter
+  - Mining modules (mining_laser/drill/ore_extractor) → +12 to miner
+  - Gas harvester modules → +14 to gas_harvester
+  - Ice harvester modules → +14 to ice_harvester
+  - Large cargo modules (cargo_hold/cargo_bay/extended_cargo) → +10 to trader
+- **Phase 7.3 — `search_systems` exploration routing** (`explorer.ts`, `api.ts`):
+  - When all locally connected systems are exhausted, calls `search_systems` with `filter: "unexplored"` before falling back to random jump
+  - Routes to the first unvisited result via `navigateToSystem` (multi-hop)
+  - `search_systems` added to `COMMAND_TTL` cache (60 s TTL)
+
+#### API v2 Integration (Phases 2–5)
+- **Phase 2 — v2 battle state machine** (`hunter.ts`):
+  - Uses `v2_battle_status`, `v2_engage`, `v2_set_stance`, `v2_set_target`, `v2_advance`
+  - `bot.autoDefend` flag: automatically braces on unexpected combat notifications during any routine
+  - `bot.autoDefend` reset to `false` at hunter routine exit to avoid affecting other routines
+- **Phase 3 — Faction intel** (`explorer.ts`, `hunter.ts`, `scout.ts`, `smart_selector.ts`):
+  - `faction_submit_intel` called after `survey_system`, pirate sightings, and market data collection
+  - `faction_query_intel` called in `smart_selector.ts` for trade signal + threat boosts (already present, now wired to v2 data)
+- **Phase 5 — Agent event logging** (`hunter.ts`, `miner.ts`, `trader.ts`, `crafter.ts`, `mission_runner.ts`):
+  - Key events (kills, trade runs, mine cycles, craft completions, mission rewards) submitted via `logAgentEvent`
+
+### Fixed
+- **Multi-pool stats collision** (`botmanager.ts`, `types/config.ts`):
+  - Root cause: all VMs used `basename(process.cwd())` (e.g. `"hex-bots"`) as pool name → each pool overwrote the others in the master's in-memory `clientPoolStats` Map
+  - Fix: pool name now defaults to `hostname()/dirname` (unique per machine); configurable via `[datasync] pool_name = "vm1"` in `config.toml`
+  - Added `pool_name` field to `DataSyncConfigSchema` with empty-string default
+  - Startup logs: `[DataSync] pool_name: <resolved>`
+- **Force-stop race condition** (`bot.ts`):
+  - Root cause: `forceStop()` set state to `"stopping"` but `exec()` never checked it; routines blocked inside multi-hop helpers (navigateToSystem, ensureFueled) continued for minutes
+  - Fix: `exec()` immediately returns `{ error: { code: "stopped" } }` when `_state === "stopping"`, unwinding all nested awaits within seconds
+  - `"stopped"` added to the quiet-errors list to suppress log noise
+- **LDT infinite loop on jump failure** (`BotControlPanel.vue`):
+  - Root cause: `ldDoRelocationStep()` called `ldProgress++` unconditionally — even on `"Systems are not connected"` errors — causing the LDT to iterate through the entire stale route while logging errors every ~20 s
+  - Fix: fatal jump errors (`not connected`, `not found`, `invalid system`, `no route`) now abort the LDT and display `"route may be stale, please recalculate"`; transient errors (fuel, docked, action_pending) retry the same hop after 15 s
+  - `ldAutoStart()` now blocks with an error message if bot state is `"stopping"`
+
+---
+
 ## [1.7.0] - 2026-03-04
 
 ### Added

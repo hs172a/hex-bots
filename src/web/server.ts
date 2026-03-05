@@ -157,6 +157,9 @@ export class WebServer {
   // When DataSync is in master mode, botmanager wires this to DataSyncServer.getAllPoolsStats()
   onAllPoolsStats: (() => Record<string, Record<string, any>>) | null = null;
 
+  // When DataSync is in client mode, botmanager wires this to DataSyncClient.syncCode()
+  onSyncCode: (() => Promise<{ updated: string[]; failed: string[] }>) | null = null;
+
   // Commander advisory data — set by botmanager
   onCommanderData: (() => unknown) | null = null;
 
@@ -169,7 +172,7 @@ export class WebServer {
   onRefreshMap: (() => Promise<string>) | null = null;
 
   // Available routines — set by botmanager
-  routines: string[] = [];
+  routines: Array<{ id: string; name: string }> = [];
 
   constructor(port: number = 3000) {
     this.port = port;
@@ -272,6 +275,17 @@ export class WebServer {
             }
           } catch { /* skip on fs error */ }
           return Response.json(allPools);
+        }
+        if (url.pathname === "/api/sync-code" && req.method === "POST") {
+          if (!this.onSyncCode) {
+            return Response.json({ error: "Code sync not available (master mode or datasync disabled)" }, { status: 503 });
+          }
+          try {
+            const result = await this.onSyncCode();
+            return Response.json({ ok: true, ...result });
+          } catch (e) {
+            return Response.json({ error: e instanceof Error ? e.message : String(e) }, { status: 500 });
+          }
         }
         if (url.pathname === "/api/catalog") {
           return Response.json(catalogStore.getAll());

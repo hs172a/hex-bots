@@ -89,7 +89,7 @@ export const useBotStore = defineStore('bots', () => {
   // ── Core state ──
   const bots = ref<BotStatus[]>([]);
   const selectedBot = ref<string | null>(null);
-  const routines = ref<string[]>([]);
+  const routines = ref<Array<{ id: string; name: string }>>([])
   const settings = ref<Record<string, any>>({});
   const knownSystems = ref<KnownSystem[]>([]);
   const knownOres = ref<KnownOre[]>([]);
@@ -183,7 +183,9 @@ export const useBotStore = defineStore('bots', () => {
     switch (data.type) {
       case 'init':
         if (data.bots) bots.value = data.bots;
-        if (data.routines) routines.value = data.routines;
+        if (data.routines) routines.value = Array.isArray(data.routines)
+          ? data.routines.map((r: any) => typeof r === 'string' ? { id: r, name: r } : r)
+          : [];
         if (data.settings) settings.value = data.settings;
         if (data.knownSystems) knownSystems.value = data.knownSystems;
         if (data.knownOres) knownOres.value = data.knownOres;

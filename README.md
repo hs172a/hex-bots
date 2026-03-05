@@ -6,14 +6,14 @@
 
 A web-based bot fleet manager for [SpaceMolt](https://www.spacemolt.com) — run multiple bots with automated routines, monitor and control everything from a reactive live dashboard.
 
-![Interface](https://img.shields.io/badge/interface-vue3_spa-blue) ![Runtime](https://img.shields.io/badge/runtime-bun-black) ![Deps](https://img.shields.io/badge/deps-zero_runtime-green) ![Version](https://img.shields.io/badge/version-1.7.x-purple)
+![Interface](https://img.shields.io/badge/interface-vue3_spa-blue) ![Runtime](https://img.shields.io/badge/runtime-bun-black) ![Deps](https://img.shields.io/badge/deps-zero_runtime-green) ![Version](https://img.shields.io/badge/version-1.8.x-purple)
 
 ---
 
 ## Features at a Glance
 
 - **Vue 3 SPA Dashboard** — reactive real-time UI, WebSocket log streaming
-- **21 Routines** — from autonomous mining to full LLM fleet command
+- **23 Routines** — from autonomous mining to full LLM fleet command
 - **10-tab Bot Profile** — manual control, ship management, combat, social, AI log
 - **Faction Management** — members, storage, facilities, diplomacy, missions, trade intel
 - **Galaxy Map** — auto-built from explorer data, seeded from `/api/map`
@@ -157,7 +157,9 @@ Tab order: **Control · Ship · Facility · Insurance · Combat · Profile · St
 | **AI** | In-process LLM agent (OpenAI-compatible/Ollama). Maintains persistent memory, uses map/catalog tools, writes captain's log. |
 | **PI Commander** | Subprocess wrapper for `commander.ts` PI-agent. Full tool suite from game's OpenAPI spec, session handoff, per-bot instruction. Best with Claude/GPT-4. |
 | **AI Commander** | Fleet-level LLM reads all bot statuses and issues `start`/`stop`/`exec` decisions every N seconds. Run on a dedicated "HQ" bot. |
-| **SmartSelector** | Rule-based orchestrator: scores all routines each cycle and delegates to the best match. Miner score is POI-aware (0 when no ore belt in current system, reduced when belt is in another system). Crafter score is profit-aware (catalog cache, no API call). |
+| **Facility Manager** | Monitors owned facilities; alerts on rent expiration; auto-renews by docking and toggling off/on; applies faction facility upgrades when configured. |
+| **Trade Broker** | Intercepts P2P trade notifications; auto-accepts offers matching `acceptItems` list or `minAcceptCredits`; auto-declines others; optionally redistributes surplus to faction members at the same station. |
+| **SmartSelector** | Rule-based orchestrator: scores all routines each cycle. Adjustments: miner POI-awareness, crafter profit-awareness, `get_nearby` enemy penalty (hostile players reduce passive-routine scores, boost hunter), ship module awareness (combat/mining/cargo modules boost matching routines), faction intel threat/trade signals. Explorer uses `search_systems` to find unexplored targets when local connections exhausted. |
 
 ### Common routine features
 All mining/travel routines also include:
@@ -219,6 +221,8 @@ Grouped sidebar (System / Fleet / Economy / Exploration / Harvesting / Combat / 
 - **Exploration** — Explorer, Scout, Return Home
 - **Harvesting** — Gas/Ice Harvester (with deposit mode), Scavenger, Salvager
 - **🎯 Hunter** — patrol system, thresholds, NPCs-only, faction alert range
+- **🏗 Facility Manager** — autoRenew, autoUpgradeFacilities, rentAlertTicks, cycleIntervalSec
+- **🤝 Trade Broker** — acceptItems list, minAcceptCredits, autoDecline, redistributeToFaction
 - **AI** — PI Commander (model/session/instruction/debug), AI Agent (endpoint/model/cycle), AI Commander (fleet LLM, interval, max actions)
 
 ### Header Controls
@@ -228,7 +232,10 @@ Grouped sidebar (System / Fleet / Economy / Exploration / Harvesting / Combat / 
 ### Stats View
 Per-bot statistics — ores mined, crafted, trades, profit, systems explored, skills. Faction activity log.
 
-**Multi-pool view** — pool selector in header shows Current pool + one button per sibling pool discovered on disk. Selecting a pool switches the Per-Bot Breakdown table and Fleet Totals to that pool's data. 🔄 button reloads the sibling-pool list. Data auto-loaded on mount.
+**Multi-pool view** — pool selector shows Current pool + one button per discovered pool. Selecting a pool switches the Per-Bot Breakdown table and Fleet Totals to that pool's data. 🔄 button reloads.
+- **DataSync mode**: stats aggregated via master `/sync/all-stats` endpoint; each VM pushes its stats every 60 s
+- **Standalone mode**: scans `../*/data/stats.json` sibling directories on the same machine
+- Auto-refreshes every 30 s
 
 ### Action Log View
 Per-bot action history with category filters and pagination.

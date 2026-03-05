@@ -764,6 +764,12 @@ async function findRouteLD() {
 
 async function ldAutoStart() {
   if (ldStarting.value || ldRelocating.value || !ldRoute.value.length) return;
+  // Guard: if the bot just received a stop signal, wait briefly for it to settle
+  const botState = (currentBot.value as any).state;
+  if (botState === 'stopping') {
+    ldRouteError.value = 'Bot is still stopping — please wait a moment and try again';
+    return;
+  }
   ldStarting.value = true;
   if (currentBot.value.docked) {
     await execAsync('undock');
@@ -791,7 +797,27 @@ async function ldDoRelocationStep() {
   if (ldProgress.value >= route.length) { ldRelocating.value = false; return; }
   const next = route[ldProgress.value];
   const systemId = next.system_id || next.id || next;
-  await execAsync('jump', { target_system: systemId });
+  const res = await execAsync('jump', { target_system: systemId });
+
+  // Abort on unrecoverable jump errors — bot is likely in the wrong position
+  if (res && !res.ok) {
+    const errMsg = (res.error?.message || res.error || '').toString().toLowerCase();
+    const isFatal =
+      errMsg.includes('not connected') ||
+      errMsg.includes('not found') ||
+      errMsg.includes('invalid system') ||
+      errMsg.includes('no route') ||
+      errMsg.includes('stopped');
+    if (isFatal) {
+      ldRelocating.value = false;
+      ldRouteError.value = `Jump failed: ${res.error?.message || res.error} — route may be stale, please recalculate`;
+      return;
+    }
+    // Transient errors (fuel, docked, action_pending) — retry same hop after delay
+    ldTimer = setTimeout(() => ldDoRelocationStep(), 15000);
+    return;
+  }
+
   ldProgress.value++;
   if (ldProgress.value < route.length && ldRelocating.value) {
     ldTimer = setTimeout(() => ldDoRelocationStep(), 12000);

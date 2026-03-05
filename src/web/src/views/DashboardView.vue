@@ -151,7 +151,7 @@
                       @click.stop
                       class="input text-[11px] px-1 py-0.5"
                     >
-                      <option v-for="r in botStore.routines" :key="r" :value="r">{{ r }}</option>
+                      <option v-for="r in botStore.routines" :key="r.id" :value="r.id">{{ r.name }}</option>
                     </select>
                     <button 
                       @click.stop="startBotInline(bot.username)"
@@ -455,7 +455,7 @@ const chatChannel = ref('system');
 const chatMessage = ref('');
 
 const availableRoutines = computed(() => 
-  botStore.routines.map(r => ({ id: r, name: r, description: '' }))
+  botStore.routines.map(r => ({ id: r.id, name: r.name, description: '' }))
 );
 
 const activeBots = computed(() => botStore.bots.filter(b => b.state === 'running').length);

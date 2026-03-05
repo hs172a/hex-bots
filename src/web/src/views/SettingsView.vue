@@ -826,6 +826,58 @@
         <div class="save-bar"><button @click="saveShipUpgrade" class="btn btn-primary">Save Settings</button></div>
       </div>
 
+      <!-- FacilityManager Settings -->
+      <div v-else-if="activeTab === 'facility_manager'">
+        <h3 class="text-[15px] font-semibold text-space-text-bright mb-1">Facility Manager Settings</h3>
+        <p class="text-xs text-space-text-dim mb-5">Monitors personal and faction facilities: alerts on expiring rent, auto-renews leases, and applies available faction facility upgrades.</p>
+
+        <div class="setting-row">
+          <div><div class="text-sm text-space-text">Auto-Renew Facilities</div><div class="text-xs text-space-text-dim mt-0.5">Navigate to base and toggle facility off/on to pay rent when nearing expiry.</div></div>
+          <input type="checkbox" v-model="facilityManagerForm.autoRenewFacilities" class="w-4 h-4 accent-space-accent" />
+        </div>
+        <div class="setting-row">
+          <div><div class="text-sm text-space-text">Auto-Upgrade Faction Facilities</div><div class="text-xs text-space-text-dim mt-0.5">Automatically apply available faction facility tier upgrades (requires ManageFacilities permission).</div></div>
+          <input type="checkbox" v-model="facilityManagerForm.autoUpgradeFacilities" class="w-4 h-4 accent-space-accent" />
+        </div>
+        <div class="setting-row">
+          <div><div class="text-sm text-space-text">Rent Alert (ticks)</div><div class="text-xs text-space-text-dim mt-0.5">Alert and trigger renewal when fewer than this many ticks remain on the lease.</div></div>
+          <input type="number" v-model.number="facilityManagerForm.rentAlertTicks" min="1" max="50" class="input text-sm w-24" />
+        </div>
+        <div class="setting-row">
+          <div><div class="text-sm text-space-text">Cycle Interval (sec)</div><div class="text-xs text-space-text-dim mt-0.5">How often to re-check facility status (default 300s).</div></div>
+          <input type="number" v-model.number="facilityManagerForm.cycleIntervalSec" min="60" class="input text-sm w-28" />
+        </div>
+        <div class="save-bar"><button @click="saveFacilityManager" class="btn btn-primary">Save Settings</button></div>
+      </div>
+
+      <!-- ShipManager Settings -->
+      <div v-else-if="activeTab === 'ship_manager'">
+        <h3 class="text-[15px] font-semibold text-space-text-bright mb-1">ShipManager Settings</h3>
+        <p class="text-xs text-space-text-dim mb-5">Automates ship lifecycle: claims ready commissions, auto-installs mods, browses market, and keeps insurance active.</p>
+
+        <div class="setting-row">
+          <div><div class="text-sm text-space-text">Auto-Claim Commissions</div><div class="text-xs text-space-text-dim mt-0.5">Automatically claim ships when commissions are ready.</div></div>
+          <input type="checkbox" v-model="shipManagerForm.autoClaimCommissions" class="w-4 h-4 accent-space-accent" />
+        </div>
+        <div class="setting-row">
+          <div><div class="text-sm text-space-text">Auto-Buy Insurance</div><div class="text-xs text-space-text-dim mt-0.5">Purchase insurance after claiming or buying a new ship.</div></div>
+          <input type="checkbox" v-model="shipManagerForm.autoBuyInsurance" class="w-4 h-4 accent-space-accent" />
+        </div>
+        <div class="setting-row">
+          <div><div class="text-sm text-space-text">Max Buy Price (cr)</div><div class="text-xs text-space-text-dim mt-0.5">Auto-buy listed ships priced at or below this. Set 0 to disable market browsing.</div></div>
+          <input type="number" v-model.number="shipManagerForm.maxBuyPrice" min="0" class="input text-sm w-36" />
+        </div>
+        <div class="setting-row">
+          <div><div class="text-sm text-space-text">Target Ship Class</div><div class="text-xs text-space-text-dim mt-0.5">Only buy ships of this class (e.g. "corvette"). Leave empty for any class.</div></div>
+          <input type="text" v-model="shipManagerForm.targetClass" placeholder="any" class="input text-sm min-w-[180px]" />
+        </div>
+        <div class="setting-row">
+          <div><div class="text-sm text-space-text">Home Base</div><div class="text-xs text-space-text-dim mt-0.5">Optional base POI ID to return to after acquiring ships. Falls back to bot home_base.</div></div>
+          <input type="text" v-model="shipManagerForm.homeBase" placeholder="station_id" class="input text-sm min-w-[200px]" />
+        </div>
+        <div class="save-bar"><button @click="saveShipManager" class="btn btn-primary">Save Settings</button></div>
+      </div>
+
       <!-- Scavenger Settings -->
       <div v-else-if="activeTab === 'scavenger'">
         <h3 class="text-[15px] font-semibold text-space-text-bright mb-1">Scavenger Settings</h3>
@@ -1096,6 +1148,8 @@ const settingsTabs = [
   { id: 'quartermaster',  name: '📦 Quartermaster',   group: 'Fleet' },
   { id: 'mission_runner', name: '📋 Mission Runner',  group: 'Fleet' },
   { id: 'ship_upgrade',   name: '🔧 Ship Upgrade',    group: 'Fleet' },
+  { id: 'ship_manager',      name: '🚀 Ship Manager',       group: 'Fleet' },
+  { id: 'facility_manager',  name: '🏭 Facility Manager',   group: 'Fleet' },
   { id: 'miner',          name: '⛏️ Miner',           group: 'Economy' },
   { id: 'crafter',        name: '⚗️ Crafter',         group: 'Economy' },
   { id: 'trader',         name: '💹 Trader',          group: 'Economy' },
@@ -1453,6 +1507,23 @@ const shipUpgradeForm = ref({
   sellOldShip: true,
 });
 
+// ── FacilityManager form ────────────────────────────────────
+const facilityManagerForm = ref({
+  autoRenewFacilities: true,
+  autoUpgradeFacilities: false,
+  rentAlertTicks: 5,
+  cycleIntervalSec: 300,
+});
+
+// ── ShipManager form ─────────────────────────────────────────
+const shipManagerForm = ref({
+  autoClaimCommissions: true,
+  autoBuyInsurance: true,
+  maxBuyPrice: 0,
+  targetClass: '',
+  homeBase: '',
+});
+
 // ── Scavenger form ──────────────────────────────────────────
 const scavengerForm = ref({
   depositMode: 'sell',
@@ -1632,6 +1703,21 @@ watch(() => botStore.settings, (s) => {
     const su = s.ship_upgrade;
     shipUpgradeForm.value.targetShipClass = su.targetShipClass || '';
     shipUpgradeForm.value.sellOldShip = su.sellOldShip !== false;
+  }
+  if (s.facility_manager) {
+    const fm = s.facility_manager as Record<string, unknown>;
+    facilityManagerForm.value.autoRenewFacilities = fm.autoRenewFacilities !== false;
+    facilityManagerForm.value.autoUpgradeFacilities = (fm.autoUpgradeFacilities as boolean) ?? false;
+    facilityManagerForm.value.rentAlertTicks = (fm.rentAlertTicks as number) ?? 5;
+    facilityManagerForm.value.cycleIntervalSec = (fm.cycleIntervalSec as number) ?? 300;
+  }
+  if (s.ship_manager) {
+    const sm = s.ship_manager as Record<string, unknown>;
+    shipManagerForm.value.autoClaimCommissions = sm.autoClaimCommissions !== false;
+    shipManagerForm.value.autoBuyInsurance = sm.autoBuyInsurance !== false;
+    shipManagerForm.value.maxBuyPrice = (sm.maxBuyPrice as number) ?? 0;
+    shipManagerForm.value.targetClass = (sm.targetClass as string) || '';
+    shipManagerForm.value.homeBase = (sm.homeBase as string) || '';
   }
   if (s.scavenger) {
     const sv = s.scavenger;
@@ -1819,6 +1905,8 @@ function saveMissionRunner() {
   });
 }
 function saveShipUpgrade() { botStore.saveSettings('ship_upgrade', { ...shipUpgradeForm.value }); }
+function saveFacilityManager() { botStore.saveSettings('facility_manager', { ...facilityManagerForm.value }); }
+function saveShipManager() { botStore.saveSettings('ship_manager', { ...shipManagerForm.value }); }
 function saveScavenger() { botStore.saveSettings('scavenger', { ...scavengerForm.value }); }
 
 function saveAlerts() {

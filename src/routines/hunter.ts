@@ -46,6 +46,7 @@ import {
   readSettings,
   sleep,
   logStatus,
+  logAgentEvent,
 } from "./common.js";
 
 // ── Settings ─────────────────────────────────────────────────
@@ -60,6 +61,9 @@ function getHunterSettings(username?: string): {
   ammoThreshold: number;
   maxReloadAttempts: number;
   responseRange: number;
+  preferredStance: string;
+  retreatHpPct: number;
+  autoDefend: boolean;
 } {
   const all = readSettings();
   const h = all.hunter || {};
@@ -75,6 +79,9 @@ function getHunterSettings(username?: string): {
     ammoThreshold: (h.ammoThreshold as number) || 5,
     maxReloadAttempts: (h.maxReloadAttempts as number) || 3,
     responseRange: (h.responseRange as number) ?? 3,
+    preferredStance: (h.preferredStance as string) || "fire",
+    retreatHpPct: (h.retreatHpPct as number) || 20,
+    autoDefend: (h.autoDefend as boolean) ?? true,
   };
 }
 
@@ -311,19 +318,26 @@ async function navigateToSafeStation(ctx: RoutineContext, safetyOpts: { fuelThre
     }
   }
 
-  const { pois } = await getSystemInfo(ctx);
-  const station = findStation(pois, "repair") || findStation(pois);
+  const sysInfo = await getSystemInfo(ctx);
+  const station = findStation(sysInfo.pois, "repair") || findStation(sysInfo.pois);
   if (station) {
+    ctx.log("travel", `Traveling to ${station.name}...`);
     const tResp = await bot.exec("travel", { target_poi: station.id });
     if (tResp.error && !tResp.error.message.includes("already")) {
       ctx.log("error", `Travel to station failed: ${tResp.error.message}`);
     }
     bot.poi = station.id;
+  } else {
+    ctx.log("error", `No station found in ${bot.system} — falling back to ensureDocked`);
+    const fallback = await ensureDocked(ctx);
+    if (!fallback) return false;
+    return true;
   }
 
+  ctx.log("system", `Docking at ${station.name}...`);
   const dockResp = await bot.exec("dock");
   if (dockResp.error && !dockResp.error.message.includes("already")) {
-    ctx.log("error", `Dock failed: ${dockResp.error.message}`);
+    ctx.log("error", `Dock failed at ${station.name}: ${dockResp.error.message}`);
     return false;
   }
   bot.docked = true;
@@ -337,8 +351,27 @@ async function engageTarget(
   ctx: RoutineContext,
   target: NearbyEntity,
   fleeThreshold: number,
+  preferredStance = "fire",
 ): Promise<boolean> {
   const { bot } = ctx;
+
+  // Check if a previous battle is still active (v2 battle_status)
+  const statusResp = await bot.exec("v2_battle_status");
+  if (!statusResp.error && statusResp.result && typeof statusResp.result === "object") {
+    const bs = statusResp.result as Record<string, unknown>;
+    const inBattle = bs.in_battle ?? bs.active ?? bs.status === "active";
+    if (inBattle) {
+      ctx.log("combat", "Previous battle still active — waiting for it to resolve...");
+      await sleep(10_000);
+      const bs2Resp = await bot.exec("v2_battle_status");
+      const bs2 = bs2Resp.result as Record<string, unknown> | undefined;
+      if (bs2?.in_battle || bs2?.active) {
+        ctx.log("combat", "Battle still unresolved — retreating and skipping target");
+        await bot.exec("battle", { action: "retreat" });
+        return false;
+      }
+    }
+  }
 
   // Scan before engaging
   const scanResp = await bot.exec("scan", { target_id: target.id });
@@ -349,90 +382,117 @@ async function engageTarget(
     ctx.log("combat", `Scan: ${target.name} — ${shipType} | Faction: ${faction}`);
   }
 
-  // Initiate combat
+  // Initiate combat via v2 battle/engage
   ctx.log("combat", `Engaging ${target.name}...`);
-  const attackResp = await bot.exec("attack", { target_id: target.id });
-  if (attackResp.error) {
-    const msg = attackResp.error.message.toLowerCase();
+  const engageResp = await bot.exec("battle", { action: "engage", target_id: target.id });
+  if (engageResp.error) {
+    const msg = engageResp.error.message.toLowerCase();
     if (msg.includes("not found") || msg.includes("invalid") || msg.includes("no target")) {
       ctx.log("combat", `${target.name} is no longer available`);
       return false;
     }
-    ctx.log("error", `Attack failed: ${attackResp.error.message}`);
-    return false;
+    // Fallback to v1 attack if v2 engage is not available
+    ctx.log("combat", `v2 engage unavailable (${engageResp.error.message}) — falling back to v1 attack`);
+    const fallbackResp = await bot.exec("attack", { target_id: target.id });
+    if (fallbackResp.error) {
+      ctx.log("error", `Attack failed: ${fallbackResp.error.message}`);
+      return false;
+    }
   }
 
   ctx.log("combat", "Combat initiated — advancing to close range...");
-
-  // Advance up to 3 zones (Outer -> Mid -> Inner -> Engaged)
+  // Initial advance (3 zones: Outer → Mid → Inner → Engaged)
   for (let zone = 0; zone < 3; zone++) {
     if (bot.state !== "running") return false;
-
-    await bot.refreshStatus();
-    const hullPct = bot.maxHull > 0 ? Math.round((bot.hull / bot.maxHull) * 100) : 100;
-    if (hullPct <= fleeThreshold) {
-      ctx.log("combat", `Hull critical (${hullPct}%) while advancing — fleeing!`);
-      await bot.exec("battle", { action: "stance", stance: "flee" });
-      return false;
-    }
-
     const advResp = await bot.exec("battle", { action: "advance" });
     if (advResp.error) break;
   }
 
-  // Main combat loop
+  // ── v2 Battle state machine ──────────────────────────────────
+  // Per tick: status → stance decision → target → advance → check resolved
   const MAX_COMBAT_TICKS = 30;
   for (let tick = 0; tick < MAX_COMBAT_TICKS; tick++) {
     if (bot.state !== "running") return false;
 
-    await bot.refreshStatus();
-    const hullPct = bot.maxHull > 0 ? Math.round((bot.hull / bot.maxHull) * 100) : 100;
-    const shieldPct = bot.maxShield > 0 ? Math.round((bot.shield / bot.maxShield) * 100) : 100;
+    // Get live battle state from v2
+    const bsResp = await bot.exec("v2_battle_status");
+    let ownHpPct = 100;
+    let targetHpPct = 100;
+    let inBattle = true;
+
+    if (!bsResp.error && bsResp.result && typeof bsResp.result === "object") {
+      const bs = bsResp.result as Record<string, unknown>;
+
+      // Battle resolved
+      const over = (bs.battle_over ?? bs.resolved ?? (bs.status === "resolved")) || (bs.in_battle === false);
+      if (over) {
+        ctx.log("combat", `${target.name} eliminated (battle resolved)`);
+        return true;
+      }
+
+      inBattle = !(bs.in_battle === false);
+
+      // Parse own HP from sides[] or own_hp field
+      const sides = Array.isArray(bs.sides) ? (bs.sides as Array<Record<string, unknown>>) : [];
+      const ownSide = sides.find(s => (s.player_id as string) === bot.username || (s.is_self as boolean));
+      const enemySide = sides.find(s => s !== ownSide);
+
+      if (ownSide) {
+        const ownHp = (ownSide.hp as number) ?? (ownSide.hull as number) ?? -1;
+        const ownMaxHp = (ownSide.max_hp as number) ?? (ownSide.max_hull as number) ?? -1;
+        ownHpPct = ownMaxHp > 0 ? Math.round((ownHp / ownMaxHp) * 100) : (bs.own_hp_pct as number) ?? 100;
+      } else {
+        ownHpPct = (bs.own_hp_pct as number) ?? (bs.own_hull_pct as number) ??
+          (bot.maxHull > 0 ? Math.round((bot.hull / bot.maxHull) * 100) : 100);
+      }
+
+      if (enemySide) {
+        const eHp = (enemySide.hp as number) ?? (enemySide.hull as number) ?? -1;
+        const eMaxHp = (enemySide.max_hp as number) ?? (enemySide.max_hull as number) ?? -1;
+        targetHpPct = eMaxHp > 0 ? Math.round((eHp / eMaxHp) * 100) : (bs.target_hp_pct as number) ?? 100;
+      } else {
+        targetHpPct = (bs.target_hp_pct as number) ?? (bs.enemy_hp_pct as number) ?? 100;
+      }
+    } else {
+      // Fallback: read own hull from bot status
+      await bot.refreshStatus();
+      ownHpPct = bot.maxHull > 0 ? Math.round((bot.hull / bot.maxHull) * 100) : 100;
+    }
+
+    if (!inBattle) {
+      ctx.log("combat", `${target.name} — battle ended`);
+      return true;
+    }
 
     // Emergency flee
-    if (hullPct <= fleeThreshold) {
-      ctx.log("combat", `Hull critical (${hullPct}%) — fleeing!`);
+    if (ownHpPct <= fleeThreshold) {
+      ctx.log("combat", `Hull critical (${ownHpPct}%) — fleeing!`);
       await bot.exec("battle", { action: "stance", stance: "flee" });
       await bot.exec("battle", { action: "retreat" });
       return false;
     }
 
-    // Brace when shields are critical and hull is hurting
-    const shieldsCritical = shieldPct < 15 && hullPct < 70;
-    if (shieldsCritical) {
-      ctx.log("combat", `Bracing (shields ${shieldPct}%, hull ${hullPct}%) — regenerating shields`);
-      await bot.exec("battle", { action: "stance", stance: "brace" });
+    // Stance decision per roadmap:
+    //   target_hp < 30% → 'fire' (press the attack)
+    //   own shields critical → 'brace'
+    //   otherwise → preferredStance (fire/evade)
+    let stance: string;
+    if (targetHpPct < 30) {
+      stance = "fire";
+    } else if (ownHpPct < 40 && ownHpPct > fleeThreshold) {
+      stance = "brace";
     } else {
-      await bot.exec("battle", { action: "stance", stance: "fire" });
+      stance = preferredStance;
     }
+    await bot.exec("battle", { action: "stance", stance });
 
-    ctx.log("combat", `Tick ${tick + 1}: hull ${hullPct}% | shields ${shieldPct}% — attacking ${target.name}`);
-    const atkResp = await bot.exec("attack", { target_id: target.id });
+    // Set targeting priority on the current target
+    await bot.exec("battle", { action: "target", player_id: target.id });
 
-    if (atkResp.error) {
-      const msg = atkResp.error.message.toLowerCase();
-      if (
-        msg.includes("not in battle") || msg.includes("no battle") ||
-        msg.includes("battle_over") || msg.includes("destroyed") ||
-        msg.includes("dead") || msg.includes("not found") ||
-        msg.includes("already") || msg.includes("ended")
-      ) {
-        ctx.log("combat", `${target.name} eliminated`);
-        return true;
-      }
-      ctx.log("combat", `Attack error: ${atkResp.error.message} — assuming combat over`);
-      return true;
-    }
+    // Advance to maintain close range
+    await bot.exec("battle", { action: "advance" });
 
-    // If target has disappeared from nearby scan, combat is done
-    const nearbyResp = await bot.exec("get_nearby");
-    if (!nearbyResp.error) {
-      const entities = parseNearby(nearbyResp.result);
-      if (!entities.some(e => e.id === target.id)) {
-        ctx.log("combat", `${target.name} is gone — eliminated or fled`);
-        return true;
-      }
-    }
+    ctx.log("combat", `Tick ${tick + 1}: own ${ownHpPct}% | target ${targetHpPct}% | stance ${stance} — fighting ${target.name}`);
   }
 
   ctx.log("combat", `Combat with ${target.name} reached max ticks — moving on`);
@@ -663,6 +723,10 @@ export const hunterRoutine: Routine = async function* (ctx: RoutineContext) {
     hullThresholdPct: settings0.repairThreshold,
   });
 
+  // Enable auto-defend so the bot braces when hit while patrolling between engagements
+  const settings0AutoDefend = settings0.autoDefend;
+  bot.autoDefend = settings0AutoDefend;
+
   let totalKills = 0;
 
   while (bot.state === "running") {
@@ -684,15 +748,19 @@ export const hunterRoutine: Routine = async function* (ctx: RoutineContext) {
     logStatus(ctx);
 
     // ── Weapon + ammo check ──
-    if (bot.ammo === 0 && !bot.docked) {
-      ctx.log("combat", "⚠️  Ammo is 0 — docking to buy ammo before patrol...");
+    if (bot.ammo >= 0 && bot.ammo < settings.ammoThreshold && !bot.docked) {
+      ctx.log("combat", `⚠️  Ammo low (${bot.ammo}/${settings.ammoThreshold} threshold) — docking to resupply before patrol...`);
       yield "dock_for_ammo";
       const docked = await navigateToSafeStation(ctx, safetyOpts);
       if (docked) {
         await buyAmmoIfNeeded(ctx);
         await ensureAmmoLoaded(ctx, settings.ammoThreshold, settings.maxReloadAttempts);
-        await ensureUndocked(ctx);
+        await bot.refreshStatus();
+        ctx.log("combat", `Ammo after resupply: ${bot.ammo}`);
+      } else {
+        ctx.log("error", "Could not dock to buy ammo — continuing anyway");
       }
+      await ensureUndocked(ctx);
     }
 
     // ── Fuel check ──
@@ -885,12 +953,31 @@ export const hunterRoutine: Routine = async function* (ctx: RoutineContext) {
         }
 
         yield "engage";
-        const won = await engageTarget(ctx, target, settings.fleeThreshold);
+        const won = await engageTarget(ctx, target, settings.fleeThreshold, settings.preferredStance);
 
         if (won) {
           totalKills++;
           patrolKills++;
           ctx.log("combat", `Kill #${totalKills} — looting wreck...`);
+          logAgentEvent(ctx, "combat", "info",
+            `Kill #${totalKills}: ${target.name} eliminated at ${poi.name} (${bot.system})`,
+            { kill_number: totalKills, target_name: target.name, poi_name: poi.name },
+          );
+
+          // Submit pirate activity intel to faction (fire-and-forget)
+          if (bot.factionId) {
+            bot.exec("faction_submit_intel", {
+              system_id: bot.system,
+              intel_type: "pirate_activity",
+              data: {
+                poi_id: poi.id,
+                poi_name: poi.name,
+                target_name: target.name,
+                target_tier: (target as unknown as Record<string, unknown>).tier ?? "",
+                kills: 1,
+              },
+            }).catch(() => {});
+          }
 
           yield "loot";
           await scavengeWrecks(ctx);
@@ -981,6 +1068,21 @@ export const hunterRoutine: Routine = async function* (ctx: RoutineContext) {
     } else {
       ctx.log("system", `Patrol sweep done — ${patrolKills} kill(s). Hull: ${postHull}% | Fuel: ${postFuel}% — continuing hunt...`);
 
+      // Restock ammo if low even when not stopping for repairs/fuel
+      await bot.refreshStatus();
+      if (bot.ammo >= 0 && bot.ammo < settings.ammoThreshold) {
+        ctx.log("combat", `Ammo low (${bot.ammo}) — restocking before continuing...`);
+        yield "restock_ammo";
+        const docked = await navigateToSafeStation(ctx, safetyOpts);
+        if (docked) {
+          await buyAmmoIfNeeded(ctx);
+          await ensureAmmoLoaded(ctx, settings.ammoThreshold, settings.maxReloadAttempts);
+          await bot.refreshStatus();
+          ctx.log("combat", `Ammo after restock: ${bot.ammo}`);
+        }
+        await ensureUndocked(ctx);
+      }
+
       if (!patrolSystem) {
         const nextSystem = findNextHuntSystem(bot.system, ctx.mapStore);
         if (nextSystem) {
@@ -995,4 +1097,6 @@ export const hunterRoutine: Routine = async function* (ctx: RoutineContext) {
       }
     }
   }
+
+  bot.autoDefend = false;
 };

@@ -23,6 +23,7 @@ import {
   detectAndRecoverFromDeath,
   readSettings,
   sleep,
+  logAgentEvent,
 } from "./common.js";
 
 /** Number of mine attempts per resource POI to sample ores. */
@@ -481,8 +482,41 @@ export const explorerRoutine: Routine = async function* (ctx: RoutineContext) {
     }
 
     const validConns = connections.filter(c => c.id);
-    const nextSystem = pickNextSystem(validConns, visitedSystems, ctx.mapStore);
+    let nextSystem = pickNextSystem(validConns, visitedSystems, ctx.mapStore);
     if (!nextSystem) {
+      // Phase 7.3: Try search_systems API to find unexplored/high-value targets
+      let searchTarget: string | null = null;
+      const searchResp = await bot.exec("search_systems", {
+        filter: "unexplored",
+        max_results: 5,
+        from_system: bot.system,
+      }).catch(() => null);
+
+      if (searchResp && !searchResp.error && searchResp.result) {
+        const sr = searchResp.result as Record<string, unknown>;
+        const found = (
+          Array.isArray(sr) ? sr :
+          Array.isArray(sr.systems) ? sr.systems :
+          []
+        ) as Array<Record<string, unknown>>;
+
+        if (found.length > 0) {
+          const candidate = found[0];
+          const cId = (candidate.id as string) || (candidate.system_id as string) || "";
+          if (cId && !visitedSystems.has(cId)) {
+            searchTarget = cId;
+            ctx.log("info", `search_systems: routing to unexplored ${(candidate.name as string) || cId}`);
+          }
+        }
+      }
+
+      if (searchTarget) {
+        // Navigate to the search result via multi-hop route
+        await ensureUndocked(ctx);
+        const routed = await navigateToSystem(ctx, searchTarget, { fuelThresholdPct: JUMP_FUEL_PCT, hullThresholdPct: 20 });
+        if (routed) { continue; }
+      }
+
       ctx.log("info", "All connected systems explored! Picking a random connection...");
       if (validConns.length > 0) {
         // Ensure fuel before random jump
@@ -631,6 +665,15 @@ async function* scanStation(
       []
     ) as Array<Record<string, unknown>>;
     marketCount = marketItemsList.length;
+
+    // Submit trade intel to faction (fire-and-forget)
+    if (bot.factionId) {
+      bot.exec("faction_submit_trade_intel", {
+        system_id: systemId,
+        poi_id: poi.id,
+        market_snapshot: marketResp.result,
+      }).catch(() => {});
+    }
   }
 
   // Buy build goal materials if this bot is assigned and they're on the market

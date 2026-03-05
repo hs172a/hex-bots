@@ -238,7 +238,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, onMounted, watch } from 'vue';
+import { ref, computed, onMounted, onUnmounted, watch } from 'vue';
 import { useBotStore } from '../stores/botStore';
 
 // ── Mission Analytics state ─────────────────────────────
@@ -269,7 +269,14 @@ watch(selectedPool, (val) => {
   if (val !== null) statsPeriod.value = 'all';
 });
 
-onMounted(() => { botStore.fetchAllPoolsStats(); });
+let statsRefreshTimer: ReturnType<typeof setInterval> | null = null;
+onMounted(() => {
+  botStore.fetchAllPoolsStats();
+  statsRefreshTimer = setInterval(() => botStore.fetchAllPoolsStats(), 30_000);
+});
+onUnmounted(() => {
+  if (statsRefreshTimer) clearInterval(statsRefreshTimer);
+});
 
 interface MissionRow { bot: string; count: number; credits: number; lastTitle: string; }
 const missionRows = ref<MissionRow[]>([]);

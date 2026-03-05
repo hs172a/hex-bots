@@ -73,6 +73,21 @@ export const scoutRoutine: Routine = async function* (ctx: RoutineContext) {
       const marketResp = await bot.exec("view_market");
       if (!marketResp.error) {
         ctx.log("info", `Market data collected at ${station.name}`);
+        ctx.mapStore.updateMarket(systemId, bot.poi, marketResp.result as Record<string, unknown>);
+
+        // Submit scan intel to faction (fire-and-forget)
+        if (bot.factionId) {
+          bot.exec("faction_submit_intel", {
+            system_id: systemId,
+            intel_type: "system_scan",
+            data: {
+              poi_count: pois.length,
+              connection_count: connections.length,
+              station_id: station.id,
+              station_name: station.name,
+            },
+          }).catch(() => {});
+        }
       }
       await sleep(settings.scanDelayMs);
       await ensureUndocked(ctx);
