@@ -157,6 +157,9 @@ export class WebServer {
   // When DataSync is in master mode, botmanager wires this to DataSyncServer.getAllPoolsStats()
   onAllPoolsStats: (() => Record<string, Record<string, any>>) | null = null;
 
+  // Current pool name — set by botmanager, used in /api/stats/all-pools response
+  currentPoolName: string | null = null;
+
   // When DataSync is in client mode, botmanager wires this to DataSyncClient.syncCode()
   onSyncCode: (() => Promise<{ updated: string[]; failed: string[] }>) | null = null;
 
@@ -254,27 +257,49 @@ export class WebServer {
           return Response.json(this.statsData.daily);
         }
         if (url.pathname === "/api/stats/all-pools") {
-          // DataSync master mode: return aggregated stats from all connected VMs
+          let pools: Record<string, Record<string, any>>;
+          let currentPool: string;
           if (this.onAllPoolsStats) {
-            return Response.json(this.onAllPoolsStats());
-          }
-          // Standalone mode: scan local sibling directories on same machine
-          const poolName = basename(process.cwd());
-          const allPools: Record<string, Record<string, any>> = { [poolName]: this.statsData.daily };
-          try {
-            const parentDir = join(process.cwd(), "..");
-            for (const entry of readdirSync(parentDir, { withFileTypes: true })) {
-              if (!entry.isDirectory() || entry.name === poolName) continue;
-              const statsPath = join(parentDir, entry.name, "data", "stats.json");
-              if (existsSync(statsPath)) {
-                try {
-                  const raw = JSON.parse(readFileSync(statsPath, "utf-8"));
-                  allPools[entry.name] = raw.daily ?? raw;
-                } catch { /* skip corrupt */ }
+            // DataSync master/client mode: aggregated stats from all connected VMs
+            pools = this.onAllPoolsStats();
+            currentPool = this.currentPoolName ?? Object.keys(pools)[0] ?? '';
+          } else {
+            // Standalone mode: scan local sibling directories on same machine
+            currentPool = this.currentPoolName ?? basename(process.cwd());
+            pools = { [currentPool]: this.statsData.daily };
+            try {
+              const parentDir = join(process.cwd(), "..");
+              for (const entry of readdirSync(parentDir, { withFileTypes: true })) {
+                if (!entry.isDirectory() || entry.name === currentPool) continue;
+                const statsPath = join(parentDir, entry.name, "data", "stats.json");
+                if (existsSync(statsPath)) {
+                  try {
+                    const raw = JSON.parse(readFileSync(statsPath, "utf-8"));
+                    pools[entry.name] = raw.daily ?? raw;
+                  } catch { /* skip corrupt */ }
+                }
               }
-            }
-          } catch { /* skip on fs error */ }
-          return Response.json(allPools);
+            } catch { /* skip on fs error */ }
+          }
+          return Response.json({ pools, currentPool });
+        }
+        if (url.pathname === "/api/debug/stats") {
+          // Diagnostic endpoint — returns the full stats pipeline state.
+          // Open in browser: http://localhost:3210/api/debug/stats
+          const myDaily = this.statsData.daily;
+          const allPools = this.onAllPoolsStats ? this.onAllPoolsStats() : null;
+          return Response.json({
+            dataSyncMode: this.dataSyncMode,
+            onAllPoolsStats_wired: this.onAllPoolsStats !== null,
+            myStats: {
+              bots: Object.keys(myDaily),
+              sample: myDaily,
+            },
+            allPoolsStats: allPools,
+            note: allPools === null
+              ? "onAllPoolsStats not wired — DataSync disabled or not yet started"
+              : `${Object.keys(allPools).length} pool(s) in result`,
+          });
         }
         if (url.pathname === "/api/sync-code" && req.method === "POST") {
           if (!this.onSyncCode) {

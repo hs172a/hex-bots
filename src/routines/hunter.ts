@@ -967,15 +967,7 @@ export const hunterRoutine: Routine = async function* (ctx: RoutineContext) {
           // Submit pirate activity intel to faction (fire-and-forget)
           if (bot.factionId) {
             bot.exec("faction_submit_intel", {
-              system_id: bot.system,
-              intel_type: "pirate_activity",
-              data: {
-                poi_id: poi.id,
-                poi_name: poi.name,
-                target_name: target.name,
-                target_tier: (target as unknown as Record<string, unknown>).tier ?? "",
-                kills: 1,
-              },
+              systems: bot.system ? [bot.system] : [],
             }).catch(() => {});
           }
 

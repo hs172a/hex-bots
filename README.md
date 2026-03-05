@@ -6,14 +6,14 @@
 
 A web-based bot fleet manager for [SpaceMolt](https://www.spacemolt.com) — run multiple bots with automated routines, monitor and control everything from a reactive live dashboard.
 
-![Interface](https://img.shields.io/badge/interface-vue3_spa-blue) ![Runtime](https://img.shields.io/badge/runtime-bun-black) ![Deps](https://img.shields.io/badge/deps-zero_runtime-green) ![Version](https://img.shields.io/badge/version-1.8.x-purple)
+![Interface](https://img.shields.io/badge/interface-vue3_spa-blue) ![Runtime](https://img.shields.io/badge/runtime-bun-black) ![Deps](https://img.shields.io/badge/deps-zero_runtime-green) ![Version](https://img.shields.io/badge/version-1.9.x-purple)
 
 ---
 
 ## Features at a Glance
 
 - **Vue 3 SPA Dashboard** — reactive real-time UI, WebSocket log streaming
-- **23 Routines** — from autonomous mining to full LLM fleet command
+- **25 Routines** — from autonomous mining to full LLM fleet command
 - **10-tab Bot Profile** — manual control, ship management, combat, social, AI log
 - **Faction Management** — members, storage, facilities, diplomacy, missions, trade intel
 - **Galaxy Map** — auto-built from explorer data, seeded from `/api/map`
@@ -60,6 +60,20 @@ bun start           # serves everything at http://localhost:3210
 ```
 
 Use `PORT=8080 bun start` for a different port.
+
+### Production with Code Sync (multi-VM)
+
+When `code_sync_interval_sec` is set in `config.toml`, client VMs pull code from the master and call `process.exit(0)` to apply updates. A supervisor script must be used so the process restarts cleanly:
+
+```bash
+chmod +x start.sh
+./start.sh            # foreground
+nohup ./start.sh &    # background
+```
+
+> **⚠️ Never use `bun --hot` on a VM with code sync enabled.**
+> HMR triggers a restart on every single file write. Syncing 50+ files causes cascading restarts that exhaust memory (3 GB RSS on 1 GB RAM → OOM segfault).
+> `start.sh` replaces `--hot` with a single clean restart after all files are applied atomically.
 
 ---
 
@@ -134,8 +148,7 @@ Tab order: **Control · Ship · Facility · Insurance · Combat · Profile · St
 
 | Routine | Description |
 |---------|-------------|
-| **Miner** | Mines ore at asteroid belts, returns to station to deposit/sell. Configurable target ore, cargo threshold, ore quotas, faction donations. |
-| **Miner v2** | Anti-collision via claim registry; per-bot ore quotas; faction donate %; home system navigation. |
+| **Miner** | Mines ore at asteroid belts. Anti-collision via claim registry; configurable target ore, per-bot ore quotas, cargo threshold, faction donate %; home system navigation. Waits at belt for ore respawn instead of returning empty. |
 | **Explorer** | Jumps system to system, visits every POI, surveys resources. Builds the galaxy map. |
 | **Crafter** | Crafts to configured stock limits. Auto-crafts prerequisites. Falls back to XP-grinding when skill-blocked. **autoCraft mode**: ranks all craftable recipes by profit margin (volume-weighted market prices, owned items cost 0), crafts top N most profitable. BOM summary log each cycle. |
 | **Coordinator** | Analyses cross-station market demand. Auto-adjusts miner ore quotas and crafter craft limits. |
@@ -268,8 +281,7 @@ src/
     config.ts          Routine config type definitions
   routines/
     common.ts          Shared utilities — dock, refuel, navigate, scavenge, deposit
-    miner.ts           Miner (v1)
-    miner-v2.ts        Miner v2 — anti-collision, ore quotas, faction donate
+    miner.ts           Miner — anti-collision, ore quotas, faction donate, respawn-wait
     explorer.ts        Explorer
     crafter.ts         Crafter — catalog cache, prerequisite crafting, XP grind
     coordinator.ts     Coordinator — global market fetch, auto-adjust quotas

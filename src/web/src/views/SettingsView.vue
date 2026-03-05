@@ -269,6 +269,24 @@
           <div><div class="text-sm text-space-text">Cycle Delay (ms)</div><div class="text-xs text-space-text-dim mt-0.5">Wait after a successful craft cycle. Automatically extended (3–6×) when idle or materials are missing.</div></div>
           <input type="number" v-model.number="crafterForm.cycleDelayMs" min="2000" max="120000" step="1000" class="input text-sm w-28" />
         </div>
+
+        <div class="mt-6 mb-2 text-xs font-semibold uppercase tracking-wider text-space-text-dim">Auto-Craft Mode</div>
+        <div class="setting-row">
+          <div>
+            <div class="text-sm text-space-text">Enable Auto-Craft</div>
+            <div class="text-xs text-space-text-dim mt-0.5">Scan all recipes and craft the most profitable ones automatically. Does not require craft limits to be set.</div>
+          </div>
+          <input type="checkbox" v-model="crafterForm.autoCraft" class="w-4 h-4 accent-space-accent" />
+        </div>
+        <div class="setting-row" :class="{ 'opacity-40 pointer-events-none': !crafterForm.autoCraft }">
+          <div><div class="text-sm text-space-text">Min Profit %</div><div class="text-xs text-space-text-dim mt-0.5">Only craft recipes with profit margin above this %.</div></div>
+          <input type="number" v-model.number="crafterForm.minProfitPct" min="1" max="100" class="input text-sm w-24" />
+        </div>
+        <div class="setting-row" :class="{ 'opacity-40 pointer-events-none': !crafterForm.autoCraft }">
+          <div><div class="text-sm text-space-text">Max Recipes</div><div class="text-xs text-space-text-dim mt-0.5">Max number of recipes to craft per cycle (ranked by profit).</div></div>
+          <input type="number" v-model.number="crafterForm.maxAutoCraftRecipes" min="1" max="20" class="input text-sm w-24" />
+        </div>
+
         <div class="save-bar"><button @click="saveCrafter" class="btn btn-primary">Save Settings</button></div>
       </div>
 
@@ -1231,11 +1249,14 @@ function addOreQuota() {
 }
 
 // ── Crafter form ────────────────────────────────────────────
-const crafterForm = ref<{ craftLimits: Record<string, number>; refuelThreshold: number; repairThreshold: number; cycleDelayMs: number }>({
+const crafterForm = ref<{ craftLimits: Record<string, number>; refuelThreshold: number; repairThreshold: number; cycleDelayMs: number; autoCraft: boolean; minProfitPct: number; maxAutoCraftRecipes: number }>({  
   craftLimits: {},
   refuelThreshold: 50,
   repairThreshold: 40,
   cycleDelayMs: 10000,
+  autoCraft: false,
+  minProfitPct: 10,
+  maxAutoCraftRecipes: 5,
 });
 const crafterAddId = ref('');
 const crafterAddQty = ref(10);
@@ -1574,6 +1595,9 @@ watch(() => botStore.settings, (s) => {
     crafterForm.value.refuelThreshold = s.crafter.refuelThreshold ?? 50;
     crafterForm.value.repairThreshold = s.crafter.repairThreshold ?? 40;
     crafterForm.value.cycleDelayMs = s.crafter.cycleDelayMs ?? 10000;
+    crafterForm.value.autoCraft = s.crafter.autoCraft ?? false;
+    crafterForm.value.minProfitPct = s.crafter.minProfitPct ?? 10;
+    crafterForm.value.maxAutoCraftRecipes = s.crafter.maxAutoCraftRecipes ?? 5;
   }
   if (s.rescue) {
     const r = s.rescue;
@@ -1815,6 +1839,9 @@ function saveCrafter() {
     refuelThreshold: crafterForm.value.refuelThreshold,
     repairThreshold: crafterForm.value.repairThreshold,
     cycleDelayMs: crafterForm.value.cycleDelayMs,
+    autoCraft: crafterForm.value.autoCraft,
+    minProfitPct: crafterForm.value.minProfitPct,
+    maxAutoCraftRecipes: crafterForm.value.maxAutoCraftRecipes,
   });
 }
 

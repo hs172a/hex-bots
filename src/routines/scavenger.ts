@@ -236,7 +236,7 @@ export const scavengerRoutine: Routine = async function* (ctx: RoutineContext) {
 
       // Travel to POI
       if (bot.poi !== poi.id) {
-        const travelResp = await bot.exec("travel", { destination_id: poi.id });
+        const travelResp = await bot.exec("travel", { target_poi: poi.id });
         if (travelResp.error) continue;
         await bot.refreshStatus();
         await sleep(1000);

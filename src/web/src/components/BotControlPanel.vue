@@ -294,7 +294,13 @@
     <!-- Activity Log -->
     <div class="card py-2 px-2 flex flex-col h-56">
       <div class="flex py-1 px-0 items-center justify-between border-b border-space-border bg-space-card">
-        <h3 class="text-xs font-semibold text-space-text-dim uppercase">Activity Log</h3>
+        <div class="flex items-center gap-2">
+          <h3 class="text-xs font-semibold text-space-text-dim uppercase">Activity Log</h3>
+          <span v-if="lastBeltStatus" class="text-[11px] px-1.5 py-0.5 rounded font-medium"
+            :class="lastBeltStatus.includes('depleted') && !lastBeltStatus.includes('resources available') ? 'bg-orange-900/30 text-orange-300' : lastBeltStatus.startsWith('Belt depleted') ? 'bg-red-900/30 text-red-300' : 'bg-amber-900/30 text-amber-300'">
+            ⛏️ {{ lastBeltStatus }}
+          </span>
+        </div>
         <div class="flex gap-2">
           <button @click="loadFullLog" class="btn btn-secondary text-xs py-0 px-2">{{ showFullLog ? '◀ Recent' : 'Full Log ▶' }}</button>
           <button @click="clearLog" class="btn btn-secondary text-xs py-0 px-2">Clear</button>
@@ -430,11 +436,30 @@ const botLogs = computed(() => {
   const filtered = botStore.logs.filter(log => log.bot === currentBot.value.username);
   return showFullLog.value ? filtered : filtered.slice(-100);
 });
-watch(() => botLogs.value.length, () => {
+
+const lastBeltStatus = computed(() => {
+  const all = botLogs.value;
+  for (let i = all.length - 1; i >= 0; i--) {
+    const msg = (all[i].message || '') as string;
+    if (msg.includes('Belt:') && msg.includes('resources available')) {
+      const idx = msg.indexOf('Belt:');
+      return idx >= 0 ? msg.slice(idx) : msg;
+    }
+    if (msg.includes('Belt depleted') && (msg.includes('waiting') || msg.includes('respawn'))) {
+      const idx = msg.indexOf('Belt depleted');
+      return idx >= 0 ? msg.slice(idx) : msg;
+    }
+  }
+  return '';
+});
+
+function scrollToBottom() {
   nextTick(() => {
     if (logContainerRef.value) logContainerRef.value.scrollTop = logContainerRef.value.scrollHeight;
   });
-});
+}
+watch(() => botLogs.value.length, scrollToBottom);
+defineExpose({ scrollToBottom });
 
 const knownSystems = computed(() => {
   const systems: any[] = [];
@@ -875,5 +900,6 @@ onMounted(() => {
   fetchRecipes();
   const currentSystem = botStore.mapData[currentBot.value.system];
   if (currentSystem) systemPois.value = (currentSystem as any).pois || [];
+  scrollToBottom();
 });
 </script>

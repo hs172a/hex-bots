@@ -1,14 +1,59 @@
 ﻿<template>
   <div class="flex flex-col h-full overflow-hidden">
     <!-- Header -->
-    <div class="flex items-center gap-4 px-3 py-2 border-b border-space-border bg-space-card">
-      <button @click="$emit('close')" class="text-space-text-dim hover:text-space-text-bright transition-colors">← Back</button>
-      <h2 class="text-xl font-semibold text-space-text-bright">🤖 {{ currentBot.username }}</h2>
-      <span class="text-sm text-space-text-dim">{{ currentBot.shipName || 'Unknown Ship' }}</span>
-      <span class="badge ml-auto" :class="{ 'badge-green': currentBot.state === 'running', 'badge-yellow': currentBot.state === 'idle' || currentBot.state === 'stopped', 'badge-red': currentBot.state === 'error' }">{{ currentBot.state }}</span>
-      <div class="flex gap-2">
-        <button v-if="currentBot.state === 'running'" @click="$emit('stop')" class="btn-danger text-sm px-4">Stop Bot</button>
-        <button v-if="currentBot.state === 'idle' || currentBot.state === 'stopped'" @click="$emit('start')" class="btn btn-primary text-xs py-1 px-2">Start Bot</button>
+    <div class="flex flex-col px-3 py-2 border-b border-space-border bg-space-card gap-1.5">
+      <!-- Row 1: navigation + identity + state controls -->
+      <div class="flex items-center gap-3">
+        <button @click="$emit('close')" class="text-space-text-dim hover:text-space-text-bright transition-colors text-sm shrink-0">← Back</button>
+        <h2 class="text-base font-semibold text-space-text-bright">🤖 {{ currentBot.username }}</h2>
+        <span v-if="currentBot.empire" :title="empireName(currentBot.empire)" class="text-base shrink-0 leading-none">{{ empireIcon(currentBot.empire) }}</span>
+        <div class="flex-1"></div>
+        <span class="badge" :class="{ 'badge-green': currentBot.state === 'running', 'badge-yellow': currentBot.state === 'idle' || currentBot.state === 'stopped', 'badge-red': currentBot.state === 'error' }">{{ currentBot.state }}</span>
+        <div class="flex gap-1.5 shrink-0">
+          <button v-if="currentBot.state === 'running'" @click="$emit('stop')" class="btn-danger text-xs px-3 py-1">Stop Bot</button>
+          <button v-if="currentBot.state === 'idle' || currentBot.state === 'stopped'" @click="$emit('start')" class="btn btn-primary text-xs py-1 px-2">Start Bot</button>
+        </div>
+      </div>
+      <!-- Row 2: ship, location, status pills -->
+      <div class="flex items-center gap-2 flex-wrap text-xs">
+        <!-- Ship name with tooltip -->
+        <span v-if="headerShipClassId"
+          @mouseenter="onShipNameHover($event)"
+          @mouseleave="shipTooltipVisible = false"
+          class="flex items-center gap-1 cursor-help group shrink-0"
+        >
+          <span class="text-space-text-dim">🚀</span>
+          <span class="text-space-text group-hover:text-space-accent underline decoration-dotted decoration-space-text-dim/50 transition-colors font-medium">
+            {{ currentBot.shipName || headerShipClassId }}
+          </span>
+          <span class="text-[11px] text-space-text-dim">({{ headerShipClassId }})</span>
+        </span>
+        <span v-else class="text-space-text-dim shrink-0">🚀 {{ currentBot.shipName || 'Unknown Ship' }}</span>
+        <!-- System / POI -->
+        <span v-if="currentBot.system" class="flex items-center gap-1 text-[11px] text-space-text-dim shrink-0">
+          <span class="opacity-40">|</span>
+          <span>📍</span>
+          <span class="text-space-text">{{ headerSystemName }}</span>
+          <span v-if="headerPoiName" class="opacity-60">/ {{ headerPoiName }}</span>
+        </span>
+        <!-- Docked status -->
+        <span class="text-[11px] px-1.5 py-0.5 rounded font-medium shrink-0"
+          :class="currentBot.docked ? 'bg-green-900/30 text-space-green' : 'bg-[#21262d] text-space-text-dim'">
+          {{ currentBot.docked ? '🔒 Docked' : '🚀 In Space' }}
+        </span>
+        <!-- Routine -->
+        <span v-if="currentBot.routine" class="text-[11px] px-1.5 py-0.5 rounded bg-[#21262d] text-space-text-dim shrink-0">
+          ⚙️ {{ currentBot.routine }}
+        </span>
+        <!-- Faction -->
+        <span v-if="currentBot.factionId" class="text-[11px] px-1.5 py-0.5 rounded bg-purple-900/20 text-purple-300 shrink-0">
+          🛡️ {{ currentBot.factionId }}
+        </span>
+        <!-- Credits/hour -->
+        <span v-if="headerCreditsPerHour !== 0" class="text-[11px] px-1.5 py-0.5 rounded ml-auto shrink-0"
+          :class="headerCreditsPerHour > 0 ? 'bg-green-900/20 text-space-green' : 'bg-red-900/20 text-space-red'">
+          {{ headerCreditsPerHour > 0 ? '↗' : '↘' }} {{ Math.abs(headerCreditsPerHour).toLocaleString() }} cr/h
+        </span>
       </div>
     </div>
     <!-- Body -->
@@ -178,7 +223,7 @@
       <!-- Main Content -->
       <div class="flex-1 flex flex-col overflow-hidden">
         <!-- Tab navigation -->
-        <div class="flex gap-0 border-b border-space-border bg-space-card px-2 shrink-0 overflow-x-auto">
+        <div class="flex gap-0 border-b border-space-border bg-space-card px-2 shrink-0 overflow-x-auto scrollbar-dark">
           <button @click="activeMainTab = 'control'" class="px-3 py-2 text-xs font-medium border-b-2 transition-all whitespace-nowrap" :class="activeMainTab === 'control' ? 'text-space-text-bright border-space-accent' : 'text-space-text-dim border-transparent hover:text-space-text'">🛠️ Control</button>
           <button @click="currentBot.docked && (activeMainTab = 'ship')" class="px-3 py-2 text-xs font-medium border-b-2 transition-all whitespace-nowrap" :class="[activeMainTab === 'ship' ? 'text-space-text-bright border-space-accent' : 'text-space-text-dim border-transparent', currentBot.docked ? 'hover:text-space-text cursor-pointer' : 'opacity-40 cursor-not-allowed']" :title="!currentBot.docked ? 'Dock to manage ship' : ''">🛸 Ship</button>
           <button @click="currentBot.docked && loadFacilityTab()" class="px-3 py-2 text-xs font-medium border-b-2 transition-all whitespace-nowrap" :class="[activeMainTab === 'facility' ? 'text-space-text-bright border-space-accent' : 'text-space-text-dim border-transparent', currentBot.docked ? 'hover:text-space-text cursor-pointer' : 'opacity-40 cursor-not-allowed']" :title="!currentBot.docked ? 'Dock to manage facilities' : ''">⚙️ Facility</button>
@@ -191,7 +236,7 @@
           <button @click="activeMainTab = 'social'" class="px-3 py-2 text-xs font-medium border-b-2 transition-all whitespace-nowrap" :class="activeMainTab === 'social' ? 'text-space-text-bright border-space-accent' : 'text-space-text-dim border-transparent hover:text-space-text'">🤝 Social</button>
         </div>
         <!-- Panel components -->
-        <BotControlPanel v-show="activeMainTab === 'control'" :bot="bot" @notif="onChildNotif" />
+        <BotControlPanel ref="controlPanel" v-show="activeMainTab === 'control'" :bot="bot" @notif="onChildNotif" />
         <BotShipPanel v-show="activeMainTab === 'ship'" :bot="bot" @notif="onChildNotif" />
         <BotStationPanel v-show="activeMainTab === 'facility'" ref="facilityPanel" :bot="bot" mode="facility" @notif="onChildNotif" />
         <InsurancePanel v-if="activeMainTab === 'insurance'" :bot="bot" @notif="onChildNotif" />
@@ -203,6 +248,46 @@
         <SocialPanel v-if="activeMainTab === 'social'" :bot="bot" @notif="onChildNotif" />
       </div>
     </div>
+    <!-- Ship class tooltip -->
+    <Teleport to="body">
+      <div v-if="shipTooltipVisible && headerShipClassId"
+        class="fixed z-[9999] w-72 bg-[#0d1117] border border-space-border rounded-lg shadow-2xl overflow-hidden pointer-events-none"
+        :style="{ top: shipTooltipPos.y + 'px', left: shipTooltipPos.x + 'px' }">
+        <img v-if="headerShipCatalog"
+          :src="headerShipImageUrl(headerShipClassId)"
+          :alt="headerShipCatalog?.name"
+          class="w-full h-28 object-cover"
+          @error="($event.target as HTMLImageElement).style.display='none'" />
+        <div class="p-2.5 space-y-2">
+          <div class="flex justify-between items-start gap-2">
+            <div class="min-w-0">
+              <div class="text-xs font-semibold text-space-text-bright">{{ headerShipCatalog?.name || headerShipClassId }}</div>
+              <div v-if="headerShipCatalog" class="text-[11px] text-space-text-dim">
+                {{ headerShipCatalog.empire_name }} · Tier {{ headerShipCatalog.tier }} · Scale {{ headerShipCatalog.scale }}
+              </div>
+            </div>
+            <span v-if="headerShipCatalog?.starter_ship" class="text-[11px] px-1.5 py-0.5 rounded bg-blue-900/30 text-blue-300 shrink-0">Starter</span>
+            <span v-else-if="headerShipCatalog?.price" class="text-space-yellow text-xs font-semibold shrink-0">{{ headerShipCatalog.price?.toLocaleString() }} cr</span>
+          </div>
+          <div v-if="headerShipCatalog?.description" class="text-[11px] text-space-text-dim leading-relaxed line-clamp-2">{{ headerShipCatalog.description }}</div>
+          <div class="grid grid-cols-3 gap-x-3 gap-y-0.5 text-[11px] pt-1 border-t border-[#21262d]">
+            <div class="text-space-text-dim">❤️ Hull <span class="text-space-text">{{ headerShipCatalog?.base_hull ?? currentBot.maxHull ?? '?' }}</span></div>
+            <div class="text-space-text-dim">🔵 Shield <span class="text-space-text">{{ headerShipCatalog?.base_shield ?? currentBot.maxShield ?? '?' }}</span></div>
+            <div class="text-space-text-dim">💨 Speed <span class="text-space-text">{{ headerShipCatalog?.base_speed ?? '?' }}</span></div>
+            <div class="text-space-text-dim">⛽ Fuel <span class="text-space-text">{{ headerShipCatalog?.base_fuel ?? currentBot.maxFuel ?? '?' }}</span></div>
+            <div class="text-space-text-dim">📦 Cargo <span class="text-space-text">{{ headerShipCatalog?.cargo_capacity ?? currentBot.cargoMax ?? '?' }}</span></div>
+            <div class="text-space-text-dim">🖥️ CPU <span class="text-space-text">{{ headerShipCatalog?.cpu_capacity ?? '?' }}</span></div>
+            <div class="text-space-text-dim">⚔️ <span class="text-space-text">{{ headerShipCatalog?.weapon_slots ?? '?' }} wpn</span></div>
+            <div class="text-space-text-dim">🛡️ <span class="text-space-text">{{ headerShipCatalog?.defense_slots ?? '?' }} def</span></div>
+            <div class="text-space-text-dim">🔧 <span class="text-space-text">{{ headerShipCatalog?.utility_slots ?? '?' }} util</span></div>
+          </div>
+          <div v-if="headerShipCatalog?.flavor_tags?.length" class="flex flex-wrap gap-1 pt-1 border-t border-[#21262d]">
+            <span v-for="tag in headerShipCatalog.flavor_tags" :key="tag" class="px-1.5 py-0.5 rounded bg-[#21262d] text-space-text-dim text-[11px]">{{ tag }}</span>
+          </div>
+        </div>
+      </div>
+    </Teleport>
+
     <!-- Toast notification -->
     <Teleport to="body">
       <Transition
@@ -224,8 +309,9 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, onMounted } from 'vue';
+import { ref, computed, onMounted, watch, nextTick } from 'vue';
 import { useBotStore } from '../stores/botStore';
+import { empireIcon, empireName } from '../utils/empires';
 import BotControlPanel from './BotControlPanel.vue';
 import BotShipPanel from './BotShipPanel.vue';
 import BotStationPanel from './BotStationPanel.vue';
@@ -301,8 +387,60 @@ const CATEGORY_BAR_COLOR: Record<string, string> = {
 const CATEGORY_ORDER = ['mining','ships','navigation','engineering','crafting','trading',
   'exploration','drones','support','salvaging','faction','empire','prestige'];
 
+// ── Header ship tooltip ─────────────────────────────────────────────────────
+const shipTooltipVisible = ref(false);
+const shipTooltipPos = ref({ x: 0, y: 0 });
+
+const headerShipClassId = computed(() =>
+  shipInfo.value?.class_id || (currentBot.value as any)?.shipClassId || ''
+);
+
+const headerShipCatalog = computed(() => {
+  const id = headerShipClassId.value;
+  if (!id || !botStore.publicShips?.length) return null;
+  return botStore.publicShips.find((s: any) => s.id === id || s.class === id || s.ship_class === id) || null;
+});
+
+const headerSystemName = computed(() => {
+  const sys = currentBot.value?.system;
+  if (!sys) return '';
+  const sysData = botStore.mapData[sys] as any;
+  return sysData?.name || sys;
+});
+
+const headerPoiName = computed(() => {
+  const poi = currentBot.value?.poi;
+  const sys = currentBot.value?.system;
+  if (!poi || !sys) return '';
+  const sysData = botStore.mapData[sys] as any;
+  const poiData = sysData?.pois?.find((p: any) => p.id === poi);
+  return poiData?.name || poi;
+});
+
+const headerCreditsPerHour = computed(() =>
+  botStore.botCreditsPerHour?.[currentBot.value?.username || ''] ?? 0
+);
+
+function headerShipImageUrl(classId: string): string {
+  return `https://www.spacemolt.com/_next/image?url=%2Fimages%2Fships%2Fcatalog%2F${encodeURIComponent(classId)}.webp&w=640&q=75`;
+}
+
+function onShipNameHover(e: MouseEvent) {
+  const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
+  shipTooltipPos.value = {
+    x: Math.min(rect.left, window.innerWidth - 300),
+    y: rect.bottom + 6,
+  };
+  shipTooltipVisible.value = true;
+}
+// ─────────────────────────────────────────────────────────────────────────────
+
 const activeMainTab = ref<'control' | 'ship' | 'station' | 'log' | 'profile' | 'combat' | 'insurance' | 'notes' | 'facility' | 'social'>('control');
+const controlPanel = ref<InstanceType<typeof BotControlPanel> | null>(null);
 const facilityPanel = ref<InstanceType<typeof BotStationPanel> | null>(null);
+watch(activeMainTab, (tab) => {
+  if (tab === 'control') nextTick(() => controlPanel.value?.scrollToBottom());
+});
 function loadFacilityTab() {
   activeMainTab.value = 'facility';
   facilityPanel.value?.maybeLoad();

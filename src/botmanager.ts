@@ -763,6 +763,7 @@ async function main(): Promise<void> {
   if (config.datasync.enabled) {
     console.log(`[DataSync] pool_name: ${resolvedPoolName}`);
   }
+  server.currentPoolName = resolvedPoolName;
   const dataSync = initDataSync(mapStore, catalogStore, config.datasync, statsOpts);
   if (dataSync) {
     server.dataSyncMode = config.datasync.mode;

@@ -5,6 +5,38 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [1.9.0] - 2026-03-05
+
+### Added
+
+- **Mission Runner: `manualMissionId`** (`mission_runner.ts`, `MissionsView.vue`):
+  - Per-bot setting to manually target a specific mission by ID; auto-selection is used as fallback when the mission is not found on the board or in the active list
+  - "Set Target" toggle button on each active mission card in `MissionsView.vue`; selected card highlighted; "Clear" link shown in the top bar
+  - Wired to `botStore.saveSettings('mission_runner')`
+- **Mining UI: belt resource status pill** (`BotControlPanel.vue`):
+  - Extracts latest `Belt:` info line from the activity log each cycle
+  - Shown as a coloured status pill above the Activity Log when the bot is actively mining (e.g., `12/15 resources available (8% depleted avg)`)
+- **Activity Log: auto-scroll** (`BotProfile.vue`, `BotControlPanel.vue`):
+  - Log scrolls to the bottom on mount and on every new log entry
+  - `BotProfile.vue` triggers scroll when switching to the Control tab
+
+### Fixed
+
+- **Miner: home base tracking for remote-system mining** (`miner.ts`):
+  - Added `findSystemForPoi()` helper — searches the map store to find which system contains a given POI ID
+  - `homeSystem` is now derived from `bot.homeBase` POI via map lookup (`findSystemForPoi`) rather than defaulting to `bot.system` at startup — correct even when the bot starts in a remote system
+  - Return-to-home block now triggers whenever `bot.system !== homeSystem`, regardless of whether `targetOre` or `oreQuotas` are set — fixes the scenario where `miningSystem` is configured without a target ore
+  - After returning home, docking uses `bot.homeBase` directly as the station POI instead of searching the home system for any station; falls back to `findStation()` if `homeBase` is unset
+  - When already in the home system, `stationPoi` is set to `homeStationId` (`bot.homeBase`) before the travel-to-station step
+- **Crafter: cargo full with crafted `fuel_cell` items** (`crafter.ts`):
+  - Start-of-cycle cargo clear now deposits excess `fuel_cell` items, keeping ≤ 5 as an emergency backup; previously kept all of them (matched by `lower.includes("fuel")`) which left no room for recipe components when 60+ fuel cells had accumulated
+  - `energy_cell` (ship fuel) continues to be excluded from the deposit loop
+- **Crafter: skill level always read as 0** (`bot.ts`):
+  - `checkSkills()` dict-format branch now iterates the nested `r.skills` object directly instead of iterating top-level response keys (which included `"skills"` and `"message"`)
+  - `getSkillLevel()` falls back to the `this.skills` array (correctly populated by `refreshStatus()`) when the `skillLevels` map has no entry for the requested skill
+
+---
+
 ## [1.8.0] - 2026-03-04
 
 ### Added

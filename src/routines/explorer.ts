@@ -487,9 +487,7 @@ export const explorerRoutine: Routine = async function* (ctx: RoutineContext) {
       // Phase 7.3: Try search_systems API to find unexplored/high-value targets
       let searchTarget: string | null = null;
       const searchResp = await bot.exec("search_systems", {
-        filter: "unexplored",
-        max_results: 5,
-        from_system: bot.system,
+        query: "unexplored",
       }).catch(() => null);
 
       if (searchResp && !searchResp.error && searchResp.result) {
@@ -669,9 +667,7 @@ async function* scanStation(
     // Submit trade intel to faction (fire-and-forget)
     if (bot.factionId) {
       bot.exec("faction_submit_trade_intel", {
-        system_id: systemId,
-        poi_id: poi.id,
-        market_snapshot: marketResp.result,
+        stations: poi.id ? [poi.id] : [],
       }).catch(() => {});
     }
   }

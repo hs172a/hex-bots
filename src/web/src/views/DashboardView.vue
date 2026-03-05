@@ -78,6 +78,7 @@
               @click="selectBot(bot.username)"
             >
               <td class="px-0 py-1">
+                <span v-if="(bot as any).empire" :title="empireName((bot as any).empire)" class="shrink-0 leading-none">{{ empireIcon((bot as any).empire) }}</span>
                 <span class="text-space-accent font-medium">{{ bot.username }}</span>
               </td>
               <td class="px-0 py-1 text-space-text-dim">
@@ -427,6 +428,7 @@
 <script setup lang="ts">
 import { computed, ref, watch, nextTick, onMounted } from 'vue';
 import { useBotStore } from '../stores/botStore';
+import { empireIcon, empireName } from '../utils/empires';
 import ProgressBar from '../components/ProgressBar.vue';
 import {
   useDashboardLogs,

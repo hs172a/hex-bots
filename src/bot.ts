@@ -91,6 +91,8 @@ export interface BotStatus {
   shipModules: ShipModule[];
   empire: string;
   homeBase: string;
+  homeSystem: string;
+  homePoI: string;
   factionId: string;
   factionRank: string;
   isCloaked: boolean;
@@ -175,6 +177,8 @@ export class Bot extends EventEmitter {
   utilitySlots = 0;
   empire = "";
   homeBase = "";
+  homeSystem = "";
+  homePoI = "";
   factionId = "";
   factionRank = "";
 
@@ -527,6 +531,8 @@ export class Bot extends EventEmitter {
       // Player identity fields
       if (typeof p.empire === "string") this.empire = p.empire;
       if (typeof p.home_base === "string") this.homeBase = p.home_base;
+      if (typeof p.home_system === "string") this.homeSystem = p.home_system;
+      if (typeof p.home_poi === "string") this.homePoI = p.home_poi;
       if (typeof p.faction_id === "string") this.factionId = p.faction_id;
       if (typeof p.faction_rank === "string") this.factionRank = p.faction_rank;
 
@@ -764,7 +770,11 @@ export class Bot extends EventEmitter {
 
   /** Get the current cached level for a skill. Returns 0 if unknown. Call checkSkills() first to populate. */
   getSkillLevel(skillId: string): number {
-    return this.skillLevels.get(skillId) ?? 0;
+    const fromMap = this.skillLevels.get(skillId);
+    if (fromMap !== undefined) return fromMap;
+    // Fallback: skills array populated by refreshStatus() from get_status
+    const fromArray = this.skills.find(s => s.skill_id === skillId);
+    return fromArray?.level ?? 0;
   }
 
   /** Fetch skills and log any level-ups since the last check. */
@@ -791,8 +801,13 @@ export class Bot extends EventEmitter {
         if (id) entries.push({ id, name, level });
       }
     } else {
-      // Dict format
-      for (const [key, val] of Object.entries(r)) {
+      // Dict format — when API wraps skills under a "skills" key (e.g. { skills: { basic_crafting: { level: 5 } }, message: "..." })
+      // use that nested dict directly instead of iterating top-level keys.
+      const dictSource = (r.skills && typeof r.skills === "object" && !Array.isArray(r.skills))
+        ? r.skills as Record<string, unknown>
+        : r;
+      for (const [key, val] of Object.entries(dictSource)) {
+        if (key === "message" || key === "hint") continue;
         if (typeof val === "number") {
           entries.push({ id: key, name: key, level: val });
         } else if (val && typeof val === "object") {
@@ -1071,6 +1086,8 @@ export class Bot extends EventEmitter {
       shipModules: [...this.shipModules],
       empire: this.empire,
       homeBase: this.homeBase,
+      homeSystem: this.homeSystem,
+      homePoI: this.homePoI,
       factionId: this.factionId,
       factionRank: this.factionRank,
       isCloaked: this.isCloaked,

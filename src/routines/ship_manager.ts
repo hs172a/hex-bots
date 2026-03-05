@@ -127,7 +127,7 @@ async function installMods(ctx: RoutineContext, modIds: string[]): Promise<void>
       continue;
     }
     ctx.log("system", `Installing mod: ${modId}...`);
-    const resp = await bot.exec("install_mod", { mod_id: modId });
+    const resp = await bot.exec("install_mod", { module_id: modId });
     if (resp.error) {
       ctx.log("error", `Failed to install ${modId}: ${resp.error.message}`);
     } else {

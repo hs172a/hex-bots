@@ -156,7 +156,7 @@ export const shipUpgradeRoutine: Routine = async function* (ctx: RoutineContext)
   // Buy the ship
   yield "buy_ship";
   ctx.log("info", `Buying ${settings.targetShipClass} for ${price}cr...`);
-  const buyResp = await bot.exec("buy_ship", { class_id: settings.targetShipClass });
+  const buyResp = await bot.exec("buy_ship", { ship_class: settings.targetShipClass });
   if (buyResp.error) {
     ctx.log("error", `Buy failed: ${buyResp.error.message}`);
     return;

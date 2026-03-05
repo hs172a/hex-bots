@@ -221,23 +221,42 @@ async function completeActiveMissions(ctx: RoutineContext): Promise<void> {
   }
 }
 
-/** Check if the current belt's resources are heavily depleted. */
-async function isBeltDepleted(ctx: RoutineContext): Promise<boolean> {
+const DEPLETION_WAIT_MS = 15_000;   // 15 s — wait at belt for ore to respawn
+const MAX_DEPLETION_WAITS = 4;      // max consecutive waits before trying alt system
+
+/** Check belt resources: returns depleted flag + human-readable info for UI logging. */
+async function getBeltStatus(ctx: RoutineContext): Promise<{ depleted: boolean; info: string }> {
   const poiResp = await ctx.bot.exec("get_poi");
-  if (!poiResp.result || typeof poiResp.result !== "object") return false;
+  if (!poiResp.result || typeof poiResp.result !== "object") return { depleted: false, info: "" };
   const r = poiResp.result as Record<string, unknown>;
   const resources = (
     Array.isArray(r.resources) ? r.resources :
     Array.isArray(r.asteroids) ? r.asteroids :
     Array.isArray(r.ores) ? r.ores : []
   ) as Array<Record<string, unknown>>;
-  if (resources.length === 0) return false;
-  const depletedCount = resources.filter(res => {
+  if (resources.length === 0) return { depleted: false, info: "" };
+  const available = resources.filter(res => {
     const depletion = (res.depletion_percent as number) ?? 0;
     const remaining = (res.remaining as number) ?? Infinity;
-    return depletion >= 90 || remaining === 0;
-  }).length;
-  return depletedCount === resources.length;
+    return depletion < 90 && remaining > 0;
+  });
+  const total = resources.length;
+  const avgDepletion = Math.round(
+    resources.reduce((sum, res) => sum + ((res.depletion_percent as number) ?? 0), 0) / total,
+  );
+  const depleted = available.length === 0;
+  const info = `${available.length}/${total} resources available (${avgDepletion}% depleted avg)`;
+  return { depleted, info };
+}
+
+/** Find the system ID that contains the given POI, using map store data. */
+function findSystemForPoi(ms: MapStore, poiId: string): string {
+  if (!poiId) return "";
+  const allSystems = ms.getAllSystems();
+  for (const [sysId, sys] of Object.entries(allSystems)) {
+    if (sys.pois.some((p: { id: string }) => p.id === poiId)) return sysId;
+  }
+  return "";
 }
 
 // ── Optimized Cargo Handling ──────────────────────────────────
@@ -404,13 +423,19 @@ export const minerRoutineV2: Routine = async function* (ctx: RoutineContext) {
   // Initial status update
   await batchStatusUpdate(ctx, false);
   const settings0 = getMinerV2Settings(bot.username, ctx.mapStore);
-  const homeSystem = settings0.homeSystem || bot.system;
+  // homeSystem: setting > derive from homeBase POI in map > current system at startup
+  const homeSystem = settings0.homeSystem ||
+    findSystemForPoi(ctx.mapStore, bot.homeBase) ||
+    bot.system;
+  // homeStationId: the specific station POI to dock at for unloading (home base)
+  const homeStationId = bot.homeBase || "";
   const depletedSystems = new Set<string>();
   let lastTargetOre = "";
   const wrongModulePois = new Set<string>();
   let cachedSystemInfo: { pois: any[]; systemId: string } | null = null;
   let lastSystemRefresh = 0;
   const SYSTEM_CACHE_DURATION = 30000; // 30 seconds
+  let consecutiveDepletedCycles = 0; // how many empty-cargo depletion cycles in a row
 
   // ── Startup: return home and dump non-fuel cargo to storage ──
   const cargoResp = await bot.exec("get_cargo");
@@ -655,10 +680,12 @@ export const minerRoutineV2: Routine = async function* (ctx: RoutineContext) {
 
     // ── Check belt depletion ──
     yield "check_belt";
-    if (await isBeltDepleted(ctx)) {
-      const altBelt = cachedSystemInfo.pois.find(p => isOreBeltPoi(p.type) && p.id !== beltPoi!.id);
+    const beltStatus = await getBeltStatus(ctx);
+    if (beltStatus.info) ctx.log("mining", `Belt: ${beltStatus.info}`);
+    if (beltStatus.depleted) {
+      const altBelt = cachedSystemInfo.pois.find(p => isOreBeltPoi(p.type) && p.id !== beltPoi!.id && !wrongModulePois.has(p.id));
       if (altBelt) {
-        ctx.log("mining", `${beltPoi.name} depleted, switching to ${altBelt.name}`);
+        ctx.log("mining", `${beltPoi.name} fully depleted — switching to ${altBelt.name}`);
         const altTravel = await bot.exec("travel", { target_poi: altBelt.id });
         if (!altTravel.error || altTravel.error.message.includes("already")) {
           beltPoi = { id: altBelt.id, name: altBelt.name };
@@ -727,6 +754,7 @@ export const minerRoutineV2: Routine = async function* (ctx: RoutineContext) {
 
     // Mining summary
     if (miningCycles > 0) {
+      consecutiveDepletedCycles = 0; // reset on successful mining
       const oreList = [...oresMinedMap.entries()].map(([name, qty]) => `${qty}x ${name}`).join(", ");
       ctx.log("mining", `Mined ${miningCycles} cycles (${oreList})${stopReason ? ` — ${stopReason}` : ""}`);
     } else if (stopReason) {
@@ -738,36 +766,75 @@ export const minerRoutineV2: Routine = async function* (ctx: RoutineContext) {
 
     if (bot.state !== "running") break;
 
-    // ── Belt depleted: try another system before returning home ──
-    if (stopReason === "belt depleted" && targetOre && bot.state === "running") {
-      depletedSystems.add(bot.system);
-      const altLocations = ctx.mapStore.findOreLocations(targetOre)
-        .filter(loc => !depletedSystems.has(loc.systemId) && loc.systemId !== bot.system);
+    // ── Belt depleted: wait for respawn instead of useless round-trip to station ──
+    if (stopReason === "belt depleted" && bot.state === "running") {
+      if (miningCycles === 0) {
+        // Nothing mined → stay at belt and wait for ore respawn
+        consecutiveDepletedCycles++;
 
-      if (altLocations.length > 0) {
-        // Prefer systems with a station
-        const withStation = altLocations.filter(loc => loc.hasStation);
-        const nextLoc = withStation.length > 0 ? withStation[0] : altLocations[0];
-
-        ctx.log("mining", `${bot.system} depleted for ${ctx.catalogStore.resolveItemName(targetOre)} — trying ${nextLoc.systemName}`);
-
-        // Refuel before the jump
-        const preFueled = await ensureFueled(ctx, safetyOpts.fuelThresholdPct);
-        if (!preFueled && stationPoi) {
-          await refuelAtStation(ctx, stationPoi, safetyOpts.fuelThresholdPct);
-        }
-
-        const arrived = await navigateToSystem(ctx, nextLoc.systemId, safetyOpts);
-        if (arrived) {
-          // Successfully reached alt system — restart the cycle (skip return home, skip unload)
-          ctx.log("mining", `Arrived at ${nextLoc.systemName} — continuing mining`);
+        if (consecutiveDepletedCycles <= MAX_DEPLETION_WAITS) {
+          // Check for an untried alt belt in this system first
+          const altBelt = cachedSystemInfo?.pois.find(
+            p => isOreBeltPoi(p.type) && p.id !== beltPoi!.id && !wrongModulePois.has(p.id),
+          );
+          if (altBelt) {
+            ctx.log("mining", `${beltPoi.name} depleted — switching to ${altBelt.name}`);
+            const altT = await bot.exec("travel", { target_poi: altBelt.id });
+            if (!altT.error || altT.error.message.includes("already")) {
+              beltPoi = { id: altBelt.id, name: altBelt.name };
+              bot.poi = altBelt.id;
+            }
+          } else {
+            ctx.log("mining", `Belt depleted (${consecutiveDepletedCycles}/${MAX_DEPLETION_WAITS}) — waiting ${Math.round(DEPLETION_WAIT_MS / 1000)}s for ore respawn...`);
+            await sleep(DEPLETION_WAIT_MS);
+          }
+          // Skip dock/unload — retry mining directly
           continue;
         }
-        ctx.log("error", `Failed to reach ${nextLoc.systemName} — returning home`);
+
+        // Exhausted waits → try another system
+        consecutiveDepletedCycles = 0;
+        if (targetOre) {
+          depletedSystems.add(bot.system);
+          const altLocations = ctx.mapStore.findOreLocations(targetOre)
+            .filter((loc: { systemId: string; poiId: string; systemName?: string; hasStation?: boolean }) =>
+              !depletedSystems.has(loc.systemId) && loc.systemId !== bot.system,
+            );
+          if (altLocations.length > 0) {
+            const withStation = altLocations.filter((loc: { hasStation?: boolean }) => loc.hasStation);
+            const nextLoc = withStation.length > 0 ? withStation[0] : altLocations[0];
+            ctx.log("mining", `All belts exhausted for ${ctx.catalogStore.resolveItemName(targetOre)} — navigating to ${nextLoc.systemName}`);
+            const preFueled = await ensureFueled(ctx, safetyOpts.fuelThresholdPct);
+            if (!preFueled && stationPoi) await refuelAtStation(ctx, stationPoi, safetyOpts.fuelThresholdPct);
+            const arrived = await navigateToSystem(ctx, nextLoc.systemId, safetyOpts);
+            if (arrived) { ctx.log("mining", `Arrived at ${nextLoc.systemName} — continuing mining`); continue; }
+            ctx.log("error", `Failed to reach ${nextLoc.systemName} — returning home`);
+          } else {
+            ctx.log("mining", "All known ore locations depleted — clearing cache, returning home");
+            depletedSystems.clear();
+          }
+        }
+        // With empty cargo, skip the unload/refuel cycle (nothing to deposit)
+        continue;
+
       } else {
-        // No alternative systems — clear depleted set (ores regenerate) and return home
-        ctx.log("mining", "All known ore locations depleted — clearing depletion cache, returning home");
-        depletedSystems.clear();
+        // Mined something before depletion — dock normally to unload
+        if (targetOre) {
+          depletedSystems.add(bot.system);
+          const altLocations = ctx.mapStore.findOreLocations(targetOre)
+            .filter((loc: { systemId: string; poiId: string; systemName?: string; hasStation?: boolean }) =>
+              !depletedSystems.has(loc.systemId) && loc.systemId !== bot.system,
+            );
+          if (altLocations.length > 0) {
+            const withStation = altLocations.filter((loc: { hasStation?: boolean }) => loc.hasStation);
+            const nextLoc = withStation.length > 0 ? withStation[0] : altLocations[0];
+            ctx.log("mining", `${bot.system} depleted for ${ctx.catalogStore.resolveItemName(targetOre)} — trying ${nextLoc.systemName} after unloading`);
+          } else {
+            ctx.log("mining", "All known ore locations depleted — clearing depletion cache, returning home");
+            depletedSystems.clear();
+          }
+        }
+        // Fall through to dock/unload
       }
     }
 
@@ -797,7 +864,7 @@ export const minerRoutineV2: Routine = async function* (ctx: RoutineContext) {
     }
 
     // ── Return to home system if we traveled away ──
-    if ((targetOre || Object.keys(settings.oreQuotas).length > 0) && bot.system !== homeSystem && homeSystem) {
+    if (bot.system !== homeSystem && homeSystem && bot.state === "running") {
       yield "return_home";
 
       // Ensure fueled before the journey home
@@ -814,8 +881,16 @@ export const minerRoutineV2: Routine = async function* (ctx: RoutineContext) {
       // Refresh system info after returning home
       const { pois: homePois } = await getSystemInfo(ctx);
       cachedSystemInfo = { pois: homePois, systemId: homeSystem };
-      const homeStation = findStation(homePois);
-      stationPoi = homeStation ? { id: homeStation.id, name: homeStation.name } : null;
+      // Prefer the exact home base station; fall back to any station in home system
+      if (homeStationId) {
+        stationPoi = { id: homeStationId, name: homeStationId };
+      } else {
+        const foundStation = findStation(homePois);
+        stationPoi = foundStation ? { id: foundStation.id, name: foundStation.name } : null;
+      }
+    } else if (homeStationId && bot.system === homeSystem) {
+      // Already in home system — use the specific home base station for docking
+      stationPoi = { id: homeStationId, name: homeStationId };
     }
 
     // ── Travel to station ──

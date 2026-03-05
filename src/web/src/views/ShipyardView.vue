@@ -53,41 +53,55 @@
         <div v-else class="space-y-3">
 
           <!-- ── Header ── -->
-          <div class="bg-space-bg border border-[#21262d] rounded-md p-3">
-            <div class="flex items-start justify-between gap-3">
-              <div class="min-w-0">
-                <div class="flex items-center gap-2 mb-0.5">
-                  <span v-if="currentBot?.empire" :title="empireName(currentBot.empire)" class="text-base leading-none shrink-0">{{ empireIcon(currentBot.empire) }}</span>
-                  <div class="text-base font-bold text-space-text-bright truncate">{{ shipName }}</div>
-                </div>
-                <div class="flex items-center gap-1.5 flex-wrap text-[11px] text-space-text-dim mt-0.5">
-                  <span v-if="shipClass">{{ shipClass }}</span>
-                  <span v-if="shipTier">• Tier {{ shipTier }}</span>
-                  <span v-if="ship.scale">• Scale {{ ship.scale }}</span>
-                  <span v-if="currentShipCatalog?.empire_name">• {{ currentShipCatalog.empire_name }}</span>
-                </div>
-              </div>
-              <div class="text-right shrink-0 space-y-1">
-                <div class="text-space-yellow font-semibold">{{ fmt(botCredits) }} cr</div>
-                <div class="flex items-center justify-end gap-1.5 flex-wrap">
-                  <span v-if="currentBot?.routine" class="text-[11px] px-1.5 py-0.5 rounded bg-[#21262d] text-space-text-dim">{{ currentBot.routine }}</span>
-                  <span class="text-[11px] px-1.5 py-0.5 rounded font-medium"
-                    :class="currentBot?.state === 'running' ? 'bg-green-900/40 text-space-green'
-                      : currentBot?.state === 'error' ? 'bg-red-900/40 text-space-red'
-                      : currentBot?.state === 'paused' ? 'bg-yellow-900/30 text-space-yellow'
-                      : 'bg-[#21262d] text-space-text-dim'">
-                    {{ currentBot?.state || 'idle' }}
-                  </span>
-                </div>
+          <div class="bg-space-bg border border-[#21262d] rounded-md overflow-hidden">
+            <!-- Ship image banner -->
+            <div v-if="shipClass" class="relative h-32 bg-[#0d1117] overflow-hidden">
+              <img :src="shipImageUrl(shipClass)" :alt="shipName"
+                class="w-full h-full object-cover opacity-70"
+                @error="($event.target as HTMLImageElement).style.display='none'" />
+              <div class="absolute inset-0 bg-gradient-to-t from-[#0d1117] via-[#0d1117]/40 to-transparent"></div>
+              <div class="absolute bottom-2 left-3 flex items-center gap-2">
+                <span v-if="currentBot?.empire" :title="empireName(currentBot.empire)" class="text-lg leading-none">{{ empireIcon(currentBot.empire) }}</span>
+                <div class="text-base font-bold text-white drop-shadow">{{ shipName }}</div>
               </div>
             </div>
-            <div class="flex items-center gap-3 mt-2 pt-2 border-t border-[#21262d] text-[11px] flex-wrap">
-              <span class="text-space-text-dim">📍 {{ currentBot?.system || ship.system || '—' }}</span>
-              <span v-if="currentBot?.poi" class="text-space-text-dim">→ {{ currentBot.poi }}</span>
-              <span class="ml-auto px-1.5 py-0.5 rounded text-[11px] font-medium"
-                :class="isDocked ? 'bg-green-900/30 text-space-green' : 'bg-[#21262d] text-space-text-dim'">
-                {{ isDocked ? '🔒 Docked' : '🚀 In Space' }}
-              </span>
+            <div class="p-3">
+              <div class="flex items-start justify-between gap-3">
+                <div class="min-w-0">
+                  <div v-if="!shipClass" class="flex items-center gap-2 mb-0.5">
+                    <span v-if="currentBot?.empire" :title="empireName(currentBot.empire)" class="text-base leading-none shrink-0">{{ empireIcon(currentBot.empire) }}</span>
+                    <div class="text-base font-bold text-space-text-bright truncate">{{ shipName }}</div>
+                  </div>
+                  <div class="flex items-center gap-1.5 flex-wrap text-[11px] text-space-text-dim mt-0.5">
+                    <span v-if="shipClass">{{ shipClass }}</span>
+                    <span v-if="shipTier">• Tier {{ shipTier }}</span>
+                    <span v-if="ship.scale">• Scale {{ ship.scale }}</span>
+                    <span v-if="currentShipCatalog?.empire_name">• {{ currentShipCatalog.empire_name }}</span>
+                    <span v-if="currentShipCatalog?.starter_ship" class="px-1.5 py-0.5 rounded bg-blue-900/30 text-blue-300 font-medium">Starter</span>
+                  </div>
+                </div>
+                <div class="text-right shrink-0 space-y-1">
+                  <div class="text-space-yellow font-semibold">{{ fmt(botCredits) }} cr</div>
+                  <div class="flex items-center justify-end gap-1.5 flex-wrap">
+                    <span v-if="currentBot?.routine" class="text-[11px] px-1.5 py-0.5 rounded bg-[#21262d] text-space-text-dim">{{ currentBot.routine }}</span>
+                    <span class="text-[11px] px-1.5 py-0.5 rounded font-medium"
+                      :class="currentBot?.state === 'running' ? 'bg-green-900/40 text-space-green'
+                        : currentBot?.state === 'error' ? 'bg-red-900/40 text-space-red'
+                        : currentBot?.state === 'paused' ? 'bg-yellow-900/30 text-space-yellow'
+                        : 'bg-[#21262d] text-space-text-dim'">
+                      {{ currentBot?.state || 'idle' }}
+                    </span>
+                  </div>
+                </div>
+              </div>
+              <div class="flex items-center gap-3 mt-2 pt-2 border-t border-[#21262d] text-[11px] flex-wrap">
+                <span class="text-space-text-dim">📍 {{ currentBot?.system || ship.system || '—' }}</span>
+                <span v-if="currentBot?.poi" class="text-space-text-dim">→ {{ currentBot.poi }}</span>
+                <span class="ml-auto px-1.5 py-0.5 rounded text-[11px] font-medium"
+                  :class="isDocked ? 'bg-green-900/30 text-space-green' : 'bg-[#21262d] text-space-text-dim'">
+                  {{ isDocked ? '🔒 Docked' : '🚀 In Space' }}
+                </span>
+              </div>
             </div>
           </div>
 
@@ -277,15 +291,23 @@
         <div v-if="fleetLoading" class="text-xs text-space-text-dim italic">Loading fleet...</div>
         <div v-else-if="fleet.length === 0" class="text-xs text-space-text-dim italic py-4">No ships found. Click Refresh to load.</div>
         <div v-else class="space-y-3">
-          <div v-for="s in fleet" :key="s.ship_id" class="bg-space-bg border border-[#21262d] rounded-md p-3 text-xs">
-            <!-- Header -->
-            <div class="flex items-center justify-between mb-2">
-              <div>
-                <span class="text-space-text font-semibold">{{ s.class_name }}</span>
-                <span class="text-space-text-dim ml-1 text-[11px]">{{ s.class_id }}</span>
+          <div v-for="s in fleet" :key="s.ship_id" class="bg-space-bg border border-[#21262d] rounded-md text-xs overflow-hidden">
+            <!-- Ship image strip -->
+            <div class="relative h-20 bg-[#0d1117] overflow-hidden">
+              <img :src="shipImageUrl(s.class_id)" :alt="s.class_name"
+                class="w-full h-full object-cover opacity-60"
+                @error="($event.target as HTMLImageElement).style.display='none'" />
+              <div class="absolute inset-0 bg-gradient-to-t from-[#0d1117] via-transparent to-transparent"></div>
+              <div class="absolute bottom-1.5 left-2.5 flex items-center gap-1.5">
+                <span class="font-semibold text-white text-xs drop-shadow">{{ s.class_name }}</span>
+                <span class="text-[10px] text-white/60">{{ s.class_id }}</span>
               </div>
-              <span v-if="s.is_active" class="px-2 py-0.5 rounded text-[11px] bg-[rgba(63,185,80,0.15)] text-space-green border border-space-green/30">Active</span>
+              <div class="absolute top-1.5 right-1.5 flex gap-1">
+                <span v-if="s.is_active" class="px-1.5 py-0.5 rounded text-[11px] bg-[rgba(63,185,80,0.25)] text-space-green border border-space-green/40 backdrop-blur-sm">Active</span>
+                <span v-if="s.starter_ship" class="px-1.5 py-0.5 rounded text-[11px] bg-blue-900/40 text-blue-300 border border-blue-500/30 backdrop-blur-sm">Starter</span>
+              </div>
             </div>
+            <div class="p-3">
             <!-- Resource bars -->
             <div class="space-y-1 mb-2">
               <div>
@@ -306,18 +328,35 @@
               </div>
             </div>
             <!-- Details row -->
-            <div class="flex items-center justify-between">
-              <div class="text-space-text-dim space-x-3">
+            <div class="flex items-center justify-between gap-2">
+              <div class="text-space-text-dim space-x-3 min-w-0">
                 <span>⚙️ {{ s.modules }} mod</span>
                 <span>📦 {{ s.cargo_used }} cargo</span>
                 <span>📍 {{ s.location }}</span>
               </div>
-              <button
-                v-if="s.can_switch && isDocked"
-                @click="switchShip(s.ship_id)"
-                :disabled="loading"
-                class="btn btn-primary text-[11px] px-2 py-0.5"
-              >Switch</button>
+              <div class="flex gap-1.5 shrink-0">
+                <button
+                  v-if="s.can_switch && isDocked"
+                  @click="switchShip(s.ship_id)"
+                  :disabled="loading"
+                  class="btn btn-primary text-[11px] px-2 py-0.5"
+                >Switch</button>
+                <!-- Sell Ship confirmation -->
+                <template v-if="!s.is_active && !s.starter_ship && isDocked">
+                  <template v-if="sellConfirmId === s.ship_id">
+                    <button @click="sellShip(s.ship_id)" :disabled="loading"
+                      class="text-[11px] px-2 py-0.5 rounded border border-space-red/60 text-space-red bg-red-900/20 hover:bg-red-900/40 transition-colors">
+                      ✓ Confirm Sell
+                    </button>
+                    <button @click="sellConfirmId = ''" class="text-[11px] px-1.5 py-0.5 rounded border border-space-border text-space-text-dim hover:text-space-text transition-colors">✕</button>
+                  </template>
+                  <button v-else @click="sellConfirmId = s.ship_id" :disabled="loading"
+                    class="text-[11px] px-2 py-0.5 rounded border border-space-border text-space-text-dim hover:border-space-red hover:text-space-red transition-colors">
+                    💰 Sell
+                  </button>
+                </template>
+              </div>
+            </div>
             </div>
           </div>
         </div>
@@ -347,18 +386,27 @@
           <button @click="loadShowroom" :disabled="showroomLoading" class="btn text-xs px-3 py-1">🔄 Refresh</button>
         </div>
         <div v-else class="space-y-2">
-          <div v-for="s in showroom" :key="s.class_id" class="flex items-center justify-between bg-space-bg border border-[#21262d] rounded-md p-3 text-xs">
-            <div>
-              <div class="text-space-text font-medium">{{ s.name }}</div>
-              <div class="text-space-text-dim">{{ s.category }} {{ s.scale ? '• ' + s.scale : '' }}</div>
+          <div v-for="s in showroom" :key="s.class_id" class="bg-space-bg border border-[#21262d] rounded-md text-xs overflow-hidden">
+            <div class="relative h-24 bg-[#0d1117] overflow-hidden">
+              <img :src="shipImageUrl(s.class_id)" :alt="s.name"
+                class="w-full h-full object-cover opacity-65"
+                @error="($event.target as HTMLImageElement).style.display='none'" />
+              <div class="absolute inset-0 bg-gradient-to-t from-[#0d1117] via-[#0d1117]/30 to-transparent"></div>
+              <div class="absolute bottom-1.5 left-2.5">
+                <div class="font-semibold text-white drop-shadow">{{ s.name }}</div>
+                <div class="text-[10px] text-white/60">{{ s.category }} {{ s.scale ? '• ' + s.scale : '' }}</div>
+              </div>
             </div>
-            <div class="text-right">
-              <div class="text-space-yellow font-semibold">{{ fmt(s.price) }} cr</div>
-              <button 
-                @click="buyShip(s.class_id)"
-                :disabled="loading || botCredits < s.price"
-                class="btn btn-primary text-xs px-3 py-0.5 mt-1"
-              >Buy</button>
+            <div class="flex items-center justify-between px-3 py-2">
+              <span class="text-space-text-dim text-[11px]">{{ s.class_id }}</span>
+              <div class="flex items-center gap-2">
+                <span class="text-space-yellow font-semibold">{{ fmt(s.price) }} cr</span>
+                <button
+                  @click="buyShip(s.class_id)"
+                  :disabled="loading || botCredits < s.price"
+                  class="btn btn-primary text-xs px-3 py-0.5"
+                >Buy</button>
+              </div>
             </div>
           </div>
         </div>
@@ -636,6 +684,7 @@ const supplyTarget = ref('');
 const supplyItemId = ref('');
 const supplyQty = ref(1);
 const supplyLoading = ref(false);
+const sellConfirmId = ref('');
 
 function submitSupply(commissionId: string) {
   if (!supplyItemId.value.trim() || !selectedBot.value) return;
@@ -780,6 +829,7 @@ const currentShipCatalog = computed(() => {
 const shipsGroupedByEmpire = computed(() => {
   const groups: Record<string, any[]> = {};
   for (const s of botStore.publicShips) {
+    if (s.starter_ship) continue; // exclude starter ships from commission
     const empire = s.empire_name || s.empire || 'Unknown';
     if (!groups[empire]) groups[empire] = [];
     groups[empire].push(s);
@@ -794,6 +844,7 @@ const filteredShipsGrouped = computed(() => {
   return shipsGroupedByEmpire.value
     .filter(([emp]) => !empire || emp === empire)
     .map(([emp, ships]) => [emp, (ships as any[]).filter((s: any) => {
+      if (s.starter_ship) return false; // starter ships cannot be commissioned
       if (tier !== '' && s.tier !== Number(tier)) return false;
       if (search && !s.name.toLowerCase().includes(search) && !s.id.toLowerCase().includes(search)) return false;
       return true;
@@ -803,7 +854,7 @@ const filteredShipsGrouped = computed(() => {
 
 const allTiers = computed(() => {
   const tiers = new Set<number>();
-  for (const s of botStore.publicShips) if (s.tier) tiers.add(s.tier);
+  for (const s of botStore.publicShips) if (s.tier && !s.starter_ship) tiers.add(s.tier);
   return [...tiers].sort((a, b) => a - b);
 });
 
@@ -897,6 +948,7 @@ function loadFleet() {
           cargo_used: s.cargo_used || 0,
           location: s.location || 'Unknown',
           can_switch: !s.is_active,
+          starter_ship: !!s.starter_ship,
         };
       });
     }
@@ -939,6 +991,17 @@ function installMod(moduleId: string) {
 
 function uninstallMod(moduleId: string) {
   execCmd('uninstall_mod', { module_id: moduleId });
+}
+
+function sellShip(shipId: string) {
+  sellConfirmId.value = '';
+  execCmd('sell_ship', { ship_id: shipId });
+  // Reload fleet after selling
+  setTimeout(() => loadFleet(), 1500);
+}
+
+function shipImageUrl(classId: string): string {
+  return `https://www.spacemolt.com/_next/image?url=%2Fimages%2Fships%2Fcatalog%2F${encodeURIComponent(classId)}.webp&w=640&q=75`;
 }
 
 function getCommissionQuote() {

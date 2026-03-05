@@ -122,7 +122,7 @@ export const tradeBrokerRoutine: Routine = async function* (ctx: RoutineContext)
 
       if (accept) {
         yield `accept_${offer.tradeId}`;
-        const resp = await bot.exec("accept_trade", { trade_id: offer.tradeId });
+        const resp = await bot.exec("trade_accept", { trade_id: offer.tradeId });
         if (!resp.error) {
           const itemSummary = offer.offeredItems
             .map(i => `${i.quantity ?? 1}x ${(i.item_id as string) || "?"}`)
@@ -137,7 +137,7 @@ export const tradeBrokerRoutine: Routine = async function* (ctx: RoutineContext)
         }
       } else if (settings.autoDecline) {
         yield `decline_${offer.tradeId}`;
-        const resp = await bot.exec("decline_trade", { trade_id: offer.tradeId });
+        const resp = await bot.exec("trade_decline", { trade_id: offer.tradeId });
         if (!resp.error) {
           ctx.log("trade", `TradeBroker: declined offer from ${offer.from} (${offer.tradeId})`);
         } else {
@@ -185,7 +185,7 @@ export const tradeBrokerRoutine: Routine = async function* (ctx: RoutineContext)
               for (const member of factionMembers) {
                 const memberId = (member.id as string) || "";
                 if (!memberId) continue;
-                const offerResp = await bot.exec("send_trade_offer", {
+                const offerResp = await bot.exec("trade_offer", {
                   target_id: memberId,
                   items: [{ item_id: itemId, quantity: shareQty }],
                 });

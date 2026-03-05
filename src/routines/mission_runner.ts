@@ -37,6 +37,7 @@ interface MissionRunnerSettings {
   maxBuyPrice: number;
   refuelThreshold: number;
   cycleDelayMs: number;
+  manualMissionId: string;
 }
 
 function getMissionRunnerSettings(): MissionRunnerSettings {
@@ -53,6 +54,7 @@ function getMissionRunnerSettings(): MissionRunnerSettings {
     maxBuyPrice: (m.maxBuyPrice as number) || 0,
     refuelThreshold: (m.refuelThreshold as number) || 50,
     cycleDelayMs: (m.cycleDelayMs as number) || 30000,
+    manualMissionId: (m.manualMissionId as string) || "",
   };
 }
 
@@ -652,8 +654,46 @@ export const missionRunnerRoutine: Routine = async function* (ctx: RoutineContex
     }
     ctx.log("info", `Active missions: ${activeMissions.length}/${MAX_ACTIVE_MISSIONS}`);
 
-    // ── Accept a new mission only if slots are free ──
-    if (activeMissions.length < MAX_ACTIVE_MISSIONS) {
+    // ── Manual mission override ──
+    let manualMission: Mission | undefined;
+    if (settings.manualMissionId) {
+      const mid = settings.manualMissionId.trim().toLowerCase();
+      manualMission = activeMissions.find(
+        m => m.id === settings.manualMissionId || m.title.toLowerCase() === mid,
+      );
+      if (!manualMission) {
+        // Try to find and accept it from the board
+        yield "get_manual_mission";
+        const boardResp2 = await bot.exec("get_missions");
+        if (!boardResp2.error && boardResp2.result) {
+          const avail2 = parseAvailableMissions(boardResp2.result);
+          const onBoard = avail2.find(m => m.id === settings.manualMissionId || m.title.toLowerCase() === mid);
+          if (onBoard) {
+            if (activeMissions.length < MAX_ACTIVE_MISSIONS) {
+              yield "accept_manual_mission";
+              const ar = await bot.exec("accept_mission", { mission_id: onBoard.id });
+              if (!ar.error) {
+                ctx.log("info", `Manual mission accepted: "${onBoard.title}"`);
+                activeMissions.push(onBoard);
+                manualMission = onBoard;
+              } else {
+                ctx.log("warn", `Could not accept manual mission "${settings.manualMissionId}": ${ar.error.message}`);
+              }
+            } else {
+              ctx.log("warn", `Mission slots full — cannot accept manual mission "${onBoard.title}" yet`);
+            }
+          } else {
+            ctx.log("info", `Manual mission "${settings.manualMissionId}" not found on board — auto mode`);
+          }
+        }
+      }
+      if (manualMission) {
+        ctx.log("info", `Manual override: focusing on "${manualMission.title}"`);
+      }
+    }
+
+    // ── Accept a new mission only if slots are free (auto mode, skipped when manual found) ──
+    if (!manualMission && activeMissions.length < MAX_ACTIVE_MISSIONS) {
       yield "get_missions";
       const boardResp = await bot.exec("get_missions");
       if (boardResp.error) {
@@ -685,7 +725,7 @@ export const missionRunnerRoutine: Routine = async function* (ctx: RoutineContex
           ctx.log("info", "No missions on board at this station");
         }
       }
-    } else {
+    } else if (!manualMission) {
       ctx.log("info", `Mission slots full (${activeMissions.length}/${MAX_ACTIVE_MISSIONS}) — completing existing missions`);
     }
 
@@ -697,7 +737,8 @@ export const missionRunnerRoutine: Routine = async function* (ctx: RoutineContex
     }
 
     // ── Pick the best active mission to work on now ──
-    const mission = pickBestActiveMission(activeMissions);
+    // manualMission takes priority; otherwise auto-pick by score
+    const mission = manualMission ?? pickBestActiveMission(activeMissions);
     const doneSoFar = mission.objectives.filter(o => o.complete).length;
     ctx.log("info", `Working on: "${mission.title}" (${doneSoFar}/${mission.objectives.length} objectives done, +${mission.reward_credits}cr)`);
 

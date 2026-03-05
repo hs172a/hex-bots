@@ -24,7 +24,7 @@
  * Security: api_key required as Bearer token. Master defaults to 127.0.0.1 binding.
  */
 
-import { readdir, readFile, writeFile, mkdir } from "node:fs/promises";
+import { readdir, readFile, writeFile, mkdir, rename, rm, stat } from "node:fs/promises";
 import { join, relative, dirname } from "node:path";
 import type { MapStore, StoredSystem, FastPatch } from "./mapstore.js";
 import type { CatalogStore, CatalogItem, CatalogShip, CatalogSkill, CatalogRecipe } from "./catalogstore.js";
@@ -108,7 +108,7 @@ function hashString(content: string): string {
 /** Recursively walk a directory yielding file paths relative to baseDir.
  *  Only includes .ts and .vue source files; skips node_modules, dist, etc. */
 async function* walkSrcDir(dir: string, baseDir: string): AsyncGenerator<string> {
-  const SKIP_DIRS = new Set(["node_modules", ".git", ".txt"]);
+  const SKIP_DIRS = new Set(["node_modules", ".git", ".codesync_staging"]);
   let entries;
   try {
     entries = await readdir(dir, { withFileTypes: true });
@@ -117,6 +117,7 @@ async function* walkSrcDir(dir: string, baseDir: string): AsyncGenerator<string>
   for (const entry of entries) {
     if (entry.isDirectory()) {
       if (SKIP_DIRS.has(entry.name)) continue;
+      if (/\.(ts|vue)$/.test(entry.name)) continue; // EISDIR guard: skip dirs with source file extensions
       yield* walkSrcDir(join(dir, entry.name), baseDir);
     } else if (entry.isFile()) {
       if (!/\.(ts|vue)$/.test(entry.name)) continue;
@@ -341,12 +342,16 @@ export class DataSyncServer {
         if (req.method === "GET" && url.pathname === "/sync/code/file") {
           const relPath = url.searchParams.get("path") ?? "";
           // Security: no path traversal, no absolute paths, only .ts/.vue
-          if (!relPath || relPath.includes("..") || /^[/\\]/.test(relPath) || !/\.(ts|vue)$/.test(relPath)) {
+          if (!relPath || relPath.includes("..") || /^[\/\\]/.test(relPath) || !/\.(ts|vue)$/.test(relPath)) {
             return json({ error: "Invalid path" }, 400);
           }
           const safePath = relPath.replace(/\\/g, "/");
           try {
-            const content = await Bun.file(join(CODE_SRC_DIR, safePath)).text();
+            const fullPath = join(CODE_SRC_DIR, safePath);
+            // EISDIR guard: ensure it's a regular file, not a directory
+            const fstat = await stat(fullPath).catch(() => null);
+            if (!fstat || !fstat.isFile()) return json({ error: "File not found" }, 404);
+            const content = await Bun.file(fullPath).text();
             return json({ path: safePath, content });
           } catch {
             return json({ error: "File not found" }, 404);
@@ -486,7 +491,14 @@ export class DataSyncClient {
 
   /**
    * Pull source code from master and write any changed files to disk.
-   * If the project runs with Bun --watch or --hot, changed files trigger an auto-restart.
+   *
+   * Strategy: STAGED writes — all files are downloaded to a temp directory first.
+   * Only after ALL downloads succeed are they atomically moved into src/.
+   * Then the process exits cleanly (exit code 0) so the supervisor can restart it.
+   *
+   * This avoids the `bun --hot` cascade problem where each individual file write
+   * triggers a hot-reload, leading to dozens of concurrent restarts and OOM crashes.
+   * The server must be started via start.sh (supervisor loop), NOT via `bun --hot`.
    *
    * Returns a summary { updated, failed } with relative paths.
    */
@@ -508,20 +520,40 @@ export class DataSyncClient {
     const manifest = body.files ?? [];
     if (manifest.length === 0) return { updated, failed };
 
-    // Step 2: compare local hashes and download only changed files
+    // Step 2: identify changed files by comparing local hashes
     const srcDir = CODE_SRC_DIR;
+    const toDownload: CodeManifestEntry[] = [];
     for (const entry of manifest) {
       const localPath = join(srcDir, entry.path);
       try {
+        // Skip if it's actually a directory (EISDIR guard)
+        const fstat = await stat(localPath).catch(() => null);
+        if (fstat && fstat.isDirectory()) {
+          console.warn(`[CodeSync] Skipping ${entry.path} — path is a directory on disk (filesystem corruption)`);
+          failed.push(entry.path);
+          continue;
+        }
         let localContent: string | null = null;
-        try {
-          localContent = await Bun.file(localPath).text();
-        } catch { /* file doesn't exist locally */ }
-
+        try { localContent = await Bun.file(localPath).text(); } catch { /* doesn't exist */ }
         const localHash = localContent !== null ? hashString(localContent) : "";
-        if (localHash === entry.hash) continue; // up to date
+        if (localHash !== entry.hash) toDownload.push(entry);
+      } catch (err) {
+        console.warn(`[CodeSync] Hash check error for ${entry.path}:`, err instanceof Error ? err.message : err);
+        toDownload.push(entry); // assume stale
+      }
+    }
 
-        // Download the file from master
+    if (toDownload.length === 0) return { updated, failed };
+
+    // Step 3: download ALL changed files into a staging directory
+    // Do NOT touch src/ yet — we want zero file-watcher triggers during download.
+    const stagingDir = join(srcDir, ".codesync_staging");
+    await rm(stagingDir, { recursive: true, force: true });
+    await mkdir(stagingDir, { recursive: true });
+
+    const staged: Array<{ from: string; to: string; path: string }> = [];
+    for (const entry of toDownload) {
+      try {
         const fResp = await fetch(
           `${this.cfg.master_url}/sync/code/file?path=${encodeURIComponent(entry.path)}`,
           { headers: this.headers(), signal: AbortSignal.timeout(15_000) },
@@ -534,20 +566,44 @@ export class DataSyncClient {
         const fBody = await fResp.json() as { content?: string };
         if (typeof fBody.content !== "string") { failed.push(entry.path); continue; }
 
-        // Ensure directory exists and write
-        await mkdir(dirname(localPath), { recursive: true });
-        await writeFile(localPath, fBody.content, "utf-8");
-        console.log(`[CodeSync] Updated ${entry.path} (${entry.size} bytes)`);
-        updated.push(entry.path);
+        const stagingPath = join(stagingDir, entry.path);
+        await mkdir(dirname(stagingPath), { recursive: true });
+        await writeFile(stagingPath, fBody.content, "utf-8");
+        staged.push({ from: stagingPath, to: join(srcDir, entry.path), path: entry.path });
       } catch (err) {
-        console.warn(`[CodeSync] Error syncing ${entry.path}:`, err instanceof Error ? err.message : err);
+        console.warn(`[CodeSync] Download error for ${entry.path}:`, err instanceof Error ? err.message : err);
         failed.push(entry.path);
       }
     }
 
+    if (staged.length === 0) {
+      await rm(stagingDir, { recursive: true, force: true }).catch(() => {});
+      return { updated, failed };
+    }
+
+    // Step 4: atomic batch-move from staging → src/
+    // All moves happen in one tight loop — minimal window for file-watcher interference.
+    for (const { from, to, path: relPath } of staged) {
+      try {
+        await mkdir(dirname(to), { recursive: true });
+        await rename(from, to);
+        console.log(`[CodeSync] Applied ${relPath}`);
+        updated.push(relPath);
+      } catch (err) {
+        console.warn(`[CodeSync] Move error for ${relPath}:`, err instanceof Error ? err.message : err);
+        failed.push(relPath);
+      }
+    }
+
+    // Cleanup staging dir (ignore errors)
+    await rm(stagingDir, { recursive: true, force: true }).catch(() => {});
+
     if (updated.length > 0) {
-      console.log(`[CodeSync] Sync complete — ${updated.length} file(s) updated, ${failed.length} failed`);
       this.recordSuccess();
+      console.log(`[CodeSync] ${updated.length} file(s) applied, ${failed.length} failed — restarting process`);
+      // Exit cleanly so the supervisor script restarts the process once.
+      // Do NOT use bun --hot: it triggers a restart per file write, causing OOM on bulk updates.
+      setTimeout(() => process.exit(0), 500);
     }
     return { updated, failed };
   }

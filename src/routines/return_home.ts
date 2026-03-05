@@ -33,7 +33,7 @@ export const returnHomeRoutine: Routine = async function* (ctx: RoutineContext) 
   await bot.refreshStatus();
 
   const settings = getReturnHomeSettings();
-  const homeSystem = settings.homeSystem || bot.system;
+  const homeSystem = settings.homeSystem || bot.homeSystem || bot.system;
 
   ctx.log("system", `ReturnHome: navigating to ${homeSystem}...`);
 

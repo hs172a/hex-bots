@@ -200,7 +200,7 @@ async function withdrawStorageMaterials(ctx: RoutineContext, recipe: Recipe): Pr
     const resp = await bot.exec("withdraw_items", { item_id: comp.item_id, quantity: withdrawQty });
     if (!resp.error) {
       ctx.log("craft", `Withdrew ${withdrawQty}x ${comp.name || comp.item_id} from station storage`);
-      await bot.refreshStatus(); // update cargo count
+      await bot.refreshCargo(); // update cargo count
     }
   }
   await bot.refreshCargo();
@@ -226,7 +226,7 @@ async function withdrawFactionMaterials(ctx: RoutineContext, recipe: Recipe): Pr
     if (!resp.error) {
       ctx.log("craft", `Withdrew ${withdrawQty}x ${comp.name || comp.item_id} from faction storage`);
       logFactionActivity(ctx, "withdraw", `Withdrew ${withdrawQty}x ${comp.name || comp.item_id} from faction storage`);
-      await bot.refreshStatus(); // update cargo count
+      await bot.refreshCargo(); // update cargo count
     }
   }
   await bot.refreshCargo();
@@ -643,17 +643,26 @@ export const crafterRoutine: Routine = async function* (ctx: RoutineContext) {
     // ── Clear cargo space for material withdrawal ──
     await bot.refreshCargo();
     if (bot.docked && bot.inventory.length > 0) {
+      const MIN_CRAFT_FUEL_CELLS = 5; // keep as emergency fuel, deposit the rest
       for (const item of [...bot.inventory]) {
         if (item.quantity <= 0) continue;
         const lower = item.itemId.toLowerCase();
-        if (lower.includes("fuel") || lower.includes("energy_cell")) continue;
-        const dResp = await bot.exec("faction_deposit_items", { item_id: item.itemId, quantity: item.quantity });
+        if (lower.includes("energy_cell")) continue; // always keep — it's ship fuel
+        let qty = item.quantity;
+        if (lower === "fuel_cell") {
+          // Deposit excess fuel cells; keep a minimum for emergencies
+          qty = Math.max(0, item.quantity - MIN_CRAFT_FUEL_CELLS);
+          if (qty === 0) continue;
+        }
+        const dResp = await bot.exec("faction_deposit_items", { item_id: item.itemId, quantity: qty });
         if (dResp.error) {
-          await bot.exec("deposit_items", { item_id: item.itemId, quantity: item.quantity });
+          const dResp2 = await bot.exec("deposit_items", { item_id: item.itemId, quantity: item.quantity });
+          if (dResp2.error) {
+            ctx.log("warn", `Cannot deposit ${item.quantity}x ${item.name || item.itemId} — stays in cargo (${dResp2.error.message})`);
+          }
         }
       }
       await bot.refreshCargo();
-      await bot.refreshStatus();
     }
 
     // ── Refresh inventory (cargo + personal storage + faction storage) ──
@@ -743,13 +752,14 @@ export const crafterRoutine: Routine = async function* (ctx: RoutineContext) {
       let hitSkillBlock = false;
       while (crafted < needed && bot.state === "running") {
         await bot.refreshCargo();
-        if (bot.docked) {
-          await bot.refreshStorage();
-          await bot.refreshFactionStorage();
-        }
 
         const missing = getMissingMaterial(ctx, recipe);
         if (missing) {
+          // Lazy-load storage: only refresh when we actually need to pull materials
+          if (bot.docked) {
+            await bot.refreshStorage();
+            await bot.refreshFactionStorage();
+          }
           // Materials not in cargo — try pulling from storage sources
           if (hasMaterialsAnywhere(ctx, recipe)) {
             await withdrawFactionMaterials(ctx, recipe);
@@ -845,8 +855,20 @@ export const crafterRoutine: Routine = async function* (ctx: RoutineContext) {
     }
 
     // ── autoCraft: profit-based recipe selection (Step 3) ──
-    if (settings.autoCraft && bot.state === "running") {
+    // Also force autoCraft when ALL configured recipes are skill-blocked and nothing was crafted
+    const allSkillBlocked =
+      settings.craftLimits.length > 0 &&
+      craftedSummary.length === 0 &&
+      missingSummary.length === 0 &&
+      skillSummary.length > 0 &&
+      skillSummary.length + atLimitCount.count >= settings.craftLimits.length &&
+      !settings.autoCraft;
+
+    if ((settings.autoCraft || allSkillBlocked) && bot.state === "running") {
       yield "auto_craft_select";
+      if (allSkillBlocked) {
+        ctx.log("craft", "All target recipes skill-blocked — switching to autoCraft mode for this cycle");
+      }
 
       // Score all recipes: skill ok + has materials + profit >= threshold
       const ranked = recipes

@@ -247,15 +247,11 @@ const botStore = useBotStore();
 const statsPeriod = ref<'today' | 'week' | 'all'>('today');
 const selectedPool = ref<string | null>(null);
 
+const currentPoolKey = computed(() => botStore.myPoolName || Object.keys(botStore.allPoolsStats)[0] || '');
+
 const otherPools = computed(() =>
   Object.keys(botStore.allPoolsStats).filter(p => p !== currentPoolKey.value)
 );
-
-const currentPoolKey = computed(() => {
-  const keys = Object.keys(botStore.allPoolsStats);
-  if (keys.length === 0) return '';
-  return keys[0]; // server puts current pool first
-});
 
 async function loadAllPools() {
   await botStore.fetchAllPoolsStats();

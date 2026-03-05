@@ -1,10 +1,11 @@
 {
   "name": "hex-bots",
-  "version": "1.8.0",
+  "version": "1.9.0",
   "type": "module",
   "scripts": {
     "start": "bun run src/botmanager.ts",
     "dev": "bun --hot src/botmanager.ts",
+    "prod": "bun run src/botmanager.ts",
     "bots": "bun run src/botmanager.ts",
     "dashboard": "bun run src/botmanager.ts",
     "check": "npx tsc --noEmit",

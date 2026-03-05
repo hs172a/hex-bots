@@ -73,7 +73,7 @@ const ACTION_COMMANDS = new Set([
   "faction_deposit_credits", "faction_withdraw_credits",
   "install_mod", "uninstall_mod", "buy_ship", "sell_ship", "switch_ship", "set_colors",
   "accept_mission", "complete_mission", "decline_mission", "abandon_mission",
-  "chat", "send_gift", "trade_offer",
+  "chat", "send_gift", "trade_offer", "trade_accept", "trade_decline",
   "facility", "battle",
   "register",
 ]);
@@ -235,6 +235,8 @@ const MUTATION_INVALIDATIONS: Record<string, string[]> = {
   cloak:  INV_STATUS,
   attack: [...INV_STATUS, ...INV_SHIP],
   battle: [...INV_STATUS, ...INV_SHIP],
+  trade_accept:  [...INV_STATUS, ...INV_CARGO],
+  trade_decline: INV_STATUS,
 };
 
 // Commands with sub-actions that route through v2 endpoints instead of v1.

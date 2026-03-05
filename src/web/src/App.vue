@@ -15,7 +15,7 @@
             v-for="tab in tabs"
             :key="tab.id"
             @click="switchTab(tab.id)"
-            class="px-5 py-3 text-sm font-medium transition-all border-b-2"
+            class="px-3 py-2 text-sm font-medium transition-all border-b-2"
             :class="activeTab === tab.id && !showProfile
               ? 'text-space-text-bright border-space-accent' 
               : 'text-space-text-dim border-transparent hover:text-space-text'"

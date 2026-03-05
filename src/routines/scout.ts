@@ -78,14 +78,7 @@ export const scoutRoutine: Routine = async function* (ctx: RoutineContext) {
         // Submit scan intel to faction (fire-and-forget)
         if (bot.factionId) {
           bot.exec("faction_submit_intel", {
-            system_id: systemId,
-            intel_type: "system_scan",
-            data: {
-              poi_count: pois.length,
-              connection_count: connections.length,
-              station_id: station.id,
-              station_name: station.name,
-            },
+            systems: [systemId],
           }).catch(() => {});
         }
       }

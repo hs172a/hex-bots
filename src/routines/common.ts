@@ -383,9 +383,7 @@ export async function recordMarketData(ctx: RoutineContext): Promise<void> {
     // Submit trade intel to faction (fire-and-forget)
     if (bot.factionId) {
       bot.exec("faction_submit_trade_intel", {
-        system_id: bot.system,
-        poi_id: bot.poi,
-        market_snapshot: marketResp.result,
+        stations: bot.poi ? [bot.poi] : [],
       }).catch(() => {});
     }
   }
@@ -1767,7 +1765,7 @@ export async function ensureModsFitted(
   // Uninstall mods not in the desired set
   for (const mod of installed) {
     if (!desiredSet.has(mod)) {
-      const resp = await bot.exec("uninstall_mod", { mod_id: mod });
+      const resp = await bot.exec("uninstall_mod", { module_id: mod });
       if (!resp.error) {
         ctx.log("system", `Uninstalled mod: ${mod}`);
       }
@@ -1777,7 +1775,7 @@ export async function ensureModsFitted(
   // Install missing desired mods
   for (const mod of desiredMods) {
     if (!installedSet.has(mod)) {
-      const resp = await bot.exec("install_mod", { mod_id: mod });
+      const resp = await bot.exec("install_mod", { module_id: mod });
       if (!resp.error) {
         ctx.log("system", `Installed mod: ${mod}`);
       } else {
@@ -2044,7 +2042,7 @@ export function logAgentEvent(
   data?: Record<string, unknown>,
 ): void {
   const { bot } = ctx;
-  bot.exec("agent_logs", {
+  bot.exec("agentLogs", {
     category,
     severity,
     message,

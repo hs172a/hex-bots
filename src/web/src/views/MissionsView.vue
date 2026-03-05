@@ -42,6 +42,13 @@
           <span class="text-xs text-space-text-dim">Active: <b class="text-space-text">{{ activeMissions.length }}/5</b></span>
           <span v-if="readyCount > 0" class="text-xs text-green-400 font-semibold animate-pulse">● {{ readyCount }} ready</span>
 
+          <!-- Manual target indicator -->
+          <div v-if="manualMissionId" class="flex items-center gap-1.5 text-xs">
+            <span class="text-[11px] text-space-text-dim">🎯 Target:</span>
+            <span class="text-[11px] px-1.5 py-0.5 rounded bg-blue-900/30 text-blue-300 border border-blue-700/40 font-medium max-w-[160px] truncate" :title="manualMissionTitle">{{ manualMissionTitle }}</span>
+            <button @click="clearManualMission" class="text-[10px] text-space-text-dim hover:text-red-400 transition-colors" title="Clear manual target">✕</button>
+          </div>
+
           <!-- Filters inline -->
           <div class="flex items-center gap-2 ml-auto">
             <select v-model="typeFilter"
@@ -104,9 +111,11 @@
                 v-for="m in filteredActive"
                 :key="m.mission_id || m.id"
                 class="flex flex-col rounded-lg border transition-colors"
-                :class="m.is_complete
-                  ? 'bg-green-950/15 border-green-800/30 hover:border-green-700/50'
-                  : 'bg-orange-950/20 border-orange-800/40 hover:border-[#30363d]'"
+                :class="(m.id === manualMissionId || m.mission_id === manualMissionId) && manualMissionId
+                  ? 'bg-blue-950/20 border-blue-600/50 hover:border-blue-500/70'
+                  : m.is_complete
+                    ? 'bg-green-950/15 border-green-800/30 hover:border-green-700/50'
+                    : 'bg-orange-950/20 border-orange-800/40 hover:border-[#30363d]'"
               >
                 <!-- Card header -->
                 <div class="flex items-start justify-between gap-2 p-3 pb-2">
@@ -176,6 +185,15 @@
                     >
                       {{ inFlight[m.mission_id || m.id] ? '⏳ Claiming…' : '🎁 Claim Rewards' }}
                     </button>
+                    <!-- Manual target toggle -->
+                    <button
+                      @click="(m.id === manualMissionId || m.mission_id === manualMissionId) && manualMissionId ? clearManualMission() : setManualMission(m.mission_id || m.id)"
+                      class="text-xs px-2 py-1.5 rounded border font-medium transition-colors"
+                      :class="(m.id === manualMissionId || m.mission_id === manualMissionId) && manualMissionId
+                        ? 'border-blue-500 text-blue-300 bg-blue-900/20'
+                        : 'border-[#30363d] text-space-text-dim hover:border-blue-500/50 hover:text-blue-400'"
+                      :title="(m.id === manualMissionId || m.mission_id === manualMissionId) && manualMissionId ? 'Clear manual target' : 'Set as manual target for mission_runner'"
+                    >🎯</button>
                     <button
                       @click="abandonM(m.mission_id || m.id)"
                       :disabled="!!inFlight[m.mission_id || m.id]"
@@ -424,6 +442,24 @@ import {
 
 const botStore = useBotStore();
 const selectedBot = ref<string | null>(null);
+
+// ── Manual mission target (mission_runner setting) ──────────────
+const manualMissionId = computed(() =>
+  (botStore.settings?.mission_runner?.manualMissionId as string) || ''
+);
+const manualMissionTitle = computed(() => {
+  if (!manualMissionId.value) return '';
+  const m = activeMissions.value.find(
+    (m: any) => m.id === manualMissionId.value || m.mission_id === manualMissionId.value
+  );
+  return m?.title || manualMissionId.value;
+});
+function setManualMission(id: string) {
+  botStore.saveSettings('mission_runner', { manualMissionId: id });
+}
+function clearManualMission() {
+  botStore.saveSettings('mission_runner', { manualMissionId: '' });
+}
 const activeMissions = ref<any[]>([]);
 const completedMissions = ref<any[]>([]);
 const loading = ref(false);

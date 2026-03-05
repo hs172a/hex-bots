@@ -101,13 +101,27 @@ export const useBotStore = defineStore('bots', () => {
   // poolName → { botName → { date → DayStats } }
   const allPoolsStats = ref<Record<string, Record<string, any>>>({});
   const allPoolsLoading = ref(false);
+  // This VM's own pool name, returned by /api/stats/all-pools since v1.8.1
+  const myPoolName = ref('');
 
   async function fetchAllPoolsStats() {
     if (allPoolsLoading.value) return;
     allPoolsLoading.value = true;
     try {
       const res = await fetch('/api/stats/all-pools');
-      if (res.ok) allPoolsStats.value = await res.json();
+      if (res.ok) {
+        const data = await res.json();
+        // New format: { pools: {...}, currentPool: "..." }
+        // Old format (legacy): flat Record<string, any> — pools are direct keys
+        if (data && typeof data.currentPool === 'string' && data.pools) {
+          allPoolsStats.value = data.pools;
+          myPoolName.value = data.currentPool;
+        } else {
+          // Legacy fallback
+          allPoolsStats.value = data;
+          myPoolName.value = Object.keys(data)[0] ?? '';
+        }
+      }
     } catch { /* ignore network errors */ } finally {
       allPoolsLoading.value = false;
     }
@@ -400,6 +414,7 @@ export const useBotStore = defineStore('bots', () => {
     statsDaily,
     allPoolsStats,
     allPoolsLoading,
+    myPoolName,
     fetchAllPoolsStats,
     logs,
     activityLogs,
