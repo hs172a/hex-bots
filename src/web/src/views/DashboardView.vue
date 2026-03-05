@@ -37,26 +37,21 @@
         <span class="text-xl font-bold text-space-text-bright">{{ formatNumber(totalSystems) }}</span>
         <span class="text-xs text-space-text-dim">Explored</span>
       </div>
+      <div class="flex gap-2">
+        <button @click="showAddBot = true" class="btn btn-primary px-2 py-1 text-xs">
+          Add Bot
+        </button>
+      </div>
     </div>
 
     <!-- Bot table card -->
     <div class="card overflow-hidden flex flex-col mx-2 px-3 py-2">
-      <div class="flex items-center justify-between pb-2 border-b border-space-border">
-        <span class="text-xs font-semibold text-space-text-dim uppercase tracking-wider">
-          Bots ({{ botStore.bots.length }})
-        </span>
-        <div class="flex gap-2">
-          <button @click="showAddBot = true" class="btn btn-primary px-2 py-1 text-xs">
-            Add Bot
-          </button>
-        </div>
-      </div>
-
       <!-- Bot table -->
-      <div class="flex-1 overflow-auto mt-2 p-0">
+      <div class="flex-1 overflow-auto p-0">
         <table class="w-full text-sm">
           <thead class="sticky top-0 bg-space-card border-b border-space-border bg-transparent">
             <tr class="text-left text-xs text-space-text-dim uppercase tracking-wider">
+              <th v-if="botStore.vmList.length > 0" class="py-2 px-0 font-semibold">VM</th>
               <th class="py-2 px-0 font-semibold">Name</th>
               <th class="py-2 px-0 font-semibold">Ship</th>
               <th class="py-2 px-0 font-semibold">State</th>
@@ -77,6 +72,15 @@
               class="border-b border-space-border hover:bg-space-row-hover transition-colors cursor-pointer"
               @click="selectBot(bot.username)"
             >
+              <td v-if="botStore.vmList.length > 0" class="px-0 py-1">
+                <span
+                  v-if="bot.vm"
+                  class="text-[10px] font-medium px-1.5 py-0.5 rounded border"
+                  :class="vmBadgeClass(botStore.vmStatuses[bot.vm])"
+                  :title="`Remote VM: ${bot.vm}`"
+                >{{ bot.vm }}</span>
+                <span v-else class="text-[10px] font-medium px-1.5 py-0.5 rounded border text-blue-400 border-blue-700/50 bg-blue-900/20">local</span>
+              </td>
               <td class="px-0 py-1">
                 <span v-if="(bot as any).empire" :title="empireName((bot as any).empire)" class="shrink-0 leading-none">{{ empireIcon((bot as any).empire) }}</span>
                 <span class="text-space-accent font-medium">{{ bot.username }}</span>
@@ -505,6 +509,12 @@ onMounted(() => nextTick(() => {
 
 function formatNumber(n: number): string {
   return new Intl.NumberFormat().format(n);
+}
+
+function vmBadgeClass(state: string | undefined) {
+  if (state === 'online') return 'text-green-400 border-green-700/50 bg-green-900/20';
+  if (state === 'connecting') return 'text-yellow-400 border-yellow-700/50 bg-yellow-900/20';
+  return 'text-red-400 border-red-700/50 bg-red-900/20';
 }
 
 function selectBot(username: string) {

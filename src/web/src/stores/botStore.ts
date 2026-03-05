@@ -44,6 +44,8 @@ export interface BotStatus {
   username: string;
   state: string;
   routine?: string;
+  /** Which remote VM hosts this bot (undefined = local). */
+  vm?: string;
   credits: number;
   fuel: number;
   maxFuel: number;
@@ -135,6 +137,13 @@ export const useBotStore = defineStore('bots', () => {
   const dataSyncOffline = ref(false);
   const dataSyncMode = ref<'master' | 'client' | 'disabled'>('disabled');
 
+  // ── Hub (centralized UI proxy) ──
+  /** vm name → connection state ('connecting' | 'online' | 'offline') */
+  const vmStatuses = ref<Record<string, string>>({});
+  const vmList = computed(() => Object.keys(vmStatuses.value));
+  /** vm name → routine settings (received from remote VM on hub connect) */
+  const vmSettings = ref<Record<string, Record<string, Record<string, unknown>>>>({});
+
   // ── Credits/hour tracking (rolling 1-hour window) ──
   const creditsHistory = ref<Record<string, Array<{ ts: number; credits: number }>>>({});
   const CREDITS_WINDOW_MS = 60 * 60 * 1000; // 1 hour
@@ -196,6 +205,9 @@ export const useBotStore = defineStore('bots', () => {
   function handleWebSocketMessage(data: any) {
     switch (data.type) {
       case 'init':
+        if (data.vmStates && typeof data.vmStates === 'object') {
+          vmStatuses.value = { ...data.vmStates as Record<string, string> };
+        }
         if (data.bots) bots.value = data.bots;
         if (data.routines) routines.value = Array.isArray(data.routines)
           ? data.routines.map((r: any) => typeof r === 'string' ? { id: r, name: r } : r)
@@ -307,6 +319,18 @@ export const useBotStore = defineStore('bots', () => {
       case 'dataSyncStatus':
         dataSyncOffline.value = data.offline === true;
         break;
+
+      case 'vmStatus':
+        if (data.vm && data.state) {
+          vmStatuses.value = { ...vmStatuses.value, [data.vm as string]: data.state as string };
+        }
+        break;
+
+      case 'vmSettings':
+        if (data.vm && data.settings && typeof data.settings === 'object') {
+          vmSettings.value = { ...vmSettings.value, [data.vm as string]: data.settings as Record<string, Record<string, unknown>> };
+        }
+        break;
     }
   }
 
@@ -342,20 +366,28 @@ export const useBotStore = defineStore('bots', () => {
         delete execTimers[seq];
       }, 30000);
     }
-    wsSend({ type: 'exec', bot: botName, command, params, _seq: seq });
+    const botVm = bots.value.find(b => b.username === botName)?.vm;
+    wsSend({ type: 'exec', bot: botName, command, params, _seq: seq, ...(botVm ? { vm: botVm } : {}) });
   }
 
   // ── Convenience actions ──
+  function getVm(username: string): string | undefined {
+    return bots.value.find(b => b.username === username)?.vm;
+  }
+
   function startBot(username: string, routine: string) {
-    wsSend({ type: 'start', bot: username, routine });
+    const vm = getVm(username);
+    wsSend({ type: 'start', bot: username, routine, ...(vm ? { vm } : {}) });
   }
 
   function stopBot(username: string) {
-    wsSend({ type: 'stop', bot: username });
+    const vm = getVm(username);
+    wsSend({ type: 'stop', bot: username, ...(vm ? { vm } : {}) });
   }
 
   function removeBot(username: string) {
-    wsSend({ type: 'remove', bot: username });
+    const vm = getVm(username);
+    wsSend({ type: 'remove', bot: username, ...(vm ? { vm } : {}) });
   }
 
   function addBot(username: string, password: string) {
@@ -366,10 +398,18 @@ export const useBotStore = defineStore('bots', () => {
     wsSend({ type: 'register', registration_code: code, username, empire });
   }
 
-  function saveSettings(routine: string, s: Record<string, any>) {
-    wsSend({ type: 'saveSettings', routine, settings: s });
-    // Optimistically update local state
-    settings.value[routine] = { ...settings.value[routine], ...s };
+  function saveSettings(routine: string, s: Record<string, any>, vm?: string) {
+    const msg: Record<string, any> = { type: 'saveSettings', routine, settings: s };
+    if (vm) msg.vm = vm;
+    wsSend(msg);
+    if (!vm) {
+      // Optimistically update local state
+      settings.value[routine] = { ...settings.value[routine], ...s };
+    } else {
+      // Optimistically update remote VM settings cache
+      if (!vmSettings.value[vm]) vmSettings.value[vm] = {};
+      vmSettings.value[vm][routine] = { ...vmSettings.value[vm][routine], ...s };
+    }
   }
 
   function sendChat(botName: string, channel: string, message: string) {
@@ -442,6 +482,10 @@ export const useBotStore = defineStore('bots', () => {
     // DataSync state
     dataSyncOffline,
     dataSyncMode,
+    // Hub (centralized UI proxy)
+    vmStatuses,
+    vmList,
+    vmSettings,
     // Credits/hour
     botCreditsPerHour,
     // Helpers

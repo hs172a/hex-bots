@@ -558,6 +558,7 @@ async function placeMarketOrders(
   const listings = (
     Array.isArray(md) ? md :
     Array.isArray(md.items) ? md.items :
+    Array.isArray(md.summary) ? md.summary :
     Array.isArray(md.listings) ? md.listings : []
   ) as Array<Record<string, unknown>>;
 

@@ -457,6 +457,7 @@ async function sellFactionStorageItems(ctx: RoutineContext): Promise<{ count: nu
   const listings = (
     Array.isArray(marketData) ? marketData :
     Array.isArray(marketData.items) ? marketData.items :
+    Array.isArray(marketData.summary) ? marketData.summary :
     Array.isArray(marketData.listings) ? marketData.listings :
     []
   ) as Array<Record<string, unknown>>;
@@ -634,10 +635,11 @@ export const traderRoutine: Routine = async function* (ctx: RoutineContext) {
           const listings = (
             Array.isArray(md) ? md :
             Array.isArray(md.items) ? md.items :
+            Array.isArray(md.summary) ? md.summary :
             Array.isArray(md.listings) ? md.listings : []
           ) as Array<Record<string, unknown>>;
           const buyableHere = new Set(
-            listings.filter(l => ((l.buy_price as number) || 0) > 0).map(l => l.item_id as string)
+            listings.filter(l => ((l.buy_price as number) || (l.best_sell as number) || 0) > 0).map(l => l.item_id as string)
           );
 
           const soldFromStorage: string[] = [];

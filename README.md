@@ -1,25 +1,110 @@
-# Hex Bots
+# Hex Bots Orchestrator
 
-> **Fork of [spacemolt_botrunner](https://github.com/humbrol2/spacemolt_botrunner).** Replaces the vanilla-JS frontend with a full **Vue 3 SPA** and adds extensive automation, UI, and AI features.
+> **Fork of [spacemolt_botrunner](https://github.com/humbrol2/spacemolt_botrunner).** Replaces the vanilla-JS frontend with a full **Vue 3 SPA** and adds extensive automation, multi-VM orchestration, and AI features.
 >
 > **Repository:** https://github.com/hs172a/hex-bots
 
-A web-based bot fleet manager for [SpaceMolt](https://www.spacemolt.com) — run multiple bots with automated routines, monitor and control everything from a reactive live dashboard.
+A multi-VM bot fleet orchestrator for [SpaceMolt](https://www.spacemolt.com). Run bots across multiple machines, monitor and control the entire fleet from a single reactive dashboard, share game knowledge between VMs, and get AI-powered routine suggestions.
 
 ![Interface](https://img.shields.io/badge/interface-vue3_spa-blue) ![Runtime](https://img.shields.io/badge/runtime-bun-black) ![Deps](https://img.shields.io/badge/deps-zero_runtime-green) ![Version](https://img.shields.io/badge/version-1.9.x-purple)
 
 ---
 
+## Architecture
+
+Hex Bots Orchestrator supports three deployment modes that can be combined:
+
+### Standalone (single VM)
+
+The simplest setup — one machine runs bots, the backend, and the Vue SPA all together.
+
+```
+┌─ Single VM ──────────────────────────────────────┐
+│  bun start                                        │
+│  ├── botmanager.ts   — discovers and runs bots    │
+│  ├── WebServer       — WebSocket + HTTP on :3210  │
+│  └── Vue SPA         — served at /               │
+└──────────────────────────────────────────────────┘
+```
+
+### Hub Master + Client VMs
+
+When bots run on multiple machines (e.g., cloud VMs, home machines), a single **master VM** with a public IP serves the Vue SPA for the entire fleet. Client VMs connect **outward** to the master — no reverse tunnels needed.
+
+```
+┌─ MASTER VM (public IP) ─────────────────────────────┐
+│  [hub] mode = "master"                               │
+│  ├── Vue SPA served for all VMs                      │
+│  ├── ProxyHub at /hub — WebSocket proxy              │
+│  │   • Aggregates bot statuses from all VMs          │
+│  │   • Routes commands to the correct VM             │
+│  │   • Streams logs from every bot to the UI         │
+│  └── Commander Advisory — scores all bots fleet-wide │
+└──────────────────────────────────────────────────────┘
+         ▲ WebSocket (ws://master-ip:3210/hub)
+         │  client connects OUT → no reverse tunnel
+         │
+┌─ CLIENT VM (any NAT / home machine) ────────────────┐
+│  [hub] mode = "client"                               │
+│  [server] serve_ui = false                           │
+│  ├── Own bots + botmanager                           │
+│  └── Opens WS to master on startup                   │
+└──────────────────────────────────────────────────────┘
+```
+
+Configure in `config.toml` — see `config.toml.example` for full reference and architecture diagrams.
+
+### DataSync (shared game knowledge)
+
+All VMs share one galaxy map, market data, and pirate positions via an HTTP sync API on the master. Client VMs forward master's sync port through an SSH tunnel.
+
+```
+┌─ MASTER VM ─────────────────────────────────────────┐
+│  [datasync] mode = "master", port = 4001             │
+│  Exposes /sync/* HTTP endpoints (SSH-tunnel only)    │
+└──────────────────────────────────────────────────────┘
+         ▲ SSH forward tunnel (client → master:4001)
+         │
+┌─ CLIENT VM ─────────────────────────────────────────┐
+│  [datasync] mode = "client"                          │
+│  master_url = "http://127.0.0.1:4001"                │
+│  Pulls map/topology every 5 min; pushes market/       │
+│  pirate data every 60 s                              │
+└──────────────────────────────────────────────────────┘
+```
+
+Synced data: galaxy map systems + connections, POI resources, market prices, pirate locations, per-VM bot statistics.
+
+### Commander Advisory
+
+A scoring engine that evaluates every bot × routine combination and surfaces suggestions in the **Commander → Advisory** tab. Operates on the full fleet (local + all connected VMs) — never auto-applies, all assignments remain manual.
+
+```
+Every 3 minutes:
+  1. Collect BotStatus[] from local bots + all remote VMs (via ProxyHub)
+  2. Load active Goals from goals store
+  3. Snapshot EconomyEngine (supply/demand, deficits, surpluses)
+  4. AdvisoryCommander.evaluate() → Suggestion[] with scores + reasoning
+  5. Display in Commander → Advisory tab (Apply button per suggestion)
+```
+
+Suggestion scoring factors: base routine score, goal strategy weights, supply chain deficits bonus, fleet diversity penalty, switch cost, fuel risk penalty, faction storage bonus.
+
+---
+
 ## Features at a Glance
 
-- **Vue 3 SPA Dashboard** — reactive real-time UI, WebSocket log streaming
+- **Unified Fleet Dashboard** — all bots from all VMs in one table with live credits, fuel, hull, cargo, ₡/hr
+- **Vue 3 SPA** — reactive real-time UI, WebSocket log streaming, dark space theme
 - **25 Routines** — from autonomous mining to full LLM fleet command
 - **10-tab Bot Profile** — manual control, ship management, combat, social, AI log
 - **Faction Management** — members, storage, facilities, diplomacy, missions, trade intel
-- **Galaxy Map** — auto-built from explorer data, seeded from `/api/map`
+- **Galaxy Map** — auto-built from explorer data, shared via DataSync across VMs
 - **Market Orders** — view, edit prices, and cancel active buy/sell orders per bot
 - **Missions** — three-tab browser with live progress tracking
 - **Shipyard** — commission ships, manage fleet and modules
+- **Commander tab** — advisory scoring, fleet goals, economy analysis, credit history chart, AI agent control
+- **Stats View** — unified fleet statistics aggregated from all VMs (no pool splitting)
 - **Rate-limit protection** — IP blocking with live header countdown
 - **Catalog caching** — 24 h SQLite cache, zero repeated catalog API calls
 
@@ -61,9 +146,17 @@ bun start           # serves everything at http://localhost:3210
 
 Use `PORT=8080 bun start` for a different port.
 
-### Production with Code Sync (multi-VM)
+### Multi-VM Setup
 
-When `code_sync_interval_sec` is set in `config.toml`, client VMs pull code from the master and call `process.exit(0)` to apply updates. A supervisor script must be used so the process restarts cleanly:
+See `config.toml.example` for detailed configuration of Hub, DataSync, and SSH tunnel options. Quick summary:
+
+1. **Master VM** — set `[hub] mode = "master"`, optionally `[datasync] mode = "master"`
+2. **Client VMs** — set `[hub] mode = "client"`, `master_ws_url = "ws://master-ip:3210"`, `[server] serve_ui = false`
+3. **DataSync** — SSH forward tunnel on each client from `localhost:4001` → `master:4001`; set `[datasync] mode = "client"`, `master_url = "http://127.0.0.1:4001"`
+
+### Production with Code Sync
+
+When `code_sync_interval_sec` is set in `config.toml`, client VMs pull code from the master and call `process.exit(0)` to apply updates. Use a supervisor script so the process restarts cleanly:
 
 ```bash
 chmod +x start.sh
@@ -243,12 +336,9 @@ Grouped sidebar (System / Fleet / Economy / Exploration / Harvesting / Combat / 
 - **📦 Force Refresh Catalog** — **fully wipes** catalog (SQLite + memory + `catalog.json`), then re-fetches via first available bot session
 
 ### Stats View
-Per-bot statistics — ores mined, crafted, trades, profit, systems explored, skills. Faction activity log.
+Per-bot statistics — ores mined, crafted, trades, profit, systems explored, skills, ₡/hr. Faction activity log. Mission Analytics.
 
-**Multi-pool view** — pool selector shows Current pool + one button per discovered pool. Selecting a pool switches the Per-Bot Breakdown table and Fleet Totals to that pool's data. 🔄 button reloads.
-- **DataSync mode**: stats aggregated via master `/sync/all-stats` endpoint; each VM pushes its stats every 60 s
-- **Standalone mode**: scans `../*/data/stats.json` sibling directories on the same machine
-- Auto-refreshes every 30 s
+**Unified fleet view** — aggregates stats from all VMs automatically (DataSync master pools + local `statsDaily`). Local data takes precedence; 🔄 button force-refreshes all pools. No pool splitting — the entire fleet is always shown in one table.
 
 ### Action Log View
 Per-bot action history with category filters and pagination.

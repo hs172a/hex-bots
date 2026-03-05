@@ -353,8 +353,10 @@ export const salvagerRoutine: Routine = async function* (ctx: RoutineContext) {
           const items = ((scrapWreckResp.result as Record<string, unknown>)?.items as Array<Record<string, unknown>>) || [];
           if (items.length > 0) {
             const names = items.map(i => `${(i.quantity as number) || 1}x ${(i.name as string) || "material"}`).join(", ");
-            ctx.log("scavenge", `Scrapped towed wreck: ${names}`);
+            ctx.log("scavenge", `Scrapped towed wreck: ${names} (deposited to station storage)`);
           }
+          // v0.174.1: scrap_wreck deposits to station storage — refresh so we see the new items
+          await bot.refreshStorage();
         }
       }
     }

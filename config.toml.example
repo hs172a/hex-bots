@@ -4,7 +4,8 @@
 
 [server]
 port = 3210              # HTTP + WebSocket port
-host = "localhost"     # bind address (use "0.0.0.0" to expose on LAN)
+host = "localhost"       # bind address (use "0.0.0.0" to expose on LAN/internet)
+serve_ui = true          # set false on client VMs (hub mode) to skip serving the Vue SPA
 
 [fleet]
 max_bots = 20
@@ -13,34 +14,155 @@ home_system = ""
 home_base = ""
 default_storage_mode = "sell"        # sell | deposit | faction_deposit | combi
 faction_storage_station = ""
-faction_donate_pct = 0               # 0-100
-min_bot_credits = 0                  # 0 = disabled
+faction_donate_pct = 0               # 0-100: percent of earnings donated to faction treasury
+min_bot_credits = 0                  # 0 = disabled; bots stop spending below this balance
 
 [logging]
 api_logging = false    # log every API request/response to data/api-logs/
 file_logging = true    # tee console output to data/logs/hex-bots-{date}.log (set false to disable)
 
-# ── Future: Commander (auto-assignment) ──
+# ── Commander (advisory routine scoring) ──────────────────────────────────────
+# Scores each bot×routine combination and surfaces suggestions in the Commander tab.
+# Does NOT auto-apply changes — all assignments remain manual.
+#
 # [commander]
-# brain = "scoring"                  # scoring | llm | hybrid
-# evaluation_interval = 180          # seconds
-# reassignment_cooldown = 300
-# urgency_override = true
+# brain = "scoring"           # scoring (default) | llm | hybrid
+# evaluation_interval = 180   # seconds between advisory evaluations
+# reassignment_cooldown = 300 # minimum seconds before re-suggesting the same bot
+# reassignment_threshold = 0.3 # min improvement ratio (0.0–1.0) before suggesting a change
+# urgency_override = true     # critical supply deficits can bypass cooldown
 
-# ── Future: Economy Engine ──
+# ── Economy Engine ────────────────────────────────────────────────────────────
+# Tracks supply/demand, deficits, and surpluses for the Commander advisory.
+#
 # [economy]
-# enable_premium_orders = true
-# max_premium_pct = 50
-# min_crafting_margin_pct = 30
-# batch_sell_size = 100
+# enable_premium_orders = true  # allow coordinator to post above-market buy orders
+# max_premium_pct = 50          # cap premium above market price (%)
+# min_crafting_margin_pct = 30  # minimum profit margin before auto-crafting is recommended
+# batch_sell_size = 100         # items sold per trade action in batch mode
 
-# ── Future: Goals ──
+# ── Fleet Goals ───────────────────────────────────────────────────────────────
+# Goals shift the Commander's scoring weights toward specific objectives.
+# Supported types: maximize_income | explore_region | prepare_for_war |
+#                  level_skills | establish_trade_route | resource_stockpile |
+#                  faction_operations | custom
+#
 # [[goals]]
 # type = "maximize_income"
 # priority = 10
 #
 # [[goals]]
-# type = "explore_region"
+# type = "level_skills"
 # priority = 5
-# [goals.params]
-# region = "outer_rim"
+
+# ── Inventory Targets ─────────────────────────────────────────────────────────
+# Min/max stock targets per item per station (used by the quartermaster routine).
+#
+# [[inventory_targets]]
+# station_id   = "station_alpha"
+# item_id      = "fuel_cell"
+# min_stock    = 50
+# max_stock    = 500
+# purpose      = "fuel"   # crafting | trading | fuel | ammo | strategic
+
+# ── DataSync (shared game knowledge across VMs) ──────────────────────────────
+# Synchronises map, market, and pirate data between VMs so all bots share one galaxy map.
+# Master VM exposes an HTTP sync API; client VMs connect to it via SSH forward tunnel.
+#
+# ┌─ MASTER VM ─────────────────────────────────────────────────────────────────┐
+# │  [datasync]                                                                  │
+# │  enabled  = true                                                             │
+# │  mode     = "master"                                                         │
+# │  host     = "127.0.0.1"   # bind to loopback — only reachable via SSH tunnel │
+# │  port     = 4001           # HTTP sync port                                  │
+# │  api_key  = "change_me"   # shared secret; clients must send the same key    │
+# │  pool_name = "master"      # unique label for this VM in the Stats view       │
+# │  max_clock_skew_sec = 30   # reject records from the future (clock guard)     │
+# └─────────────────────────────────────────────────────────────────────────────┘
+#
+# ┌─ CLIENT VM ──────────────────────────────────────────────────────────────────┐
+# │  [datasync]                                                                   │
+# │  enabled  = true                                                              │
+# │  mode     = "client"                                                          │
+# │  master_url = "http://127.0.0.1:4001"  # forwarded via SSH tunnel             │
+# │  api_key  = "change_me"                                                       │
+# │  pool_name = "vm2"                     # must be unique across all VMs        │
+# │                                                                               │
+# │  # Sync intervals (seconds):                                                  │
+# │  pull_interval_sec       = 300   # pull map/topology from master              │
+# │  push_interval_sec       = 60    # push fast data (market prices, pirates)    │
+# │  slow_push_interval_sec  = 600   # push full topology (systems, POIs)         │
+# │  max_stale_hours         = 24    # force full pull if offline longer than this│
+# │  code_sync_interval_sec  = 0     # pull source code from master (0=disabled)  │
+# └─────────────────────────────────────────────────────────────────────────────┘
+
+# ── Hub (centralized UI proxy) ───────────────────────────────────────────────
+# Enables a single master VM (public IP) to serve the Vue UI for ALL client VMs.
+#
+# Connection model (CLIENT → MASTER, not the other way):
+#   Each client VM opens a WebSocket to master's /hub endpoint.
+#   Master has a public IP — no SSH tunnel needed for ProxyHub.
+#   Only DataSync requires an SSH forward tunnel (master's port 4001 → client local).
+#
+#   Client VM: ws://master-ip:3210/hub?vm_name=mint&hub_key=...
+#              └─ client connects OUT to master
+#
+# ┌─ MASTER VM (Oracle Cloud / public IP) ──────────────────────────────────┐
+# │  [hub]                                                                   │
+# │  mode = "master"                                                         │
+# │                                                                          │
+# │  # Optional allowlist — omit [[hub.clients]] to accept any connection    │
+# │  [[hub.clients]]                                                         │
+# │  name    = "mint"                                                        │
+# │  api_key = "hub_secret"   # must match client's hub.api_key              │
+# │                                                                          │
+# │  [[hub.clients]]                                                         │
+# │  name    = "bora"                                                        │
+# │  api_key = "hub_secret"                                                  │
+# └─────────────────────────────────────────────────────────────────────────┘
+#
+# ┌─ CLIENT VM (home laptop / any VM, even behind NAT) ─────────────────────┐
+# │  [server]                                                                │
+# │  serve_ui = false                                                        │
+# │                                                                          │
+# │  [hub]                                                                   │
+# │  mode           = "client"                                               │
+# │  master_ws_url  = "ws://92.5.16.98:3210"  # master's public IP:port     │
+# │  api_key        = "hub_secret"                                           │
+# │                                                                          │
+# │  # Only DataSync needs a tunnel (master's port 4001 → local)            │
+# │  [ssh_tunnels]                                                           │
+# │  enabled = true                                                          │
+# │                                                                          │
+# │  [[ssh_tunnels.tunnels]]                                                 │
+# │  name         = "datasync"                                               │
+# │  direction    = "forward"                                                │
+# │  ssh_host     = "92.5.16.98"                                             │
+# │  ssh_user     = "opc"                                                    │
+# │  ssh_key_file = "~/.ssh/id_rsa"                                          │
+# │  local_port   = 4001    # client reaches http://127.0.0.1:4001           │
+# │  remote_port  = 4001    # master's DataSync HTTP port                    │
+# └─────────────────────────────────────────────────────────────────────────┘
+
+# ── SSH Tunnels (run on CLIENT VMs only, for DataSync only) ──────────────────
+# Only the DataSync forward tunnel is needed. ProxyHub no longer uses SSH tunnels
+# — the client connects directly to master's WebSocket port.
+#
+#   direction = "forward"  (-L)
+#     ssh -N -L <local_port>:127.0.0.1:<remote_port> <user>@<master_host>
+#     Opens local_port ON CLIENT → client reaches master's DataSync service.
+#
+# Requirements: passwordless SSH key authorized in master's ~/.ssh/authorized_keys
+#
+# [ssh_tunnels]
+# enabled = true
+#
+# # DataSync: client's port 4001 → master's DataSync port 4001
+# [[ssh_tunnels.tunnels]]
+# name         = "datasync"
+# direction    = "forward"
+# ssh_host     = "master.example.com"
+# ssh_user     = "ubuntu"
+# ssh_key_file = "~/.ssh/id_rsa"
+# local_port   = 4001   # client reaches http://127.0.0.1:4001
+# remote_port  = 4001   # master's DataSync HTTP port

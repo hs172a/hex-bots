@@ -166,7 +166,8 @@ export const rescueRoutine: Routine = async function* (ctx: RoutineContext) {
 
       if (fuelItem) {
         const fuelId = (fuelItem.item_id as string) || (fuelItem.id as string) || "";
-        const price = (fuelItem.price as number) || (fuelItem.buy_price as number) || 0;
+        // buy = what station charges us (old: buy_price/price, new compact: best_buy)
+        const price = (fuelItem.best_buy as number) || (fuelItem.price as number) || (fuelItem.buy_price as number) || 0;
         const available = (fuelItem.quantity as number) || (fuelItem.stock as number) || 0;
         const qty = Math.min(settings.rescueFuelCells, available);
 

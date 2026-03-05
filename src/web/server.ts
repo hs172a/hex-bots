@@ -5,6 +5,7 @@ import { mapStore } from "../mapstore.js";
 import { catalogStore } from "../catalogstore.js";
 import { publicCatalog } from "../publicCatalog.js";
 import type { ServerWebSocket } from "bun";
+import type { ProxyHub, HubSession } from "../proxyhub.js";
 
 // ── Types ──────────────────────────────────────────────────
 
@@ -36,7 +37,7 @@ export interface RoutineSettings {
   [routine: string]: Record<string, unknown>;
 }
 
-type WSData = { id: number };
+type WSData = { id: number; isHubClient?: true; vmName?: string };
 
 // ── Settings persistence ───────────────────────────────────
 
@@ -117,6 +118,19 @@ export class WebServer {
   private clients = new Set<ServerWebSocket<WSData>>();
   private nextClientId = 1;
 
+  // ── Hub (centralized UI proxy) ─────────────────────────────
+  proxyHub: ProxyHub | null = null;
+  /** api_key the master must supply when connecting (set on client VMs). */
+  hubApiKey: string = "";
+  /** When false, the Vue SPA is not served (use on client VMs in hub mode). */
+  serveUi: boolean = true;
+  /** Aggregated bot statuses from remote VMs (tagged with vm field). */
+  remoteBots: unknown[] = [];
+  /** Per-bot log lines from remote VMs (username → lines). */
+  remoteBotLogs = new Map<string, string[]>();
+  /** Activity log lines forwarded from remote VMs. */
+  remoteActivityLog: string[] = [];
+
   // Log buffers for scrollback on reconnect
   private activityLog: string[] = [];
   private broadcastLog: string[] = [];
@@ -173,6 +187,26 @@ export class WebServer {
   // Admin force-refresh — set by botmanager
   onRefreshCatalog: (() => Promise<string>) | null = null;
   onRefreshMap: (() => Promise<string>) | null = null;
+
+  /** Set by botmanager on client VMs: forwards every broadcast message to master hub. */
+  hubClientPush: ((msg: Record<string, unknown>) => void) | null = null;
+  /** Returns the current init payload for hub registration (used by HubClientConnector on connect). */
+  getHubInitPayload(): Record<string, unknown> {
+    const botLogsObj: Record<string, string[]> = {};
+    for (const [name, lines] of this.botLogs) {
+      botLogsObj[name] = [...lines];
+    }
+    return {
+      type: "init",
+      bots: this.latestStatuses,
+      botLogs: botLogsObj,
+      settings: this.settings,
+      logs: {
+        activity: this.activityLog,
+        system: this.systemLog,
+      },
+    };
+  }
 
   // Available routines — set by botmanager
   routines: Array<{ id: string; name: string }> = [];
@@ -232,10 +266,32 @@ export class WebServer {
       fetch: async (req, server) => {
         const url = new URL(req.url);
 
-        // WebSocket upgrade
+        // WebSocket upgrade — UI clients
         if (url.pathname === "/ws") {
+          if (this.hubApiKey) {
+            const key = url.searchParams.get("hub_key") ?? "";
+            if (key !== this.hubApiKey) {
+              return new Response("Unauthorized", { status: 401 });
+            }
+          }
           const id = this.nextClientId++;
           const ok = server.upgrade(req, { data: { id } });
+          if (ok) return undefined as unknown as Response;
+          return new Response("WebSocket upgrade failed", { status: 400 });
+        }
+
+        // WebSocket upgrade — hub client VMs connecting IN to master
+        if (url.pathname === "/hub") {
+          if (!this.proxyHub) return new Response("Not a hub master", { status: 404 });
+          const vmName = url.searchParams.get("vm_name") ?? "";
+          const hubKey = url.searchParams.get("hub_key") ?? "";
+          if (!vmName) return new Response("Missing vm_name", { status: 400 });
+          if (!this.proxyHub.isAllowed(vmName, hubKey)) {
+            console.warn(`[Hub] Rejected connection from VM "${vmName}" — invalid hub_key`);
+            return new Response("Unauthorized", { status: 401 });
+          }
+          const id = this.nextClientId++;
+          const ok = server.upgrade(req, { data: { id, isHubClient: true, vmName } });
           if (ok) return undefined as unknown as Response;
           return new Response("WebSocket upgrade failed", { status: 400 });
         }
@@ -433,24 +489,39 @@ export class WebServer {
           });
         }
 
-        // Production: serve built Vue SPA from dist/web/
-        if (hasBuiltApp) {
-          if (url.pathname !== "/") {
-            const asset = Bun.file(join(distDir, url.pathname));
-            if (await asset.exists()) return new Response(asset);
+        // Production / dev UI — skipped when hub.mode = "client"
+        if (this.serveUi) {
+          if (hasBuiltApp) {
+            if (url.pathname !== "/") {
+              const asset = Bun.file(join(distDir, url.pathname));
+              if (await asset.exists()) return new Response(asset);
+            }
+            return new Response(Bun.file(distIndex));
           }
-          return new Response(Bun.file(distIndex));
+          // Dev mode: fall back to legacy UI so the port stays usable
+          return new Response(readFileSync(legacyPath, "utf-8"), {
+            headers: { "Content-Type": "text/html; charset=utf-8", "Cache-Control": "no-store" },
+          });
         }
 
-        // Dev mode: new UI runs on Vite at http://localhost:5173
-        // Fall back to legacy UI so port 3000 stays usable
-        return new Response(readFileSync(legacyPath, "utf-8"), {
-          headers: { "Content-Type": "text/html; charset=utf-8", "Cache-Control": "no-store" },
-        });
+        // Hub client mode: UI is served on the master VM only
+        return new Response("Hex-Bots (hub client — UI on master)", { status: 200 });
       },
 
       websocket: {
         open: (ws: ServerWebSocket<WSData>) => {
+          // Hub client VM connecting IN — register session with ProxyHub
+          if (ws.data.isHubClient) {
+            const vmName = ws.data.vmName!;
+            const session: HubSession = {
+              name: vmName,
+              send: (msg) => { try { ws.send(JSON.stringify(msg)); } catch { /* ignore closed */ } },
+              disconnect: () => { try { ws.close(); } catch { /* ignore */ } },
+            };
+            this.proxyHub?.registerSession(session);
+            return;
+          }
+
           this.clients.add(ws);
 
           // Build known systems list for settings dropdowns
@@ -464,9 +535,16 @@ export class WebServer {
             botLogsObj[name] = lines;
           }
 
+          // Merge remote VM bot logs into the snapshot sent on connect
+          for (const [name, lines] of this.remoteBotLogs) {
+            if (!botLogsObj[name]) botLogsObj[name] = [];
+            botLogsObj[name] = [...(botLogsObj[name] ?? []), ...lines].slice(-200);
+          }
+
           ws.send(JSON.stringify({
             type: "init",
-            bots: this.latestStatuses,
+            bots: [...this.latestStatuses, ...this.remoteBots],
+            vmStates: this.proxyHub?.getVmStates() ?? {},
             routines: this.routines,
             settings: this.settings,
             knownSystems,
@@ -487,6 +565,16 @@ export class WebServer {
         },
 
         message: async (ws: ServerWebSocket<WSData>, msg: string | Buffer) => {
+          // Hub client VM message — route through ProxyHub
+          if (ws.data.isHubClient) {
+            try {
+              const raw = JSON.parse(typeof msg === "string" ? msg : msg.toString()) as Record<string, unknown>;
+              raw.vm = ws.data.vmName;
+              this.proxyHub?.handleMessage(raw);
+            } catch { /* ignore malformed */ }
+            return;
+          }
+
           let seq: unknown;
           let isExec = false;
           try {
@@ -494,6 +582,12 @@ export class WebServer {
             seq = raw._seq;
             isExec = raw.type === "exec";
             const data = raw as WebAction;
+            // Route commands with `vm` field to the appropriate remote VM
+            const vmTarget = (raw as Record<string, unknown>).vm as string | undefined;
+            if (vmTarget && this.proxyHub) {
+              this.proxyHub.sendToVM(vmTarget, raw as Record<string, unknown>);
+              return; // Response arrives asynchronously via broadcastToClients
+            }
             if (this.onAction) {
               const result = await this.onAction(data);
               const resType = isExec ? "execResult" : "actionResult";
@@ -510,6 +604,10 @@ export class WebServer {
         },
 
         close: (ws: ServerWebSocket<WSData>) => {
+          if (ws.data.isHubClient) {
+            this.proxyHub?.unregisterSession(ws.data.vmName!);
+            return;
+          }
           this.clients.delete(ws);
         },
       },
@@ -526,7 +624,7 @@ export class WebServer {
 
   updateBotStatus(bots: BotStatus[]): void {
     this.latestStatuses = bots;
-    this.broadcast({ type: "status", bots });
+    this.broadcast({ type: "status", bots: [...bots, ...this.remoteBots] });
   }
 
   logActivity(line: string): void {
@@ -620,6 +718,22 @@ export class WebServer {
     this.broadcast({ type: "dataSyncStatus", offline });
   }
 
+  /** Forward any message from ProxyHub to all connected UI clients. */
+  broadcastToClients(data: unknown): void {
+    this.broadcast(data);
+  }
+
+  /** Notify the UI about a remote VM's connection state. */
+  broadcastVmStatus(vm: string, state: string): void {
+    this.broadcast({ type: "vmStatus", vm, state });
+  }
+
+  /** Called by ProxyHub when the list of remote bots changes. Broadcasts merged status. */
+  mergeRemoteBots(remoteBots: unknown[]): void {
+    this.remoteBots = remoteBots;
+    this.broadcast({ type: "status", bots: [...this.latestStatuses, ...remoteBots] });
+  }
+
   // ── Stats flushing ──────────────────────────────────────────
 
   flushBotStats(bots: BotStatus[]): void {
@@ -711,6 +825,10 @@ export class WebServer {
       } catch {
         this.clients.delete(ws);
       }
+    }
+    // Forward to master hub when running as a hub client VM
+    if (this.hubClientPush) {
+      try { this.hubClientPush(data as Record<string, unknown>); } catch { /* ignore */ }
     }
   }
 }

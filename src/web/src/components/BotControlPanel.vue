@@ -576,9 +576,14 @@ function pushDetailLines(command: string, data: any, username: string): void {
       break;
     }
     case 'view_market': {
-      const items = data.market || data.items || data.listings || [];
-      push(`market (${items.length} items):`);
-      for (const item of items.slice(0, 20)) push(`  ${item.name || item.item_id}: buy ₡${item.buy_price ?? '?'} sell ₡${item.sell_price ?? '?'}`);
+      const items: any[] = data.items || data.summary || data.market || data.listings || [];
+      const cats = data.available_categories ? ` [${(data.available_categories as string[]).join(', ')}]` : '';
+      push(`market (${items.length} items)${cats}:`);
+      for (const item of items.slice(0, 20)) {
+        const buyP = item.buy_price ?? item.best_sell ?? '?';
+        const sellP = item.sell_price ?? item.best_buy ?? '?';
+        push(`  ${item.name || item.item_id}: buy ₡${buyP} sell ₡${sellP}`);
+      }
       if (items.length > 20) push(`  ...and ${items.length - 20} more`);
       break;
     }
@@ -674,9 +679,16 @@ function processExecResult(command: string, data: any) {
       break;
     }
     case 'view_market': {
-      const items = data.market || data.items || data.listings || (Array.isArray(data) ? data : []);
-      marketItems.value = [...items]
-        .map((i: any) => ({ ...i, name: i.name || botStore.catalogName(i.item_id) }))
+      const raw: any[] = data.items || data.summary || data.market || data.listings || (Array.isArray(data) ? data : []);
+      marketItems.value = raw
+        .map((i: any) => ({
+          ...i,
+          name: i.name || botStore.catalogName(i.item_id),
+          sell_price: i.sell_price ?? i.best_buy ?? 0,
+          buy_price:  i.buy_price  ?? i.best_sell ?? 0,
+          sell_quantity: i.sell_quantity ?? i.quantity ?? 0,
+          buy_quantity:  i.buy_quantity  ?? i.quantity ?? 0,
+        }))
         .sort((a: any, b: any) => a.name.localeCompare(b.name));
       break;
     }

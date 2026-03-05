@@ -1,7 +1,7 @@
 import { existsSync, readdirSync, appendFileSync, mkdirSync, rmSync } from "fs";
 import { join, basename } from "path";
 import { hostname } from "os";
-import { Bot, type Routine } from "./bot.js";
+import { Bot, type Routine, type BotStatus } from "./bot.js";
 import { SessionManager } from "./session.js";
 import { minerRoutineV2 } from "./routines/miner.js";
 import { explorerRoutine } from "./routines/explorer.js";
@@ -50,6 +50,9 @@ import { GoalsStore } from "./data/goals-store.js";
 import { GoalSchema } from "./types/config.js";
 import { AdvisoryCommander } from "./commander/advisory-commander.js";
 import { initDataSync, DataSyncClient, DataSyncServer } from "./datasync.js";
+import { SshTunnelManager } from "./sshtunnels.js";
+import { ProxyHub } from "./proxyhub.js";
+import { HubClientConnector } from "./hubclient.js";
 
 const BASE_DIR = process.cwd();
 const SESSIONS_DIR = join(BASE_DIR, "sessions");
@@ -782,6 +785,62 @@ async function main(): Promise<void> {
     }
   }
 
+  // ── Hub (centralized UI proxy) ─────────────────────────────────────
+  const hubMode = config.hub.mode;
+
+  if (hubMode === "client") {
+    // Client VM: don't serve the Vue SPA; connect OUT to master's /hub endpoint
+    server.serveUi = config.server.serve_ui;
+    const masterWsUrl = config.hub.master_ws_url;
+    if (!masterWsUrl) {
+      server.logSystem(`[Hub] Client mode — no master_ws_url set, hub disabled`);
+    } else {
+      const hubConnector = new HubClientConnector(masterWsUrl, config.datasync.pool_name || "client", config.hub.api_key);
+      hubConnector.onStateChange = (state) => {
+        server.logSystem(`[Hub] ${state === "online" ? "Connected to master" : "Disconnected from master"}`);
+        if (state === "online") {
+          // Send current state snapshot to master
+          hubConnector.push(server.getHubInitPayload());
+        }
+      };
+      hubConnector.onCommand = (msg) => {
+        if (!server.onAction || !msg.type) return;
+        const action = msg as unknown as WebAction;
+        server.onAction(action).then(result => {
+          const resType = action.type === "exec" ? "execResult" : "actionResult";
+          hubConnector.push({ type: resType, _seq: msg._seq, ...result });
+        }).catch(err => {
+          hubConnector.push({ type: "actionResult", _seq: msg._seq, ok: false, error: String(err) });
+        });
+      };
+      server.hubClientPush = (msg) => hubConnector.push(msg);
+      hubConnector.connect();
+      server.logSystem(`[Hub] Client mode — connecting to master: ${masterWsUrl}`);
+    }
+  }
+
+  if (hubMode === "master") {
+    const proxyHub = new ProxyHub(config.hub.clients, server);
+    server.proxyHub = proxyHub;
+    if (config.hub.clients.length > 0) {
+      server.logSystem(`[Hub] Master mode — allowlist: ${config.hub.clients.map(c => c.name).join(", ")}`);
+    } else {
+      server.logSystem(`[Hub] Master mode — open (no [[hub.clients]] allowlist)`);
+    }
+  }
+
+  // ── SSH Tunnels ──────────────────────────────────────────────
+  let sshTunnels: SshTunnelManager | null = null;
+  if (config.ssh_tunnels.enabled && config.ssh_tunnels.tunnels.length > 0) {
+    server.logSystem(`[SshTunnels] Starting ${config.ssh_tunnels.tunnels.length} SSH tunnel(s)`);
+    sshTunnels = new SshTunnelManager(config.ssh_tunnels);
+    sshTunnels.onTunnelState = (name, state) => {
+      server.logSystem(`[SshTunnels] ${name}: ${state}`);
+      server.broadcastVmStatus(`tunnel:${name}`, state);
+    };
+    sshTunnels.start();
+  }
+
   server.logSystem(`Hex-Bots v${VERSION}`);
   server.logSystem("Loading saved sessions...");
 
@@ -887,7 +946,10 @@ async function main(): Promise<void> {
 
   // Periodic commander advisory evaluation (every 3 minutes)
   intervals.push(setInterval(() => {
-    const statuses = [...bots.values()].map(b => b.status());
+    // Combine local bots + remote VM bots (hub master sees the whole fleet)
+    const localStatuses = [...bots.values()].map(b => b.status());
+    const remoteStatuses = (server.remoteBots as BotStatus[]);
+    const statuses = [...localStatuses, ...remoteStatuses];
     const runningCount = statuses.filter(s => s.state === "running").length;
     if (runningCount === 0) return; // Skip if no bots are running
     const goals = goalsStore.loadGoals();
@@ -973,6 +1035,8 @@ async function main(): Promise<void> {
     catalogStore.flush();
     logger.destroy();
     db.close();
+    sshTunnels?.stopAll();
+    server.proxyHub?.stopAll();
     server.stop();
     process.exit(0);
   });

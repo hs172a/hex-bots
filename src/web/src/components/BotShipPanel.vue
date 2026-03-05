@@ -98,7 +98,7 @@
               <option value="refined">Refined</option>
               <option value="">Others</option>
             </select>
-            <button @click="execCommand('view_market')" :disabled="shipActionLoading" class="btn btn-secondary text-xs py-0 px-2">🔄</button>
+            <button @click="refreshMarket()" :disabled="shipActionLoading" class="btn btn-secondary text-xs py-0 px-2">🔄</button>
           </div>
         </div>
         <div v-if="filteredShopItems.length === 0" class="text-xs text-space-text-dim text-center py-2">No items. Click 🔄 to load market.</div>
@@ -237,6 +237,11 @@ const shipCatalogEntry = computed(() => {
   ) || null;
 });
 
+function refreshMarket() {
+  const params = shopFilter.value && shopFilter.value !== 'all' ? { category: shopFilter.value } : undefined;
+  execCommand('view_market', params);
+}
+
 function execCommand(command: string, params?: any) {
   const username = currentBot.value?.username || props.bot.username;
   if (!username) return;
@@ -263,8 +268,15 @@ function processExecResult(command: string, data: any) {
       break;
     }
     case 'view_market': {
-      const items = data.market || data.items || data.listings || (Array.isArray(data) ? data : []);
-      marketItems.value = items;
+      const raw: any[] = data.items || data.summary || data.market || data.listings || (Array.isArray(data) ? data : []);
+      // Normalize compact summary fields (best_buy/best_sell) → sell_price/buy_price
+      marketItems.value = raw.map((i: any) => ({
+        ...i,
+        sell_price: i.sell_price ?? i.best_buy ?? 0,
+        buy_price:  i.buy_price  ?? i.best_sell ?? 0,
+        sell_quantity: i.sell_quantity ?? i.quantity ?? 0,
+        buy_quantity:  i.buy_quantity  ?? i.quantity ?? 0,
+      }));
       break;
     }
     case 'install_mod':

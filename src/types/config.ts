@@ -11,6 +11,8 @@ import { z } from "zod/v3";
 export const ServerConfigSchema = z.object({
   port: z.number().default(3000),
   host: z.string().default("localhost"),
+  /** When false, the Vue SPA is not served (use on client VMs in hub mode). */
+  serve_ui: z.boolean().default(true),
 });
 
 // ── Fleet Config ──
@@ -102,6 +104,63 @@ export const StockTargetSchema = z.object({
 
 export type StockTarget = z.infer<typeof StockTargetSchema>;
 
+// ── Hub Config (centralized UI proxy) ──
+
+export const HubClientSchema = z.object({
+  /** Friendly name for this VM (used as vm tag in UI). */
+  name: z.string(),
+  /** Shared secret the client VM must supply in ?hub_key= when connecting. Leave empty to skip auth. */
+  api_key: z.string().default(""),
+});
+
+export const HubConfigSchema = z.object({
+  /** standalone = default; master = accept remote VM connections; client = connect to master hub. */
+  mode: z.enum(["standalone", "master", "client"]).default("standalone"),
+  /** (client) Shared secret sent to master as ?hub_key= on WS connection. */
+  api_key: z.string().default(""),
+  /** (client) WebSocket URL of the master's hub endpoint. e.g. ws://92.5.16.98:3210 */
+  master_ws_url: z.string().default(""),
+  /** (master) Allowlist of permitted client VMs (name + optional api_key). */
+  clients: z.array(HubClientSchema).default([]),
+});
+
+export type HubConfig = z.infer<typeof HubConfigSchema>;
+export type HubClient = z.infer<typeof HubClientSchema>;
+
+// ── SSH Tunnels Config ──
+
+export const SshTunnelEntrySchema = z.object({
+  /** Friendly name shown in UI status. */
+  name: z.string(),
+  /** Master host address (IP or hostname) — clients SSH *to* this host. */
+  ssh_host: z.string(),
+  /** SSH user on the master host. */
+  ssh_user: z.string().default("root"),
+  /** Path to SSH identity file (no passphrase). */
+  ssh_key_file: z.string().default("~/.ssh/id_rsa"),
+  /**
+   * Tunnel direction:
+   *   "reverse" (-R) — client opens a port ON THE MASTER that forwards back here.
+   *                     Use for ProxyHub: master ProxyHub connects to ws://127.0.0.1:<remote_port>.
+   *   "forward" (-L) — client opens a LOCAL port that forwards to master's port.
+   *                     Use for DataSync: client reaches http://127.0.0.1:<local_port> → master's <remote_port>.
+   */
+  direction: z.enum(["reverse", "forward"]).default("reverse"),
+  /** Port on the MASTER side (opened on master for reverse; destination for forward). */
+  remote_port: z.number().int().default(3210),
+  /** Port on the CLIENT side (local service for reverse; local listener for forward). */
+  local_port: z.number().int(),
+});
+
+export const SshTunnelsConfigSchema = z.object({
+  /** Enable automatic SSH tunnel management on startup. */
+  enabled: z.boolean().default(false),
+  tunnels: z.array(SshTunnelEntrySchema).default([]),
+});
+
+export type SshTunnelsConfig = z.infer<typeof SshTunnelsConfigSchema>;
+export type SshTunnelEntry = z.infer<typeof SshTunnelEntrySchema>;
+
 // ── DataSync Config (shared game knowledge across VMs) ──
 
 export const DataSyncConfigSchema = z.object({
@@ -145,6 +204,8 @@ export const AppConfigSchema = z.object({
   commander: CommanderConfigSchema.default({}),
   economy: EconomyConfigSchema.default({}),
   datasync: DataSyncConfigSchema.default({}),
+  hub: HubConfigSchema.default({}),
+  ssh_tunnels: SshTunnelsConfigSchema.default({}),
   goals: z.array(GoalSchema).default([]),
   inventory_targets: z.array(StockTargetSchema).default([]),
 });

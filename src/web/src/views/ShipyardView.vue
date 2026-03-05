@@ -1001,7 +1001,7 @@ function sellShip(shipId: string) {
 }
 
 function shipImageUrl(classId: string): string {
-  return `https://www.spacemolt.com/_next/image?url=%2Fimages%2Fships%2Fcatalog%2F${encodeURIComponent(classId)}.webp&w=640&q=75`;
+  return `https://www.spacemolt.com/_next/image?url=%2Fimages%2Fships%2Fcatalog%2F${encodeURIComponent(classId)}.webp&w=3840&q=75&dpl=dpl_3xKCE9uBFEai3pTovv3CN2veMfu9`;
 }
 
 function getCommissionQuote() {

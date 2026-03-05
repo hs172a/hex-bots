@@ -11,29 +11,12 @@
           :class="statsPeriod === p.id ? 'bg-space-accent text-white' : 'bg-space-card text-space-text-dim hover:text-space-text hover:bg-space-row-hover'"
         >{{ p.label }}</button>
       </div>
-      <!-- Pool selector -->
-      <div class="flex items-center gap-2 ml-auto">
-        <span class="text-xs text-space-text-dim">Pool:</span>
-        <div class="inline-flex border border-space-border rounded-md overflow-hidden">
-          <button
-            @click="selectedPool = null"
-            class="px-3 py-1.5 text-xs font-medium border-r border-space-border transition-colors"
-            :class="selectedPool === null ? 'bg-space-accent text-white' : 'bg-space-card text-space-text-dim hover:text-space-text hover:bg-space-row-hover'"
-          >Current</button>
-          <button
-            v-for="pool in otherPools" :key="pool"
-            @click="selectedPool = pool"
-            class="px-3 py-1.5 text-xs font-medium border-r border-space-border last:border-r-0 transition-colors"
-            :class="selectedPool === pool ? 'bg-space-accent text-white' : 'bg-space-card text-space-text-dim hover:text-space-text hover:bg-space-row-hover'"
-          >{{ pool }}</button>
-          <button
-            @click="loadAllPools"
-            :disabled="botStore.allPoolsLoading"
-            class="px-3 py-1.5 text-xs font-medium bg-space-card text-space-text-dim hover:text-space-text hover:bg-space-row-hover transition-colors"
-            title="Load stats from all pools"
-          >{{ botStore.allPoolsLoading ? '⏳' : '🔄' }}</button>
-        </div>
-      </div>
+      <button
+        @click="botStore.fetchAllPoolsStats()"
+        :disabled="botStore.allPoolsLoading"
+        class="ml-auto btn btn-secondary px-3 py-1 text-xs"
+        title="Refresh stats from all pools"
+      >{{ botStore.allPoolsLoading ? '⏳ Loading…' : '🔄 Refresh' }}</button>
     </div>
 
     <!-- Fleet Totals -->
@@ -61,8 +44,8 @@
       </div>
     </div>
 
-    <!-- Mission Analytics (current pool only) -->
-    <div v-if="!selectedPool" class="bg-space-card border border-space-border rounded-lg">
+    <!-- Mission Analytics -->
+    <div class="bg-space-card border border-space-border rounded-lg">
       <div class="px-3 py-2 border-b border-space-border flex items-center justify-between">
         <span class="text-xs font-semibold text-space-text-dim uppercase">🎯 Mission Analytics</span>
         <div class="flex items-center gap-3">
@@ -120,14 +103,8 @@
       </div>
     </div>
 
-    <!-- Other-pool notice -->
-    <div v-if="selectedPool" class="flex items-center gap-2 px-3 py-2 bg-[#0d1a0d] border border-[#1a3a1a] rounded-lg text-xs text-space-green">
-      <span class="text-base">ℹ️</span>
-      <span>Viewing <strong>{{ selectedPool }}</strong> pool — showing economic stats from saved file. Live data (skills, credits/hr, missions) is only available for the <strong>current</strong> pool.</span>
-    </div>
-
-    <!-- Credits/hr row (current pool only) -->
-    <div v-if="!selectedPool" class="bg-space-card border border-space-border rounded-lg">
+    <!-- Credits/hr row -->
+    <div class="bg-space-card border border-space-border rounded-lg">
       <div class="px-3 py-2 border-b border-space-border flex items-center justify-between">
         <span class="text-xs font-semibold text-space-text-dim uppercase">💰 Credits / Hour (rolling 1h)</span>
         <span class="text-[11px] text-space-text-dim">Live — updates with each bot status</span>
@@ -152,8 +129,7 @@
       <div class="flex-1 bg-space-card border border-space-border rounded-lg flex flex-col overflow-hidden">
         <div class="px-3 py-2 border-b border-space-border flex items-center gap-2">
           <span class="text-xs font-semibold text-space-text-dim uppercase">Per-Bot Breakdown</span>
-          <span v-if="selectedPool" class="text-[11px] badge badge-yellow">{{ selectedPool }}</span>
-        </div>
+          </div>
         <div class="flex-1 overflow-auto scrollbar-dark">
           <table class="w-full text-sm">
             <thead class="sticky top-0 bg-space-card">
@@ -211,8 +187,8 @@
       </div>
     </div>
 
-    <!-- Skills Breakdown (current pool only — live data from bot status) -->
-    <div v-if="!selectedPool" class="bg-space-card border border-space-border rounded-lg">
+    <!-- Skills Breakdown -->
+    <div class="bg-space-card border border-space-border rounded-lg">
       <div class="px-3 py-2 border-b border-space-border flex items-center justify-between">
         <span class="text-xs font-semibold text-space-text-dim uppercase">🎓 Skill Levels</span>
         <span class="text-[11px] text-space-text-dim">From last status update</span>
@@ -238,32 +214,13 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, onMounted, onUnmounted, watch } from 'vue';
+import { ref, computed, onMounted, onUnmounted } from 'vue';
 import { useBotStore } from '../stores/botStore';
 
 // ── Mission Analytics state ─────────────────────────────
 
 const botStore = useBotStore();
 const statsPeriod = ref<'today' | 'week' | 'all'>('today');
-const selectedPool = ref<string | null>(null);
-
-const currentPoolKey = computed(() => botStore.myPoolName || Object.keys(botStore.allPoolsStats)[0] || '');
-
-const otherPools = computed(() =>
-  Object.keys(botStore.allPoolsStats).filter(p => p !== currentPoolKey.value)
-);
-
-async function loadAllPools() {
-  await botStore.fetchAllPoolsStats();
-  if (selectedPool.value && !otherPools.value.includes(selectedPool.value)) {
-    selectedPool.value = null;
-  }
-}
-
-// Auto-switch to All Time when selecting another pool — today/week may be all zeros
-watch(selectedPool, (val) => {
-  if (val !== null) statsPeriod.value = 'all';
-});
 
 let statsRefreshTimer: ReturnType<typeof setInterval> | null = null;
 onMounted(() => {
@@ -378,22 +335,29 @@ function aggregateStats(botDaily: Record<string, any> | undefined, days: number)
 
 const periodDays = computed(() => statsPeriod.value === 'today' ? 1 : statsPeriod.value === 'week' ? 7 : 0);
 
+// Aggregate stats from ALL pools (local statsDaily takes precedence over DataSync copies)
 const activeStatsSource = computed<Record<string, any>>(() => {
-  if (selectedPool.value && botStore.allPoolsStats[selectedPool.value]) {
-    return botStore.allPoolsStats[selectedPool.value];
+  const merged: Record<string, any> = {};
+  // Start with all remote pools from DataSync
+  for (const poolStats of Object.values(botStore.allPoolsStats)) {
+    for (const [bot, daily] of Object.entries(poolStats as Record<string, any>)) {
+      merged[bot] = daily;
+    }
   }
-  return botStore.statsDaily;
+  // Overlay local statsDaily (most up-to-date for bots on this VM)
+  for (const [bot, daily] of Object.entries(botStore.statsDaily)) {
+    merged[bot] = daily;
+  }
+  return merged;
 });
 
 const botRows = computed(() => {
   const days = periodDays.value;
   const src = activeStatsSource.value;
+  // Include all known bots (live + those only in stats files)
   const nameSet = new Set(Object.keys(src));
-  if (!selectedPool.value) {
-    for (const b of botStore.bots) nameSet.add(b.username);
-  }
-  const names = [...nameSet].sort();
-  return names.map(name => ({
+  for (const b of botStore.bots) nameSet.add(b.username);
+  return [...nameSet].sort().map(name => ({
     name,
     ...aggregateStats(src[name], days),
   }));

@@ -419,11 +419,9 @@ export class DataSyncClient {
 
     console.log(`[DataSync] Client connecting to master: ${master_url}`);
 
-    // Initial startup pull: full topology + full catalog
-    await this.pullTopologySince(new Date(0));
-    await this.pullCatalog();
-    this.lastFastPullAt = new Date();
-    this.lastSlowPullAt = new Date();
+    // Initial startup pull: full topology + full catalog.
+    // Retries with backoff if the SSH tunnel isn't up yet.
+    await this.initialPullWithRetry();
 
     // Periodic pull: fast data (market/pirates) + slow data (topology) combined
     const pullMs = (pull_interval_sec || 300) * 1000;
@@ -487,6 +485,28 @@ export class DataSyncClient {
     if (this.pullTimer) { clearInterval(this.pullTimer); this.pullTimer = null; }
     if (this.codeSyncTimer) { clearInterval(this.codeSyncTimer); this.codeSyncTimer = null; }
     console.log("[DataSync] Client stopped");
+  }
+
+  /** Initial startup pull with exponential backoff — tolerates SSH tunnel not ready yet. */
+  private async initialPullWithRetry(): Promise<void> {
+    const delays = [3, 6, 12, 24, 60];
+    let attempt = 0;
+    while (true) {
+      try {
+        await this.pullTopologySince(new Date(0));
+        await this.pullCatalog();
+        this.lastFastPullAt = new Date();
+        this.lastSlowPullAt = new Date();
+        console.log("[DataSync] Initial pull complete");
+        return;
+      } catch (e) {
+        const msg = e instanceof Error ? e.message : String(e);
+        const delay = delays[Math.min(attempt, delays.length - 1)];
+        attempt++;
+        console.warn(`[DataSync] Client start error: ${msg}\n  Retrying in ${delay}s (attempt ${attempt})...`);
+        await new Promise(r => setTimeout(r, delay * 1000));
+      }
+    }
   }
 
   /**

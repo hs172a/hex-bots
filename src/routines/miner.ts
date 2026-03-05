@@ -878,11 +878,13 @@ export const minerRoutineV2: Routine = async function* (ctx: RoutineContext) {
         ctx.log("error", "Failed to return to home system — docking at nearest station");
       }
 
-      // Refresh system info after returning home
-      const { pois: homePois } = await getSystemInfo(ctx);
-      cachedSystemInfo = { pois: homePois, systemId: homeSystem };
-      // Prefer the exact home base station; fall back to any station in home system
-      if (homeStationId) {
+      // Refresh system info based on where the bot actually ended up
+      const { pois: homePois, systemId: actualSystemId } = await getSystemInfo(ctx);
+      cachedSystemInfo = { pois: homePois, systemId: actualSystemId || bot.system };
+      lastSystemRefresh = Date.now();
+      if (actualSystemId) bot.system = actualSystemId;
+      // Use home station only if we actually reached the home system
+      if (arrived && homeStationId) {
         stationPoi = { id: homeStationId, name: homeStationId };
       } else {
         const foundStation = findStation(homePois);
@@ -899,11 +901,35 @@ export const minerRoutineV2: Routine = async function* (ctx: RoutineContext) {
       const travelStationResp = await bot.exec("travel", { target_poi: stationPoi.id });
       if (travelStationResp.error && !travelStationResp.error.message.includes("already")) {
         ctx.log("error", `Travel to station failed: ${travelStationResp.error.message}`);
+        // wrong_system: stationPoi is from a different system — find one in the current system
+        if (travelStationResp.error.message.includes("wrong_system") || travelStationResp.error.message.includes("different system")) {
+          const { pois: curPois, systemId: curSysId } = await getSystemInfo(ctx);
+          if (curSysId) bot.system = curSysId;
+          cachedSystemInfo = { pois: curPois, systemId: curSysId || bot.system };
+          lastSystemRefresh = Date.now();
+          const curStation = findStation(curPois);
+          if (curStation) {
+            stationPoi = { id: curStation.id, name: curStation.name };
+            const retryTravel = await bot.exec("travel", { target_poi: curStation.id });
+            if (retryTravel.error && !retryTravel.error.message.includes("already")) {
+              ctx.log("error", `Fallback travel to ${curStation.name} failed: ${retryTravel.error.message}`);
+              stationPoi = null;
+            }
+          } else {
+            ctx.log("error", "No station in current system — skipping dock");
+            stationPoi = null;
+          }
+        }
       }
     }
 
     // ── Dock ──
     yield "dock";
+    if (!stationPoi) {
+      ctx.log("error", "No reachable station — skipping unload cycle, retrying in 15s");
+      await sleep(15000);
+      continue;
+    }
     const dockResp = await bot.exec("dock");
     if (dockResp.error && !dockResp.error.message.includes("already")) {
       ctx.log("error", `Dock failed: ${dockResp.error.message}`);

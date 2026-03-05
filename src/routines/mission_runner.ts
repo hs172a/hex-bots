@@ -339,15 +339,19 @@ async function handleCargoFull(ctx: RoutineContext, keepItemId: string): Promise
     } else {
       // No direct buyer — create a sell order to free cargo space
       let price = 5;
-      const mktResp = await bot.exec("view_market");
+      // Use item_id param to get full order book depth for this specific item
+      const mktResp = await bot.exec("view_market", { item_id: item.itemId });
       if (!mktResp.error && mktResp.result) {
         const mkt = mktResp.result as Record<string, unknown>;
-        const entries = (Array.isArray(mkt) ? mkt : (mkt.market as unknown[])) as Array<Record<string, unknown>>;
-        const entry = (entries || []).find(e => (e.item_id as string) === item.itemId);
+        const entries = (Array.isArray(mkt) ? mkt : (mkt.market as unknown[]) || (mkt.items as unknown[])) as Array<Record<string, unknown>>;
+        const entry = (entries || []).find(e => (e.item_id as string) === item.itemId) || (entries?.[0] as Record<string, unknown> | undefined);
         if (entry) {
           const buyOrders = (entry.buy_orders as Array<Record<string, unknown>>) || [];
           if (buyOrders.length > 0) {
             price = Math.max(...buyOrders.map(o => (o.price as number) || 0));
+          } else {
+            // Compact summary fallback: best_sell = best price you can sell for
+            price = (entry.best_sell as number) || (entry.buy_price as number) || price;
           }
         }
       }
@@ -386,15 +390,19 @@ async function* executeObjective(
       if (settings.preferBuying && obj.type !== "mine") {
         yield "try_buy";
         await ensureDocked(ctx);
-        const mktResp = await bot.exec("view_market");
+        // Use item_id param to get full order book depth for this specific item
+        const mktResp = await bot.exec("view_market", { item_id: obj.target });
         if (!mktResp.error && mktResp.result) {
           const mkt = mktResp.result as Record<string, unknown>;
-          const entries = (Array.isArray(mkt) ? mkt : (mkt.market as unknown[])) as Array<Record<string, unknown>>;
-          const entry = (entries || []).find(e => (e.item_id as string) === obj.target);
+          const entries = (Array.isArray(mkt) ? mkt : (mkt.market as unknown[]) || (mkt.items as unknown[])) as Array<Record<string, unknown>>;
+          const entry = (entries || []).find(e => (e.item_id as string) === obj.target) || (entries?.[0] as Record<string, unknown> | undefined);
           if (entry) {
             const sellOrders = ((entry.sell_orders as Array<Record<string, unknown>>) || [])
               .sort((a, b) => (a.price as number) - (b.price as number));
-            const cheapest = sellOrders[0];
+            // Fallback for compact summary: best_buy = best price we can buy at
+            const cheapestPrice = sellOrders[0]?.price as number || (entry.best_buy as number) || (entry.sell_price as number) || 0;
+            const cheapestQty = (sellOrders[0]?.quantity as number) || (entry.quantity as number) || obj.quantity;
+            const cheapest = cheapestPrice > 0 ? { price: cheapestPrice, quantity: cheapestQty } : null;
             if (cheapest) {
               const unitPrice = cheapest.price as number;
               if (!settings.maxBuyPrice || unitPrice <= settings.maxBuyPrice) {

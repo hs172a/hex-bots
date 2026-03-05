@@ -26,6 +26,34 @@
     <!-- Settings Content -->
     <div class="flex-1 bg-space-card border border-space-border rounded-lg p-5 overflow-auto scrollbar-dark">
 
+      <!-- VM Pool Selector (only shown in hub master mode with connected VMs, not on hub tab) -->
+      <div v-if="botStore.vmList.length > 0 && activeTab !== 'hub'" class="flex items-center gap-1.5 mb-4 pb-3 border-b border-space-border flex-wrap">
+        <span class="text-[11px] text-space-text-dim uppercase tracking-wider mr-0.5">Pool:</span>
+        <button
+          @click="selectedVm = 'local'"
+          class="px-2.5 py-0.5 rounded text-xs font-medium transition-colors border"
+          :class="selectedVm === 'local'
+            ? 'bg-space-accent text-black border-space-accent'
+            : 'text-space-text-dim border-space-border hover:text-space-text hover:border-space-text-dim'"
+        >local</button>
+        <button
+          v-for="vm in botStore.vmList"
+          :key="vm"
+          @click="selectedVm = vm"
+          class="px-2.5 py-0.5 rounded text-xs font-medium transition-colors border"
+          :class="selectedVm === vm
+            ? 'bg-space-accent text-black border-space-accent'
+            : 'text-space-text-dim border-space-border hover:text-space-text hover:border-space-text-dim'"
+        >
+          {{ vm }}
+          <span v-if="botStore.vmStatuses[vm] !== 'online'" class="ml-1 opacity-50 text-[10px]">●</span>
+          <span v-else-if="!botStore.vmSettings[vm]" class="ml-1 opacity-50 text-[10px]">(no data)</span>
+        </button>
+        <span v-if="selectedVm !== 'local'" class="ml-2 text-[11px] text-yellow-400/70 italic">
+          editing settings for <strong class="text-yellow-400">{{ selectedVm }}</strong> — saved remotely
+        </span>
+      </div>
+
       <!-- General Settings -->
       <div v-if="activeTab === 'general'">
         <h3 class="text-[15px] font-semibold text-space-text-bright mb-1">General Settings</h3>
@@ -102,6 +130,95 @@
               <tr><td class="py-1.5 pr-4 text-space-cyan font-medium">ai_commander</td><td class="pr-4 text-orange-400">✅ fleet LLM</td><td class="pr-4">All bots</td><td>One LLM brain controls the entire fleet</td></tr>
             </tbody>
           </table>
+        </div>
+      </div>
+
+      <!-- Hub Settings -->
+      <div v-else-if="activeTab === 'hub'">
+        <h3 class="text-[15px] font-semibold text-space-text-bright mb-1">🌐 Hub Settings</h3>
+        <p class="text-xs text-space-text-dim mb-5">Centralized UI proxy — manage bots across multiple VMs from one dashboard. Master VM serves the Vue SPA; client VMs connect OUT to master's <code class="text-space-accent">/hub</code> WebSocket endpoint (no reverse tunnel needed). Configure in <code class="text-space-accent">config.toml</code> and restart to apply.</p>
+
+        <!-- VM Connection Status table -->
+        <div v-if="botStore.vmList.length > 0" class="mb-6">
+          <div class="text-sm text-space-text mb-2 font-medium">Connected Remote VMs</div>
+          <table class="w-full text-xs border-collapse">
+            <thead>
+              <tr class="text-space-text-dim border-b border-[#21262d]">
+                <th class="py-2 pr-6 text-left font-medium">Name</th>
+                <th class="py-2 pr-6 text-left font-medium">Status</th>
+                <th class="py-2 pr-6 text-left font-medium">Local Bots</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr v-for="vm in botStore.vmList" :key="vm" class="border-b border-[#21262d]">
+                <td class="py-2 pr-6 text-space-text font-medium font-mono">{{ vm }}</td>
+                <td class="py-2 pr-6">
+                  <span
+                    class="px-2 py-0.5 rounded border text-[11px] font-medium"
+                    :class="vmBadgeClass(botStore.vmStatuses[vm])"
+                  >{{ botStore.vmStatuses[vm] ?? 'offline' }}</span>
+                </td>
+                <td class="py-2 pr-6 text-space-text-dim">
+                  {{ botStore.bots.filter(b => b.vm === vm).length }} bot(s)
+                </td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+
+        <!-- Standalone notice -->
+        <div v-else class="mb-6 p-4 rounded bg-[#0d1117] border border-[#21262d] text-xs">
+          <div class="font-semibold text-space-text mb-2">Hub mode not active</div>
+          <p class="text-space-text-dim mb-2">This instance is running in <strong class="text-space-text">standalone</strong> mode. To enable the hub, set <code class="text-space-accent">[hub] mode = &quot;master&quot;</code> in <code class="text-space-accent">config.toml</code>, then restart. Client VMs connect directly to this master's <code class="text-space-accent">/hub</code> WebSocket endpoint.</p>
+          <p class="text-space-text-dim">See <code class="text-space-accent">config.toml.example</code> for full documentation and architecture diagrams.</p>
+        </div>
+
+        <!-- Config quick reference -->
+        <div class="mt-2 p-4 rounded bg-[#0d1117] border border-[#21262d] text-xs mb-4">
+          <div class="font-semibold text-space-text mb-2">Master VM config (Oracle Cloud / public IP)</div>
+          <pre class="text-space-text-dim leading-relaxed overflow-x-auto text-[11px] whitespace-pre">[hub]
+mode = &quot;master&quot;
+
+# Optional allowlist — clients connect IN with vm_name + hub_key
+[[hub.clients]]
+name    = &quot;asus&quot;
+api_key = &quot;hub_secret&quot;
+
+[[hub.clients]]
+name    = &quot;volt&quot;
+api_key = &quot;hub_secret&quot;</pre>
+        </div>
+        <div class="p-4 rounded bg-[#0d1117] border border-[#21262d] text-xs mb-4">
+          <div class="font-semibold text-space-text mb-2">Client VM config (any machine, even behind NAT)</div>
+          <pre class="text-space-text-dim leading-relaxed overflow-x-auto text-[11px] whitespace-pre">[server]
+serve_ui = false
+
+[hub]
+mode           = &quot;client&quot;
+master_ws_url  = &quot;ws://&lt;master-public-ip&gt;:3210&quot;  # direct connection to master
+api_key        = &quot;hub_secret&quot;
+
+# Only DataSync needs SSH tunnel (forward tunnel to master's port 4001)
+[ssh_tunnels]
+enabled = true
+
+[[ssh_tunnels.tunnels]]
+name         = &quot;datasync&quot;
+direction    = &quot;forward&quot;
+ssh_host     = &quot;&lt;master-public-ip&gt;&quot;
+ssh_user     = &quot;ubuntu&quot;
+ssh_key_file = &quot;~/.ssh/id_rsa&quot;
+local_port   = 4001   # client reaches http://127.0.0.1:4001
+remote_port  = 4001   # master's DataSync HTTP port</pre>
+        </div>
+        <div class="p-4 rounded bg-[#0d1117] border border-[#21262d] text-xs">
+          <div class="font-semibold text-space-text mb-2">How it works</div>
+          <div class="text-space-text-dim space-y-1">
+            <div>1. Master listens at <code class="text-space-accent">ws://master-ip:3210/hub</code></div>
+            <div>2. Client opens: <code class="text-space-accent">ws://master-ip:3210/hub?vm_name=asus&amp;hub_key=...</code></div>
+            <div>3. Master's ProxyHub registers the session — full bi-directional messaging</div>
+            <div class="mt-2 text-green-400/80">No SSH reverse tunnel needed. Works from any NAT, any client IP.</div>
+          </div>
         </div>
       </div>
 
@@ -1158,8 +1275,24 @@ import { useBotStore } from '../stores/botStore';
 const botStore = useBotStore();
 const activeTab = ref('general');
 
+/** Selected pool/VM for settings: 'local' = this server, otherwise a remote VM name */
+const selectedVm = ref('local');
+
+/** Settings object for the currently selected VM */
+const currentSettings = computed(() =>
+  selectedVm.value === 'local'
+    ? botStore.settings
+    : (botStore.vmSettings[selectedVm.value] ?? {})
+);
+
+/** Save settings to the currently selected VM (local or remote via ProxyHub) */
+function doSave(routine: string, s: Record<string, any>) {
+  botStore.saveSettings(routine, s, selectedVm.value === 'local' ? undefined : selectedVm.value);
+}
+
 const settingsTabs = [
   { id: 'general',        name: '⚙️ General',        group: 'System' },
+  { id: 'hub',            name: '🌐 Hub',             group: 'System' },
   { id: 'alerts',         name: '🔔 Alerts',          group: 'System' },
   { id: 'coordinator',    name: '📊 Coordinator',     group: 'Fleet' },
   { id: 'rescue',         name: '⛽ Fuel Rescue',     group: 'Fleet' },
@@ -1570,7 +1703,7 @@ const stationOptions = computed(() => {
 });
 
 // ── Sync forms from server settings ─────────────────────────
-watch(() => botStore.settings, (s) => {
+function initForms(s: Record<string, any>) {
   if (s.general) {
     generalForm.value.factionDonatePct = s.general.factionDonatePct ?? 10;
     const fSys = s.general.factionStorageSystem || '';
@@ -1790,13 +1923,28 @@ watch(() => botStore.settings, (s) => {
       perBotOre[bot.username] = s[bot.username].targetOre || '';
     }
   }
+}
+
+// Apply local settings immediately and on every server update
+watch(() => botStore.settings, s => {
+  if (selectedVm.value === 'local') initForms(s);
 }, { immediate: true, deep: true });
+
+// Reload forms whenever the user picks a different VM pool
+watch(selectedVm, vm => {
+  initForms(vm === 'local' ? botStore.settings : (botStore.vmSettings[vm] ?? {}));
+});
+
+// Reload forms when fresh vmSettings arrive for the currently selected VM
+watch(() => botStore.vmSettings, all => {
+  if (selectedVm.value !== 'local') initForms(all[selectedVm.value] ?? {});
+}, { deep: true });
 
 // ── Save functions ──────────────────────────────────────────
 function saveGeneral() {
   const [factionStorageSystem, factionStorageStation] = generalForm.value.factionStation
     ? generalForm.value.factionStation.split('|') : ['', ''];
-  botStore.saveSettings('general', {
+  doSave('general', {
     factionDonatePct: generalForm.value.factionDonatePct,
     factionStorageSystem, factionStorageStation,
     enableApiLogging: generalForm.value.enableApiLogging,
@@ -1807,7 +1955,7 @@ function saveGeneral() {
 function saveMiner() {
   const primary = splitDeposit(minerForm.value.depositPrimary);
   const secondary = splitDeposit(minerForm.value.depositSecondary);
-  botStore.saveSettings('miner', {
+  doSave('miner', {
     targetOre: minerForm.value.targetOre,
     system: minerForm.value.system,
     depositBot: primary.depositBot,
@@ -1822,7 +1970,7 @@ function saveMiner() {
   // Save per-bot ore overrides
   for (const bot of minerBots.value) {
     const oreVal = perBotOre[bot.username] || '';
-    botStore.saveSettings(bot.username, { targetOre: oreVal });
+    doSave(bot.username, { targetOre: oreVal });
   }
 }
 
@@ -1834,7 +1982,7 @@ function addCraftLimit() {
 }
 
 function saveCrafter() {
-  botStore.saveSettings('crafter', {
+  doSave('crafter', {
     craftLimits: { ...crafterForm.value.craftLimits },
     refuelThreshold: crafterForm.value.refuelThreshold,
     repairThreshold: crafterForm.value.repairThreshold,
@@ -1845,13 +1993,13 @@ function saveCrafter() {
   });
 }
 
-function saveRescue() { botStore.saveSettings('rescue', { ...rescueForm.value }); }
-function saveExplorer() { botStore.saveSettings('explorer', { ...explorerForm.value }); }
-function saveCoordinator() { botStore.saveSettings('coordinator', { ...coordForm.value }); }
-function saveTrader() { botStore.saveSettings('trader', { ...traderForm.value }); }
+function saveRescue() { doSave('rescue', { ...rescueForm.value }); }
+function saveExplorer() { doSave('explorer', { ...explorerForm.value }); }
+function saveCoordinator() { doSave('coordinator', { ...coordForm.value }); }
+function saveTrader() { doSave('trader', { ...traderForm.value }); }
 
 function saveGatherer() {
-  botStore.saveSettings('gatherer', {
+  doSave('gatherer', {
     refuelThreshold: gathererForm.value.refuelThreshold,
     repairThreshold: gathererForm.value.repairThreshold,
   });
@@ -1860,13 +2008,13 @@ function saveGatherer() {
 function saveCleanup() {
   const [homeSystem, homeStation] = cleanupForm.value.homeStation
     ? cleanupForm.value.homeStation.split('|') : ['', ''];
-  botStore.saveSettings('cleanup', { homeSystem, homeStation });
+  doSave('cleanup', { homeSystem, homeStation });
 }
 
 function saveGasHarvester() {
   const primary = splitDeposit(gasForm.value.depositPrimary);
   const secondary = splitDeposit(gasForm.value.depositSecondary);
-  botStore.saveSettings('gas_harvester', {
+  doSave('gas_harvester', {
     targetGas: gasForm.value.targetGas,
     system: gasForm.value.system,
     depositBot: primary.depositBot,
@@ -1881,7 +2029,7 @@ function saveGasHarvester() {
 function saveIceHarvester() {
   const primary = splitDeposit(iceForm.value.depositPrimary);
   const secondary = splitDeposit(iceForm.value.depositSecondary);
-  botStore.saveSettings('ice_harvester', {
+  doSave('ice_harvester', {
     targetIce: iceForm.value.targetIce,
     system: iceForm.value.system,
     depositBot: primary.depositBot,
@@ -1896,7 +2044,7 @@ function saveIceHarvester() {
 function saveSalvager() {
   const primary = splitDeposit(salvagerForm.value.depositPrimary);
   const secondary = splitDeposit(salvagerForm.value.depositSecondary);
-  botStore.saveSettings('salvager', {
+  doSave('salvager', {
     system: salvagerForm.value.system,
     homeSystem: salvagerForm.value.homeSystem,
     depositMode: primary.depositMode,
@@ -1907,19 +2055,13 @@ function saveSalvager() {
   });
 }
 
-function saveCombatSelector() {
-  botStore.saveSettings('combat_selector', { ...combatSelectorForm.value });
-}
-
-function saveHunter() {
-  botStore.saveSettings('hunter', { ...hunterForm.value });
-}
-
-function saveScout() { botStore.saveSettings('scout', { ...scoutForm.value }); }
-function saveReturnHome() { botStore.saveSettings('return_home', { ...returnHomeForm.value }); }
-function saveQuartermaster() { botStore.saveSettings('quartermaster', { ...quartermasterForm.value }); }
+function saveCombatSelector() { doSave('combat_selector', { ...combatSelectorForm.value }); }
+function saveHunter() { doSave('hunter', { ...hunterForm.value }); }
+function saveScout() { doSave('scout', { ...scoutForm.value }); }
+function saveReturnHome() { doSave('return_home', { ...returnHomeForm.value }); }
+function saveQuartermaster() { doSave('quartermaster', { ...quartermasterForm.value }); }
 function saveMissionRunner() {
-  botStore.saveSettings('mission_runner', {
+  doSave('mission_runner', {
     missionTypes: missionRunnerForm.value.missionTypes,
     minDifficulty: missionRunnerForm.value.minDifficulty,
     maxDifficulty: missionRunnerForm.value.maxDifficulty,
@@ -1931,13 +2073,13 @@ function saveMissionRunner() {
     cycleDelayMs: missionRunnerForm.value.cycleDelayMs,
   });
 }
-function saveShipUpgrade() { botStore.saveSettings('ship_upgrade', { ...shipUpgradeForm.value }); }
-function saveFacilityManager() { botStore.saveSettings('facility_manager', { ...facilityManagerForm.value }); }
-function saveShipManager() { botStore.saveSettings('ship_manager', { ...shipManagerForm.value }); }
-function saveScavenger() { botStore.saveSettings('scavenger', { ...scavengerForm.value }); }
+function saveShipUpgrade() { doSave('ship_upgrade', { ...shipUpgradeForm.value }); }
+function saveFacilityManager() { doSave('facility_manager', { ...facilityManagerForm.value }); }
+function saveShipManager() { doSave('ship_manager', { ...shipManagerForm.value }); }
+function saveScavenger() { doSave('scavenger', { ...scavengerForm.value }); }
 
 function saveAlerts() {
-  botStore.saveSettings('alerts', {
+  doSave('alerts', {
     webhookUrl: alertsForm.value.webhookUrl,
     webhookType: alertsForm.value.webhookType,
     creditsTarget: alertsForm.value.creditsTarget,
@@ -1945,16 +2087,14 @@ function saveAlerts() {
   });
 }
 
-function savePiCommander() {
-  botStore.saveSettings('pi_commander', { ...piCommanderForm.value });
-}
+function savePiCommander() { doSave('pi_commander', { ...piCommanderForm.value }); }
+function saveAiCommander() { doSave('ai_commander', { ...aiCommanderForm.value }); }
+function saveAi() { doSave('ai', { ...aiForm.value }); }
 
-function saveAiCommander() {
-  botStore.saveSettings('ai_commander', { ...aiCommanderForm.value });
-}
-
-function saveAi() {
-  botStore.saveSettings('ai', { ...aiForm.value });
+function vmBadgeClass(state: string | undefined) {
+  if (state === 'online') return 'text-green-400 border-green-700/50 bg-green-900/20';
+  if (state === 'connecting') return 'text-yellow-400 border-yellow-700/50 bg-yellow-900/20';
+  return 'text-red-400 border-red-700/50 bg-red-900/20';
 }
 </script>
 

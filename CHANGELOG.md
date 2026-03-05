@@ -5,6 +5,34 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [1.9.5] - 2026-03-06
+
+### Changed
+
+- **Project renamed** to **Hex Bots Orchestrator** (`package.json`, page title, app header, README)
+- **README rewritten** — added Architecture section covering Standalone, Hub Master+Client, DataSync, and Commander Advisory modes with ASCII diagrams
+- **Stats View: unified fleet stats** (`StatsView.vue`):
+  - Removed VM pool selector — stats now always aggregate all pools into one unified view
+  - `activeStatsSource` merges all DataSync pools + local `statsDaily` (local takes precedence)
+  - All bots from all VMs appear in one Per-Bot Breakdown table and Fleet Totals
+  - Pool selector replaced by a single 🔄 Refresh button
+- **Commander Advisory: full fleet evaluation** (`botmanager.ts`):
+  - `evaluate()` now receives `[...localBots, ...server.remoteBots as BotStatus[]]`
+  - Suggestions cover bots on all connected VMs, not only the local VM
+- **`config.toml.example` updated**:
+  - `[commander]` and `[economy]` sections: removed "Future:" labels — both are implemented
+  - Added `serve_ui` to `[server]` section
+  - Added `reassignment_threshold` to commander config documentation
+  - Expanded `[datasync]` with full field reference for master and client modes (all timing intervals, `max_clock_skew_sec`, `code_sync_interval_sec`)
+  - Added `[[goals]]` and `[[inventory_targets]]` documentation sections
+
+### API Compatibility
+
+- **v0.176.1** — `view_market` returns full order book to direct API clients; compact summary (best prices + available_categories) applies only to MCP text interface. The compact-format fallbacks added in v0.174.x (`best_buy`, `best_sell`, `summary` key) remain as safe no-ops.
+- **v0.176.2** — Ship lore text formatting fixed in catalog; no code changes required.
+
+---
+
 ## [1.9.0] - 2026-03-05
 
 ### Added

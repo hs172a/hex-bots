@@ -5,7 +5,7 @@
       <div class="flex items-center gap-8">
         <h1 class="text-sm font-semibold text-space-text-bright tracking-wide py-2 flex items-center gap-2">
           <img src="/favicon.png" alt="" class="w-6 h-6">
-          Hex Bots
+          Hex Bots Orchestrator
           <span class="text-[11px] text-space-text-dim">v{{ version }}</span>
         </h1>
         
@@ -52,6 +52,23 @@
         >
           🔌 DataSync Offline
         </div>
+
+        <!-- Hub VM status badges -->
+        <template v-if="vmList.length > 0">
+          <div
+            v-for="vm in vmList"
+            :key="vm"
+            class="flex items-center gap-1 text-xs px-2 py-0.5 rounded border transition-colors"
+            :class="vmStateClass(vmStatuses[vm] ?? 'offline')"
+            :title="`Hub VM ${vm}: ${vmStatuses[vm] ?? 'offline'}`"
+          >
+            <span>🖥</span>
+            <span>{{ vm }}</span>
+            <span v-if="vmStatuses[vm] === 'online'">🟢</span>
+            <span v-else-if="vmStatuses[vm] === 'connecting'">🟡</span>
+            <span v-else>🔴</span>
+          </div>
+        </template>
 
         <!-- IP block warning -->
         <div
@@ -155,6 +172,16 @@ let reconnectDelay = 1000;
 // ── DataSync state ──
 const dataSyncOffline = computed(() => botStore.dataSyncOffline);
 const dataSyncMode = computed(() => botStore.dataSyncMode);
+
+// ── Hub VM states ──
+const vmStatuses = computed(() => botStore.vmStatuses);
+const vmList = computed(() => botStore.vmList);
+
+const vmStateClass = (state: string) => ({
+  'text-green-400 border-green-700/50 bg-green-900/20': state === 'online',
+  'text-yellow-400 border-yellow-700/50 bg-yellow-900/20': state === 'connecting',
+  'text-red-400 border-red-700/50 bg-red-900/20': state === 'offline',
+});
 
 // ── IP block state ──
 const ipBlocked = computed(() => botStore.ipBlocked);
