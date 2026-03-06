@@ -1,5 +1,5 @@
 import { defineStore } from 'pinia';
-import { ref, computed } from 'vue';
+import { ref, shallowRef, computed } from 'vue';
 
 // ── Interfaces ──────────────────────────────────────────────
 
@@ -95,13 +95,14 @@ export const useBotStore = defineStore('bots', () => {
   const settings = ref<Record<string, any>>({});
   const knownSystems = ref<KnownSystem[]>([]);
   const knownOres = ref<KnownOre[]>([]);
-  const catalog = ref<any>({ items: {}, ships: {}, skills: {}, recipes: {} });
+  const catalog = shallowRef<any>({ items: {}, ships: {}, skills: {}, recipes: {} });
   const publicShips = ref<any[]>([]);
+  const gameStats = ref<{ online_players?: number; total_players?: number; tick?: number; version?: string }>({});
   const publicStations = ref<any[]>([]);
-  const mapData = ref<Record<string, any>>({});
-  const statsDaily = ref<Record<string, any>>({});
+  const mapData = shallowRef<Record<string, any>>({});
+  const statsDaily = shallowRef<Record<string, any>>({});
   // poolName → { botName → { date → DayStats } }
-  const allPoolsStats = ref<Record<string, Record<string, any>>>({});
+  const allPoolsStats = shallowRef<Record<string, Record<string, any>>>({}); 
   const allPoolsLoading = ref(false);
   // This VM's own pool name, returned by /api/stats/all-pools since v1.8.1
   const myPoolName = ref('');
@@ -183,12 +184,66 @@ export const useBotStore = defineStore('bots', () => {
   });
 
   // ── Log state ──
+  // Reactive refs — written at most every 100 ms via _flushPendingLogs (see below).
   const activityLogs = ref<string[]>([]);
   const broadcastLogs = ref<string[]>([]);
   const systemLogs = ref<string[]>([]);
   const factionLogLines = ref<string[]>([]);
-  const botLogBuffers = ref<Record<string, string[]>>({});
+  // shallowRef: avoids deep reactivity on string arrays inside the map.
+  const botLogBuffers = shallowRef<Record<string, string[]>>({});
   const logs = ref<Array<{ bot: string; type: string; message: string }>>([]);
+
+  // ── Log caps ──
+  const LOG_CAP_PANEL  = 300; // activity / broadcast / system
+  const LOG_CAP_FACTION = 150;
+  const LOG_CAP_BOTBUF  = 100; // per-bot detail buffer
+  const LOG_CAP_GLOBAL  = 500; // logs[] used in BotProfile
+
+  // ── Log batch buffers (plain, non-reactive) ──
+  const _pActivity: string[] = [];
+  const _pBroadcast: string[] = [];
+  const _pSystem: string[] = [];
+  const _pFaction: string[] = [];
+  const _pBotLogs: Record<string, string[]> = {};
+  const _pLogs: Array<{ bot: string; type: string; message: string }> = [];
+  let _logFlushTimer: ReturnType<typeof setTimeout> | null = null;
+
+  function _flushPendingLogs() {
+    _logFlushTimer = null;
+    if (_pActivity.length) {
+      activityLogs.value = [...activityLogs.value, ..._pActivity].slice(-LOG_CAP_PANEL);
+      _pActivity.length = 0;
+    }
+    if (_pBroadcast.length) {
+      broadcastLogs.value = [...broadcastLogs.value, ..._pBroadcast].slice(-LOG_CAP_PANEL);
+      _pBroadcast.length = 0;
+    }
+    if (_pSystem.length) {
+      systemLogs.value = [...systemLogs.value, ..._pSystem].slice(-LOG_CAP_PANEL);
+      _pSystem.length = 0;
+    }
+    if (_pFaction.length) {
+      factionLogLines.value = [...factionLogLines.value, ..._pFaction].slice(-LOG_CAP_FACTION);
+      _pFaction.length = 0;
+    }
+    if (_pLogs.length) {
+      logs.value = [...logs.value, ..._pLogs].slice(-LOG_CAP_GLOBAL);
+      _pLogs.length = 0;
+    }
+    const botKeys = Object.keys(_pBotLogs);
+    if (botKeys.length) {
+      const next = { ...botLogBuffers.value };
+      for (const username of botKeys) {
+        next[username] = [...(next[username] || []), ..._pBotLogs[username]].slice(-LOG_CAP_BOTBUF);
+        delete _pBotLogs[username];
+      }
+      botLogBuffers.value = next;
+    }
+  }
+
+  function _scheduleLogFlush() {
+    if (_logFlushTimer === null) _logFlushTimer = setTimeout(_flushPendingLogs, 100);
+  }
 
   // ── Exec callback system (matches old UI's sendExec/_seq pattern) ──
   let execSeq = 0;
@@ -220,10 +275,10 @@ export const useBotStore = defineStore('bots', () => {
         if (data.publicCatalog?.stations) publicStations.value = data.publicCatalog.stations;
         if (data.mapData) mapData.value = data.mapData;
         if (data.statsDaily) statsDaily.value = data.statsDaily;
-        if (data.logs?.activity) activityLogs.value = data.logs.activity.slice(-500);
-        if (data.logs?.broadcast) broadcastLogs.value = data.logs.broadcast.slice(-500);
-        if (data.logs?.system) systemLogs.value = data.logs.system.slice(-500);
-        if (data.logs?.faction) factionLogLines.value = data.logs.faction.slice(-200);
+        if (data.logs?.activity) activityLogs.value = data.logs.activity.slice(-LOG_CAP_PANEL);
+        if (data.logs?.broadcast) broadcastLogs.value = data.logs.broadcast.slice(-LOG_CAP_PANEL);
+        if (data.logs?.system) systemLogs.value = data.logs.system.slice(-LOG_CAP_PANEL);
+        if (data.logs?.faction) factionLogLines.value = data.logs.faction.slice(-LOG_CAP_FACTION);
         if (data.botLogs) botLogBuffers.value = data.botLogs;
         if (data.dataSyncMode) dataSyncMode.value = data.dataSyncMode;
         // Replay cached per-VM settings so clients connecting after VM init still see them
@@ -254,38 +309,28 @@ export const useBotStore = defineStore('bots', () => {
         break;
 
       case 'log':
-        // Dashboard log panels (activity/broadcast/system)
-        if (data.panel === 'activity') {
-          pushLog(activityLogs.value, data.line, 500);
-        } else if (data.panel === 'broadcast') {
-          pushLog(broadcastLogs.value, data.line, 500);
-        } else if (data.panel === 'system') {
-          pushLog(systemLogs.value, data.line, 500);
-        }
-        // Bot-specific logs (from server logBot)
+        // Dashboard log panels — queued and flushed every 100 ms
+        if (data.panel === 'activity' && data.line) { _pActivity.push(data.line); _scheduleLogFlush(); }
+        else if (data.panel === 'broadcast' && data.line) { _pBroadcast.push(data.line); _scheduleLogFlush(); }
+        else if (data.panel === 'system' && data.line) { _pSystem.push(data.line); _scheduleLogFlush(); }
+        // Bot-specific structured logs (used in BotProfile)
         if (data.bot && data.message) {
-          logs.value.push({
-            bot: data.bot,
-            type: data.level || 'info',
-            message: data.message,
-          });
-          if (logs.value.length > 1000) logs.value.shift();
+          _pLogs.push({ bot: data.bot, type: data.level || 'info', message: data.message });
+          _scheduleLogFlush();
         }
         break;
 
       case 'botLog':
-        // Per-bot activity log line (legacy format)
+        // Per-bot activity log line (legacy format) — queued and flushed every 100 ms
         if (data.username && data.line) {
-          if (!botLogBuffers.value[data.username]) botLogBuffers.value[data.username] = [];
-          botLogBuffers.value[data.username].push(data.line);
-          if (botLogBuffers.value[data.username].length > 200) botLogBuffers.value[data.username].shift();
+          if (!_pBotLogs[data.username]) _pBotLogs[data.username] = [];
+          _pBotLogs[data.username].push(data.line);
+          _scheduleLogFlush();
         }
         break;
 
       case 'factionLog':
-        if (data.line) {
-          pushLog(factionLogLines.value, data.line, 200);
-        }
+        if (data.line) { _pFaction.push(data.line); _scheduleLogFlush(); }
         break;
 
       case 'actionResult':
@@ -334,6 +379,10 @@ export const useBotStore = defineStore('bots', () => {
         if (data.vm && data.settings && typeof data.settings === 'object') {
           vmSettings.value = { ...vmSettings.value, [data.vm as string]: data.settings as Record<string, Record<string, unknown>> };
         }
+        break;
+
+      case 'gameStats':
+        if (data.data && typeof data.data === 'object') gameStats.value = data.data as any;
         break;
     }
   }
@@ -421,10 +470,6 @@ export const useBotStore = defineStore('bots', () => {
   }
 
   // ── Helpers ──
-  function pushLog(arr: string[], line: string, max: number) {
-    arr.push(line);
-    if (arr.length > max) arr.shift();
-  }
 
   function resolveLocation(systemId: string, poiId?: string): string {
     if (!systemId) return '';
@@ -495,5 +540,7 @@ export const useBotStore = defineStore('bots', () => {
     // Helpers
     resolveLocation,
     catalogName,
+    // Game stats (pushed from server every tick)
+    gameStats,
   };
 });

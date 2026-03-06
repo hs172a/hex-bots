@@ -158,6 +158,9 @@ export class WebServer {
   // Economy data getter — set by botmanager
   onEconomyData: (() => unknown) | null = null;
 
+  // Real-time material demands from swarmcoord — set by botmanager
+  onMaterialDemands: (() => Array<{ bot: string; itemId: string; quantity: number; stationPoiId?: string; stationSystem?: string }>) | null = null;
+
   // Credit history getter — set by botmanager
   onCreditHistory: ((sinceMs: number) => unknown) | null = null;
 
@@ -182,6 +185,7 @@ export class WebServer {
 
   // s2: Game server stats cache (proxied from game API)
   private gameStatsCache: { data: Record<string, unknown>; expiry: number } | null = null;
+  private _gameStatsTimer: ReturnType<typeof setInterval> | null = null;
 
   // PI Commander TODO read/write — set by botmanager
   onGetPiTodo: ((session: string) => string) | null = null;
@@ -378,8 +382,9 @@ export class WebServer {
           return Response.json(publicCatalog.getAll());
         }
         if (url.pathname === "/api/economy") {
-          if (this.onEconomyData) return Response.json(this.onEconomyData());
-          return Response.json({});
+          const eco = this.onEconomyData ? this.onEconomyData() as Record<string, unknown> : {};
+          const materialNeeds = this.onMaterialDemands ? this.onMaterialDemands() : [];
+          return Response.json({ ...eco, materialNeeds });
         }
         if (url.pathname === "/api/credit-history") {
           const since = parseInt(url.searchParams.get("since") || "86400000", 10);
@@ -391,18 +396,7 @@ export class WebServer {
           return Response.json(null);
         }
         if (url.pathname === "/api/game-stats") {
-          const now = Date.now();
-          if (this.gameStatsCache && this.gameStatsCache.expiry > now) {
-            return Response.json(this.gameStatsCache.data);
-          }
-          try {
-            const resp = await fetch("https://game.spacemolt.com/api/stats", { signal: AbortSignal.timeout(6000) });
-            if (resp.ok) {
-              const data = await resp.json() as Record<string, unknown>;
-              this.gameStatsCache = { data, expiry: now + 60_000 };
-              return Response.json(data);
-            }
-          } catch { /* return stale cache or empty */ }
+          await this.fetchAndBroadcastGameStats();
           return Response.json(this.gameStatsCache?.data ?? {});
         }
         if (url.pathname === "/api/pi-todo") {
@@ -633,10 +627,30 @@ export class WebServer {
     });
 
     console.log(`Dashboard: http://localhost:${this.port}`);
+    // Periodic game stats fetch + WS push every 10s — master/standalone only (client VMs have no UI)
+    if (this.serveUi) {
+      this.fetchAndBroadcastGameStats();
+      this._gameStatsTimer = setInterval(() => this.fetchAndBroadcastGameStats(), 10_000);
+    }
   }
 
   stop(): void {
+    if (this._gameStatsTimer) clearInterval(this._gameStatsTimer);
     this.server?.stop();
+  }
+
+  /** Fetch game stats from upstream if cache is stale; broadcast fresh data to all WS clients. */
+  async fetchAndBroadcastGameStats(): Promise<void> {
+    const now = Date.now();
+    if (this.gameStatsCache && this.gameStatsCache.expiry > now) return;
+    try {
+      const resp = await fetch("https://game.spacemolt.com/api/stats", { signal: AbortSignal.timeout(6000) });
+      if (resp.ok) {
+        const data = await resp.json() as Record<string, unknown>;
+        this.gameStatsCache = { data, expiry: now + 10_000 };
+        this.broadcast({ type: "gameStats", data });
+      }
+    } catch { /* keep stale cache */ }
   }
 
   // ── Interface matching TUI ─────────────────────────────────

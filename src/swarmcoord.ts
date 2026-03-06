@@ -22,6 +22,9 @@ const TRADE_ROUTE_TTL_MS = 20 * 60 * 1000; // 20 min
 /** Default TTL for material demand signals (ms). */
 const MATERIAL_DEMAND_TTL_MS = 15 * 60 * 1000; // 15 min
 
+/** Default TTL for gather component claims (ms). Long enough to complete acquisition trip. */
+const GATHER_CLAIM_TTL_MS = 45 * 60 * 1000; // 45 min
+
 /** How many bots heading to the same station before it's considered "crowded". */
 export const STATION_CROWD_THRESHOLD = 2;
 
@@ -69,6 +72,21 @@ export interface MaterialDemand {
   useGift?: boolean;
 }
 
+/**
+ * Gather component claim — prevents two gatherer bots from acquiring the same
+ * material at the same time. Keyed by itemId; only one bot can hold the claim.
+ */
+export interface GatherComponentClaim {
+  /** Bot holding this claim. */
+  bot: string;
+  /** Item being acquired. */
+  itemId: string;
+  /** Goal ID this acquisition is for. */
+  goalId: string;
+  registeredAt: number;
+  expiresAt: number;
+}
+
 // ── Internal state ────────────────────────────────────────────
 
 /** Active station claims, keyed by bot name. */
@@ -79,6 +97,9 @@ const tradeRouteClaims = new Map<string, TradeRouteClaim>();
 
 /** Active material demands, keyed by `${bot}:${itemId}`. */
 const materialDemands = new Map<string, MaterialDemand>();
+
+/** Active gather component claims, keyed by itemId. One bot per item at a time. */
+const gatherClaims = new Map<string, GatherComponentClaim>();
 
 // ── Cleanup helpers ───────────────────────────────────────────
 
@@ -92,6 +113,9 @@ function pruneExpired(): void {
   }
   for (const [key, demand] of materialDemands) {
     if (demand.expiresAt <= now) materialDemands.delete(key);
+  }
+  for (const [key, claim] of gatherClaims) {
+    if (claim.expiresAt <= now) gatherClaims.delete(key);
   }
 }
 
@@ -329,6 +353,53 @@ export function getMostNeededItem(): { itemId: string; totalQuantity: number } |
   return bestItem ? { itemId: bestItem, totalQuantity: bestQty } : null;
 }
 
+// ── Gather component claims ─────────────────────────────
+
+/**
+ * Claim an item for gathering. Returns true if the claim was acquired
+ * (either item was unclaimed, or this bot already holds the claim).
+ * Returns false if another bot has an active claim on this item.
+ */
+export function claimGatherComponent(
+  botName: string,
+  itemId: string,
+  goalId: string,
+  ttlMs: number = GATHER_CLAIM_TTL_MS,
+): boolean {
+  pruneExpired();
+  const existing = gatherClaims.get(itemId);
+  if (existing && existing.bot !== botName) return false; // another bot owns it
+  const now = Date.now();
+  gatherClaims.set(itemId, { bot: botName, itemId, goalId, registeredAt: now, expiresAt: now + ttlMs });
+  return true;
+}
+
+/** Release this bot's claim on an item. */
+export function releaseGatherClaim(botName: string, itemId: string): void {
+  const existing = gatherClaims.get(itemId);
+  if (existing?.bot === botName) gatherClaims.delete(itemId);
+}
+
+/** Release all gather claims held by a bot. */
+export function releaseAllGatherClaims(botName: string): void {
+  for (const [itemId, claim] of gatherClaims) {
+    if (claim.bot === botName) gatherClaims.delete(itemId);
+  }
+}
+
+/** True if another bot (not this one) holds a live claim on the given item. */
+export function isGatherClaimedByOther(botName: string, itemId: string): boolean {
+  pruneExpired();
+  const claim = gatherClaims.get(itemId);
+  return !!claim && claim.bot !== botName;
+}
+
+/** All active gather component claims. */
+export function getGatherClaims(): GatherComponentClaim[] {
+  pruneExpired();
+  return [...gatherClaims.values()];
+}
+
 // ── Full cleanup (on process stop) ───────────────────────────
 
 /** Release all claims and demands registered by a bot. Call when a bot stops. */
@@ -336,7 +407,7 @@ export function releaseAllClaims(botName: string): void {
   stationClaims.delete(botName);
   tradeRouteClaims.delete(botName);
   clearAllMaterialNeeds(botName);
-  // Also release mining claim (imported separately to avoid circular dep)
+  releaseAllGatherClaims(botName);
 }
 
 /** Snapshot of all coordinator state (for debug / UI display). */
@@ -344,11 +415,13 @@ export function getCoordinatorSnapshot(): {
   stationClaims: StationClaim[];
   tradeRouteClaims: TradeRouteClaim[];
   materialDemands: MaterialDemand[];
+  gatherClaims: GatherComponentClaim[];
 } {
   pruneExpired();
   return {
     stationClaims: [...stationClaims.values()],
     tradeRouteClaims: [...tradeRouteClaims.values()],
     materialDemands: [...materialDemands.values()],
+    gatherClaims: [...gatherClaims.values()],
   };
 }

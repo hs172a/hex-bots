@@ -108,7 +108,7 @@ function hashString(content: string): string {
 /** Recursively walk a directory yielding file paths relative to baseDir.
  *  Only includes .ts and .vue source files; skips node_modules, dist, etc. */
 async function* walkSrcDir(dir: string, baseDir: string): AsyncGenerator<string> {
-  const SKIP_DIRS = new Set(["node_modules", ".git", ".codesync_staging"]);
+  const SKIP_DIRS = new Set(["node_modules", ".git", "__tests__", "web"]);
   let entries;
   try {
     entries = await readdir(dir, { withFileTypes: true });

@@ -1,6 +1,5 @@
 import { defineConfig } from 'vite';
 import vue from '@vitejs/plugin-vue';
-import { resolve } from 'path';
 
 export default defineConfig({
   plugins: [vue()],
@@ -11,6 +10,9 @@ export default defineConfig({
   },
   server: {
     port: 5173,
+    watch: {
+      usePolling: false,
+    },
     proxy: {
       '/ws': {
         target: 'ws://localhost:3210',

@@ -196,16 +196,38 @@
               {{ typesLoading ? '...' : '↺' }}
             </button>
           </div>
-          <!-- Current gatherer goal banner -->
-          <div v-if="currentGathererGoal" class="mb-2 px-2 py-1.5 rounded text-[11px] bg-space-accent/10 border border-space-accent/30 flex items-start justify-between gap-2">
-            <div class="min-w-0">
-              <span class="text-space-accent font-semibold">📦 Gather goal:</span>
-              <span class="text-space-text ml-1">{{ currentGathererGoal.target_name }}</span>
-              <span class="flex flex-wrap gap-1 mt-1">
-                <span v-for="m in currentGathererGoal.materials" :key="m.item_id" class="px-1.5 py-0.5 rounded bg-[#21262d] text-space-text-dim">{{ m.quantity_needed }}× {{ m.item_name }}</span>
-              </span>
+          <!-- Current gatherer goal banner with progress -->
+          <div v-if="currentGathererGoal" class="mb-2 p-2.5 rounded border border-space-accent/30 bg-space-accent/5">
+            <div class="flex items-center justify-between mb-1.5">
+              <div class="flex items-center gap-2 min-w-0">
+                <span class="text-[11px] font-semibold text-space-accent">📦 Gather goal</span>
+                <span class="text-xs text-space-text-bright font-medium truncate">{{ currentGathererGoal.target_name }}</span>
+              </div>
+              <div class="flex items-center gap-2 shrink-0">
+                <span class="text-xs font-bold" :class="goalOverallPct >= 100 ? 'text-space-green' : 'text-space-text-dim'">{{ goalOverallPct }}%</span>
+                <button @click="botStore.saveSettings(props.bot.username, { goal: null })" class="btn btn-secondary text-[11px] px-1.5 py-0.5">✕</button>
+              </div>
             </div>
-            <button @click="botStore.saveSettings(props.bot.username, { goal: null })" class="btn btn-secondary text-[11px] px-1.5 py-0.5 shrink-0">✕</button>
+            <!-- Overall bar -->
+            <div class="h-1 bg-space-border rounded-full mb-2">
+              <div class="h-full rounded-full transition-all duration-500"
+                :class="goalOverallPct >= 100 ? 'bg-space-green' : 'bg-space-accent'"
+                :style="{ width: Math.min(goalOverallPct, 100) + '%' }"></div>
+            </div>
+            <!-- Per-material rows -->
+            <div class="space-y-1.5">
+              <div v-for="m in goalMaterials" :key="m.item_id">
+                <div class="flex justify-between text-[11px] mb-0.5">
+                  <span class="text-space-text">{{ m.item_name }}</span>
+                  <span :class="m.pct >= 100 ? 'text-space-green' : 'text-space-text-dim'">{{ m.collected }}/{{ m.quantity_needed }}</span>
+                </div>
+                <div class="h-0.5 bg-space-border rounded-full">
+                  <div class="h-full rounded-full transition-all duration-500"
+                    :class="m.pct >= 100 ? 'bg-space-green' : 'bg-space-accent/50'"
+                    :style="{ width: Math.min(m.pct, 100) + '%' }"></div>
+                </div>
+              </div>
+            </div>
           </div>
           <div v-if="typesLoading" class="text-xs text-space-text-dim italic py-6 text-center">Loading types...</div>
           <div v-else-if="!facilityTypes.length" class="text-xs text-space-text-dim italic py-6 text-center">No types found — click ↺ to reload.</div>
@@ -217,55 +239,62 @@
               <span><strong>Crew Bunk required</strong> — build Personal Quarters first before any other personal facility.</span>
             </div>
             <div v-for="t in facilityTypes" :key="t.id"
-              class="bg-[#21262d] rounded-md p-2 text-xs transition-opacity"
+              class="rounded-md border text-xs transition-all"
               :class="[
-                isBuilt(t.id) ? 'border border-green-900/30' : '',
-                !t.buildable && !isBuilt(t.id) ? 'opacity-50' : ''
+                isBuilt(t.id) ? 'border-green-900/40 bg-[#1a2120]' :
+                !t.buildable ? 'border-[#30363d] bg-[#161b22] opacity-60' :
+                currentGathererGoal?.target_id === t.id ? 'border-space-accent/40 bg-[#21262d]' :
+                'border-[#30363d] bg-[#21262d] hover:border-[#444d56]'
               ]">
-              <div class="flex items-start justify-between gap-2 mb-1">
-                <div class="min-w-0 flex-1">
-                  <div class="flex items-center gap-1.5 flex-wrap">
-                    <span class="font-medium" :class="!t.buildable && !isBuilt(t.id) ? 'text-space-text-dim' : 'text-space-text'">{{ t.name }}</span>
-                    <span class="text-[11px] text-space-text-dim">Lv{{ t.level }}</span>
-                    <span v-if="isBuilt(t.id)" class="text-[11px] px-1 py-0.5 rounded bg-green-900/30 text-space-green">✓ built</span>
-                    <span v-else-if="!t.buildable" class="text-[11px] px-1 py-0.5 rounded bg-[#30363d] text-space-text-dim">🔒 locked</span>
-                    <span class="text-[11px] px-1 py-0.5 rounded bg-[#30363d] text-space-text-dim capitalize">{{ t.category }}</span>
+              <!-- Card header -->
+              <div class="flex items-start gap-2 p-2">
+                <div class="flex-1 min-w-0">
+                  <div class="flex items-center gap-1.5 flex-wrap mb-0.5">
+                    <span class="font-semibold" :class="isBuilt(t.id) ? 'text-space-green' : !t.buildable ? 'text-space-text-dim' : 'text-space-text-bright'">{{ t.name }}</span>
+                    <span class="text-[10px] text-space-text-dim">Lv{{ t.level }}</span>
+                    <span v-if="isBuilt(t.id)" class="text-[10px] px-1 py-0.5 rounded bg-green-900/30 text-space-green">✓ built</span>
+                    <span v-else-if="!t.buildable" class="text-[10px] px-1 py-0.5 rounded bg-[#30363d] text-space-text-dim">🔒 locked</span>
+                    <span v-if="currentGathererGoal?.target_id === t.id" class="text-[10px] px-1 py-0.5 rounded bg-space-accent/20 text-space-accent">gathering</span>
                   </div>
-                  <div v-if="t.description" class="text-[11px] text-space-text-dim mt-0.5 leading-relaxed line-clamp-2">{{ t.description }}</div>
-                  <div v-if="!t.buildable && !isBuilt(t.id)" class="text-[11px] text-yellow-600 mt-0.5">Requires prerequisite facility</div>
+                  <div v-if="t.description" class="text-[11px] text-space-text-dim leading-relaxed line-clamp-2">{{ t.description }}</div>
+                  <!-- Bonuses & services -->
+                  <div class="flex flex-wrap gap-x-3 gap-y-0.5 text-[11px] mt-0.5">
+                    <span v-if="t.bonus_type" class="text-space-cyan">+{{ t.bonus_value }} {{ t.bonus_type?.replace(/_/g, ' ') }}</span>
+                    <span v-if="t.personal_service" class="text-space-accent">⚙️ {{ t.personal_service.replace(/_/g, ' ') }}</span>
+                    <span v-if="t.rent_per_cycle" class="text-space-yellow">💰 {{ t.rent_per_cycle }}cr/cycle</span>
+                    <span v-if="t.build_time" class="text-space-text-dim">⏱ {{ t.build_time }} cycles</span>
+                  </div>
                 </div>
-                <div class="text-right shrink-0">
-                  <div class="text-space-yellow text-[11px] mb-1">{{ t.build_cost != null ? t.build_cost.toLocaleString() + ' cr' : '—' }}</div>
+                <!-- Right: cost + build button -->
+                <div class="shrink-0 flex flex-col items-end gap-1">
+                  <span class="text-[11px] font-semibold" :class="t.build_cost ? 'text-space-yellow' : 'text-space-text-dim'">{{ t.build_cost != null ? t.build_cost.toLocaleString() + ' cr' : '—' }}</span>
                   <button @click="buildFacility(t)"
                     :disabled="isBuilt(t.id) || !t.buildable || actionLoading === t.id"
                     class="btn text-[11px] px-2 py-0.5 disabled:opacity-40 disabled:cursor-not-allowed"
                     :class="isBuilt(t.id) ? 'btn-secondary' : t.buildable ? 'btn-primary' : 'btn-secondary'">
-                    {{ actionLoading === t.id ? '...' : isBuilt(t.id) ? '✓ Built' : !t.buildable ? '🔒 Locked' : '🔨 Build' }}
+                    {{ actionLoading === t.id ? '...' : isBuilt(t.id) ? '✓ Built' : !t.buildable ? '🔒' : '🔨 Build' }}
                   </button>
-                  <div v-if="buildErrors[t.id]" class="text-[11px] text-red-400 mt-1 text-right">⚠ {{ buildErrors[t.id] }}</div>
                 </div>
               </div>
-              <!-- Bonuses row -->
-              <div class="flex flex-wrap gap-x-3 gap-y-0.5 text-[11px]">
-                <span v-if="t.bonus_type" class="text-space-cyan">+{{ t.bonus_value }} {{ t.bonus_type?.replace(/_/g, ' ') }}</span>
-                <span v-if="t.personal_service" class="text-space-accent">⚙️ {{ t.personal_service.replace(/_/g, ' ') }}</span>
-                <span v-if="t.rent_per_cycle" class="text-space-yellow">💰 {{ t.rent_per_cycle }}cr/cycle</span>
-                <span v-if="t.build_time" class="text-space-text-dim">⏱ {{ t.build_time }} cycles</span>
-              </div>
-              <!-- Materials (populated after detail fetch) -->
-              <div v-if="buildMaterials(t).length" class="mt-1.5 pt-1.5 border-t border-[#30363d] flex items-end justify-between gap-2">
-                <div class="min-w-0">
-                  <div class="text-[11px] text-space-text-dim uppercase tracking-wider mb-0.5">Materials required</div>
-                  <div class="flex flex-wrap gap-x-3 gap-y-0.5 text-[11px] text-space-text-dim">
-                    <span v-for="m in buildMaterials(t)" :key="m.item_id">{{ m.name || m.item_name || m.item_id }} ×{{ m.quantity || m.quantity_needed }}</span>
+              <!-- Build error -->
+              <div v-if="buildErrors[t.id]" class="px-2 pb-1.5 text-[11px] text-red-400">⚠ {{ buildErrors[t.id] }}</div>
+              <!-- Materials row -->
+              <div v-if="buildMaterials(t).length" class="px-2 pb-2 pt-0 border-t border-[#30363d] mt-0 flex items-center justify-between gap-2">
+                <div class="min-w-0 pt-1.5">
+                  <div class="flex flex-wrap gap-x-2 gap-y-0.5 text-[11px]">
+                    <span v-for="m in buildMaterials(t)" :key="m.item_id"
+                      class="text-space-text-dim">{{ m.name || m.item_name || m.item_id }}<span class="text-space-text ml-0.5">×{{ m.quantity || m.quantity_needed }}</span></span>
                   </div>
                 </div>
-                <button v-if="!isBuilt(t.id)" @click="setGathererGoal(t)"
-                  class="btn btn-secondary text-[11px] px-2 py-0.5 shrink-0 whitespace-nowrap">
+                <button v-if="!isBuilt(t.id) && currentGathererGoal?.target_id !== t.id"
+                  @click="setGathererGoal(t)"
+                  class="btn btn-secondary text-[11px] px-2 py-0.5 shrink-0 whitespace-nowrap mt-1.5">
                   📦 Gather
                 </button>
+                <span v-else-if="currentGathererGoal?.target_id === t.id"
+                  class="text-[11px] text-space-accent shrink-0 mt-1.5">⚙️ active</span>
               </div>
-              <div v-else-if="!typeDetails[t.id]" class="mt-1 text-[11px] text-space-text-dim/40 italic">Loading details...</div>
+              <div v-else-if="!isBuilt(t.id) && !typeDetails[t.id]" class="px-2 pb-1.5 text-[11px] text-space-text-dim/30 italic">fetching materials…</div>
             </div>
           </div>
         </template>
@@ -316,6 +345,27 @@ const currentGathererGoal = computed(() =>
   (botStore.settings as any)?.[props.bot.username]?.goal ??
   (botStore.settings as any)?.gatherer?.goal ?? null
 );
+
+const goalMaterials = computed(() => {
+  const goal = currentGathererGoal.value;
+  if (!goal) return [];
+  const bot = currentBot.value as any;
+  return (goal.materials || []).map((m: any) => {
+    const inFaction = (bot.factionStorage || []).find((i: any) => i.itemId === m.item_id)?.quantity ?? 0;
+    const inCargo = (bot.inventory || []).find((i: any) => i.itemId === m.item_id)?.quantity ?? 0;
+    const collected = Math.min(inFaction + inCargo, m.quantity_needed);
+    const pct = m.quantity_needed > 0 ? Math.round(collected / m.quantity_needed * 100) : 0;
+    return { ...m, collected, pct };
+  });
+});
+
+const goalOverallPct = computed(() => {
+  const mats = goalMaterials.value;
+  if (!mats.length) return 0;
+  const totalNeeded = mats.reduce((s: number, m: any) => s + m.quantity_needed, 0);
+  const totalCollected = mats.reduce((s: number, m: any) => s + m.collected, 0);
+  return totalNeeded > 0 ? Math.round(totalCollected / totalNeeded * 100) : 0;
+});
 
 const stationInfo = computed(() => {
   const bot = currentBot.value;

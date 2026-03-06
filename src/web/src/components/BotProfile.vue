@@ -5,13 +5,13 @@
       <!-- Row 1: navigation + identity + state controls -->
       <div class="flex items-center gap-3">
         <button @click="$emit('close')" class="text-space-text-dim hover:text-space-text-bright transition-colors text-sm shrink-0">← Back</button>
-        <h2 class="text-base font-semibold text-space-text-bright">🤖 {{ currentBot.username }}</h2>
         <span v-if="currentBot.empire" :title="empireName(currentBot.empire)" class="text-base shrink-0 leading-none">{{ empireIcon(currentBot.empire) }}</span>
+        <h2 class="text-base font-semibold text-space-text-bright">{{ currentBot.username }}</h2>
         <!-- Ship name with tooltip -->
         <span v-if="headerShipClassId"
           @mouseenter="onShipNameHover($event)"
           @mouseleave="shipTooltipVisible = false"
-          class="flex items-center gap-1 cursor-help group shrink-0"
+          class="flex items-center gap-1 cursor-help group shrink-0 text-xs"
         >
           <span class="text-space-text-dim">🚀</span>
           <span class="text-space-text group-hover:text-space-accent underline decoration-dotted decoration-space-text-dim/50 transition-colors font-medium">
@@ -31,23 +31,43 @@
       <div class="flex items-center gap-2 flex-wrap text-xs">
         <!-- System / POI -->
         <span v-if="currentBot.system" class="flex items-center gap-1 text-[11px] text-space-text-dim shrink-0">
-          <span class="opacity-40">|</span>
+          <span class="opacity-75">|</span>
           <span>📍</span>
           <span class="text-space-text">{{ headerSystemName }}</span>
           <span v-if="headerPoiName" class="opacity-60">/ {{ headerPoiName }}</span>
         </span>
+        <span class="opacity-75">·</span>
         <!-- Docked status -->
         <span class="text-[11px] px-1.5 py-0.5 rounded font-medium shrink-0"
           :class="currentBot.docked ? 'bg-green-900/30 text-space-green' : 'bg-[#21262d] text-space-text-dim'">
           {{ currentBot.docked ? '🔒 Docked' : '🚀 In Space' }}
         </span>
+        <span class="opacity-75">·</span>
         <!-- Routine -->
-        <span v-if="currentBot.routine" class="text-[11px] px-1.5 py-0.5 rounded bg-[#21262d] text-space-text-dim shrink-0">
-          ⚙️ {{ currentBot.routine }}
+        <span class="text-[11px] px-1.5 py-0.5 rounded bg-[#21262d] text-space-text-dim shrink-0">
+          ⚙️ {{ currentBot.routine ? currentBot.routine : 'stopped' }}
         </span>
+        <span class="opacity-75">·</span>
         <!-- Faction -->
         <span v-if="currentBot.factionId" class="text-[11px] px-1.5 py-0.5 rounded bg-purple-900/20 text-purple-300 shrink-0">
           🛡️ {{ currentBot.factionId }}
+        </span>
+        <!-- Row 3: lifetime statistics (compact pills) -->
+        <span v-if="currentBot.playerStats">
+          <span class="opacity-75">|</span>
+          <span class="text-[11px] px-1.5 py-0.5"><span class="text-green-400">💰</span><span class="px-1">₡{{ formatNumber(currentBot.playerStats.creditsEarned ?? 0) }}</span><span class="px-1 opacity-60">earned</span></span>
+          <span class="opacity-75">·</span>
+          <span class="text-[11px] px-1.5 py-0.5"><span class="text-amber-400">⛏️</span><span class="px-1">{{ formatNumber(currentBot.playerStats.oreMined ?? 0) }}</span><span class="px-1 opacity-60">mined</span></span>
+          <span class="opacity-75">·</span>
+          <span class="text-[11px] px-1.5 py-0.5"><span class="text-blue-400">🔄</span><span class="px-1">{{ currentBot.playerStats.tradesCompleted ?? 0 }}</span><span class="px-1 opacity-60">trades</span></span>
+          <span class="opacity-75">·</span>
+          <span class="text-[11px] px-1.5 py-0.5"><span class="text-purple-400">🗺️</span><span class="px-1">{{ currentBot.playerStats.systemsExplored ?? 0 }}</span><span class="px-1 opacity-60">explored</span></span>
+          <span class="opacity-75">·</span>
+          <span class="text-[11px] px-1.5 py-0.5"><span class="text-cyan-400">🏴‍☠️</span><span class="px-1">{{ currentBot.playerStats.piratesDestroyed ?? 0 }}</span><span class="px-1 opacity-60">pirates</span></span>
+          <span class="opacity-75">·</span>
+          <span class="text-[11px] px-1.5 py-0.5"><span class="text-red-400">💥</span><span class="px-1">{{ currentBot.playerStats.shipsDestroyed ?? 0 }}</span><span class="px-1 opacity-60">kills</span></span>
+          <span class="opacity-75">·</span>
+          <span class="text-[11px] px-1.5 py-0.5"><span class="text-gray-400">💀</span><span class="px-1">{{ currentBot.playerStats.shipsLost ?? 0 }}</span><span class="px-1 opacity-60">deaths</span></span>
         </span>
         <!-- Credits/hour -->
         <span v-if="headerCreditsPerHour !== 0" class="text-[11px] px-1.5 py-0.5 rounded ml-auto shrink-0"
@@ -61,7 +81,7 @@
       <!-- Sidebar col 1 -->
       <div class="w-72 space-y-3 overflow-hidden">
         <!-- Status -->
-        <div class="card py-2 px-2 !mb-2">
+        <div class="card py-2 px-2">
           <div class="py-1 px-0 border-b border-space-border bg-space-card">
             <h3 class="text-xs font-semibold text-space-text-dim uppercase">📊 Status</h3>
           </div>
@@ -166,26 +186,8 @@
       </div>
       <!-- Sidebar col 2 -->
       <div class="w-72 space-y-3 overflow-hidden">
-        <!-- Statistics -->
-        <div class="card py-2 px-2 !mb-2">
-          <div class="py-1 px-0 border-b border-space-border bg-space-card">
-            <h3 class="text-xs font-semibold text-space-text-dim uppercase">📊 Statistics</h3>
-          </div>
-          <div class="py-1 px-0">
-            <div class="grid grid-cols-2 gap-y-1.5 gap-x-3 text-xs">
-              <div class="flex items-center gap-1 text-green-400"><span>💰</span><span>₡{{ formatNumber(currentBot.playerStats?.creditsEarned ?? 0) }}</span><span class="text-gray-500">earned</span></div>
-              <div class="flex items-center gap-1 text-red-400"><span>💸</span><span>₡{{ formatNumber(currentBot.playerStats?.creditsSpent ?? 0) }}</span><span class="text-gray-500">spent</span></div>
-              <div class="flex items-center gap-1 text-amber-400"><span>⛏️</span><span>{{ formatNumber(currentBot.playerStats?.oreMined ?? 0) }}</span><span class="text-gray-500">mined</span></div>
-              <div class="flex items-center gap-1 text-blue-400"><span>🔄</span><span>{{ currentBot.playerStats?.tradesCompleted ?? 0 }}</span><span class="text-gray-500">trades</span></div>
-              <div class="flex items-center gap-1 text-red-400"><span>💥</span><span>{{ currentBot.playerStats?.shipsDestroyed ?? 0 }}</span><span class="text-gray-500">kills</span></div>
-              <div class="flex items-center gap-1 text-gray-400"><span>💀</span><span>{{ currentBot.playerStats?.shipsLost ?? 0 }}</span><span class="text-gray-500">deaths</span></div>
-              <div class="flex items-center gap-1 text-purple-400"><span>🗺️</span><span>{{ currentBot.playerStats?.systemsExplored ?? 0 }}</span><span class="text-gray-500">explored</span></div>
-              <div class="flex items-center gap-1 text-cyan-400"><span>🏴‍☠️</span><span>{{ currentBot.playerStats?.piratesDestroyed ?? 0 }}</span><span class="text-gray-500">pirates</span></div>
-            </div>
-          </div>
-        </div>
         <!-- Skills -->
-        <div class="card py-2 px-2 !mt-2">
+        <div class="card py-2 px-2">
           <div class="py-1 px-0 border-b border-space-border bg-space-card">
             <h3 class="text-xs font-semibold text-space-text-dim uppercase">🎯 Skills</h3>
           </div>
@@ -293,9 +295,9 @@
       <Transition
         enter-active-class="transition-all duration-300 ease-out"
         enter-from-class="opacity-0 translate-y-2"
-        enter-to-class="opacity-100 translate-y-0"
+        enter-to-class="opacity-750 translate-y-0"
         leave-active-class="transition-all duration-200 ease-in"
-        leave-from-class="opacity-100 translate-y-0"
+        leave-from-class="opacity-750 translate-y-0"
         leave-to-class="opacity-0 translate-y-2">
         <div v-if="moduleNotif"
           class="fixed bottom-5 left-1/2 -translate-x-1/2 z-[9999] flex items-start gap-2.5 px-4 py-3 rounded-lg shadow-2xl border text-sm max-w-sm pointer-events-none"

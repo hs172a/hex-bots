@@ -106,7 +106,7 @@
               class="text-xs text-space-text-dim italic py-6 text-center bg-[#0d1117] rounded-lg">
               {{ activeMissions.length === 0 ? 'No active missions' : 'No missions match the filter' }}
             </div>
-            <div v-else class="grid grid-cols-3 gap-2.5">
+            <div v-else class="grid grid-cols-4 gap-2.5">
               <div
                 v-for="m in filteredActive"
                 :key="m.mission_id || m.id"
@@ -169,10 +169,18 @@
 
                 <!-- Rewards + Actions footer -->
                 <div class="px-3 pt-2 pb-2.5 border-t border-[#21262d] mt-auto space-y-2">
-                  <div v-if="m.rewards?.credits || m.reward_credits || m.rewards?.xp || m.reward_xp" class="flex items-center gap-3 text-xs">
-                    <span class="text-space-text-dim text-[11px]">Rewards:</span>
-                    <span v-if="m.rewards?.credits || m.reward_credits" class="text-yellow-400 font-semibold">💰 {{ fmt(m.rewards?.credits ?? m.reward_credits) }} cr</span>
-                    <span v-if="m.rewards?.xp || m.reward_xp" class="text-blue-400">⭐ {{ m.rewards?.xp ?? m.reward_xp }} XP</span>
+                  <div v-if="m.rewards?.credits || m.reward_credits || m.rewards?.xp || m.reward_xp || m.rewards?.skill_xp" class="flex flex-col gap-1.5 text-xs">
+                    <div class="flex items-center gap-3">
+                      <span class="text-space-text-dim text-[11px]">Rewards:</span>
+                      <span v-if="m.rewards?.credits || m.reward_credits" class="text-yellow-400 font-semibold">💰 {{ fmt(m.rewards?.credits ?? m.reward_credits) }} cr</span>
+                      <span v-if="m.rewards?.xp || m.reward_xp" class="text-blue-400">⭐ {{ m.rewards?.xp ?? m.reward_xp }} XP</span>
+                    </div>
+                    <div v-if="m.rewards?.skill_xp" class="flex items-center gap-2 flex-wrap">
+                      <span class="text-space-text-dim text-[10px]">📚</span>
+                      <span v-for="(xp, skill) in m.rewards.skill_xp" :key="skill" class="text-[10px] px-1.5 py-0.5 rounded bg-blue-900/30 text-blue-300 font-medium">
+                        {{ skill }} +{{ xp }}
+                      </span>
+                    </div>
                   </div>
                   <div class="flex gap-2">
                     <button
@@ -230,7 +238,7 @@
                     <div v-if="mList.length" class="flex items-center gap-1.5 text-[11px] text-space-cyan mb-2 pl-0.5">
                       📍 <span class="font-medium">{{ stationName }}</span>
                     </div>
-                    <div class="grid grid-cols-3 gap-2.5 mb-2">
+                    <div class="grid grid-cols-4 gap-2.5 mb-2">
                       <div
                         v-for="m in mList"
                         :key="m.mission_id"
@@ -251,6 +259,7 @@
                             <span v-if="m.difficulty != null" class="text-[10px] px-1.5 py-0.5 rounded font-bold" :class="getDifficultyClass(m.difficulty)">
                               {{ getDifficultyText(m.difficulty) }}
                             </span>
+                            <span v-if="m.type" class="text-[10px] px-1.5 py-0.5 rounded font-medium" :class="typeConfig(m.type).bg">{{ m.type }}</span>
                             <span v-if="m.last_seen" class="text-[10px] text-space-text-dim opacity-50">{{ timeAgo(m.last_seen) }}</span>
                           </div>
                         </div>
@@ -268,14 +277,45 @@
                           </ul>
                         </div>
 
+                        <!-- Progress -->
+                        <div v-if="m.objectives?.length" class="px-3 pb-2">
+                          <div class="text-[10px] text-space-text-dim font-semibold uppercase tracking-wider mb-1.5">Progress</div>
+                          <div class="space-y-1.5">
+                            <div v-for="(obj, i) in m.objectives" :key="i">
+                              <div class="flex items-center gap-1.5 text-xs">
+                                <span :class="obj.complete ? 'text-green-400' : 'text-space-text-dim'">{{ obj.complete ? '✓' : '○' }}</span>
+                                <span :class="obj.complete ? 'text-space-text-dim line-through' : 'text-space-text'" class="flex-1 leading-tight">{{ obj.description || fmtObj(obj) }}</span>
+                                <span v-if="!obj.complete && objProg(obj).required > 0" class="text-[11px] text-space-accent tabular-nums shrink-0">
+                                  {{ objProg(obj).current }}/{{ objProg(obj).required }}
+                                </span>
+                              </div>
+                              <div v-if="!obj.complete && objProg(obj).required > 0" class="mt-0.5 h-1 bg-[#21262d] rounded-full overflow-hidden ml-4">
+                                <div class="h-full rounded-full transition-all" :class="m.is_complete ? 'bg-green-500' : 'bg-space-accent'" :style="{ width: objProg(obj).pct + '%' }" />
+                              </div>
+                            </div>
+                          </div>
+                          <!-- Overall bar -->
+                          <div class="mt-2 h-1.5 bg-[#21262d] rounded-full overflow-hidden">
+                            <div class="h-full rounded-full transition-all" :class="m.is_complete ? 'bg-green-500' : 'bg-space-accent'" :style="{ width: getProgress(m) + '%' }" />
+                          </div>
+                        </div>
+
                         <div class="flex-1" />
 
                         <!-- Footer -->
                         <div class="px-3 pt-2 pb-2.5 border-t border-[#21262d] space-y-2">
-                          <div v-if="m.rewards?.credits || m.reward_credits || m.rewards?.xp || m.reward_xp" class="flex items-center gap-3 text-xs">
-                            <span class="text-space-text-dim text-[11px]">Rewards:</span>
-                            <span v-if="m.rewards?.credits || m.reward_credits" class="text-yellow-400 font-semibold">💰 {{ fmt(m.rewards?.credits ?? m.reward_credits) }} cr</span>
-                            <span v-if="m.rewards?.xp || m.reward_xp" class="text-blue-400">⭐ {{ m.rewards?.xp ?? m.reward_xp }} XP</span>
+                          <div v-if="m.rewards?.credits || m.reward_credits || m.rewards?.xp || m.reward_xp || m.rewards?.skill_xp" class="flex flex-col gap-1.5 text-xs">
+                            <div class="flex items-center gap-3">
+                              <span class="text-space-text-dim text-[11px]">Rewards:</span>
+                              <span v-if="m.rewards?.credits || m.reward_credits" class="text-yellow-400 font-semibold">💰 {{ fmt(m.rewards?.credits ?? m.reward_credits) }} cr</span>
+                              <span v-if="m.rewards?.xp || m.reward_xp" class="text-blue-400">⭐ {{ m.rewards?.xp ?? m.reward_xp }} XP</span>
+                            </div>
+                            <div v-if="m.rewards?.skill_xp" class="flex items-center gap-2 flex-wrap">
+                              <span class="text-space-text-dim text-[10px]">📚</span>
+                              <span v-for="(xp, skill) in m.rewards.skill_xp" :key="skill" class="text-[10px] px-1.5 py-0.5 rounded bg-blue-900/30 text-blue-300 font-medium">
+                                {{ skill }} +{{ xp }}
+                              </span>
+                            </div>
                           </div>
                           <div class="flex items-center gap-2">
                             <button
@@ -292,6 +332,10 @@
                   </template>
                 </div>
               </template>
+              <div v-if="filteredAvailableCount > displayedAvailableCount"
+                class="text-center text-[11px] text-space-text-dim py-3 border-t border-space-border mt-2">
+                Showing top {{ displayedAvailableCount }} of {{ filteredAvailableCount }} — adjust filters to narrow results
+              </div>
             </div>
           </div>
 
@@ -314,7 +358,7 @@
                   🔄 Reload
                 </button>
               </div>
-              <div class="grid grid-cols-3 gap-2.5">
+              <div class="grid grid-cols-4 gap-2.5">
                 <div
                   v-for="m in completedMissions"
                   :key="m.template_id || m.mission_id || m.id"
@@ -416,6 +460,12 @@
             <span v-if="completedDetail.rewards.xp" class="text-blue-400">⭐ {{ completedDetail.rewards.xp }} XP</span>
             <span v-if="completedDetail.rewards.reputation" class="text-purple-400">🏛️ +{{ completedDetail.rewards.reputation }} rep</span>
           </div>
+          <div v-if="completedDetail.rewards.skill_xp" class="flex items-center gap-2 flex-wrap mt-2">
+            <span class="text-space-text-dim text-[11px]">📚 Skill XP:</span>
+            <span v-for="(xp, skill) in completedDetail.rewards.skill_xp" :key="skill" class="text-[11px] px-2 py-1 rounded bg-blue-900/30 text-blue-300 font-medium">
+              {{ skill }} +{{ xp }}
+            </span>
+          </div>
         </div>
 
         <!-- Giver -->
@@ -431,7 +481,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, reactive, watch } from 'vue';
+import { ref, computed, reactive } from 'vue';
 import { useBotStore } from '../stores/botStore';
 import { empireIcon, empireName } from '../utils/empires';
 import {
@@ -439,6 +489,8 @@ import {
   typeConfig, getDifficultyText, getDifficultyClass,
   objProg, fmtObj, getProgress, fmt, timeAgo, fmtSecs,
 } from '../composables/useMissions';
+
+defineEmits(['openProfile']);
 
 const botStore = useBotStore();
 const selectedBot = ref<string | null>(null);
@@ -478,7 +530,7 @@ const readyCount = computed(() => activeMissions.value.filter(m => m.is_complete
 
 const {
   filteredActive, availableMissions, allTypes, groupedAvailable,
-  filteredAvailableCount, matchesFilter,
+  filteredAvailableCount, displayedAvailableCount,
 } = useMissions(activeMissions, typeFilter, diffFilter);
 
 // ── Mission tabs ────────────────────────────────────────────────

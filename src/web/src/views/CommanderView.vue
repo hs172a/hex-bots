@@ -10,7 +10,7 @@
     </div>
 
   <!-- Advisory Tab -->
-  <div v-if="activeTab === 'advisory'" class="flex-1 flex flex-col gap-4 p-4 overflow-auto scrollbar-dark">
+  <div v-if="activeTab === 'advisory'" class="flex-1 flex flex-col gap-2 p-2 overflow-auto scrollbar-dark">
     <!-- Commander Header -->
     <div class="flex items-center justify-between">
       <h3 class="text-sm font-semibold text-space-text-bright">Commander Advisory</h3>
@@ -25,39 +25,52 @@
     </div>
 
     <!-- Top Row: Economy + Suggestions -->
-    <div class="flex gap-4">
+    <div class="flex gap-2">
       <!-- Economy Summary -->
       <div class="flex-1 bg-space-card border border-space-border rounded-lg">
-        <div class="px-3 py-2 border-b border-space-border flex items-center justify-between">
+        <div class="px-2 py-1 border-b border-space-border flex items-center justify-between">
           <span class="text-xs font-semibold text-space-text-dim uppercase">Economy</span>
-          <div class="flex gap-4 text-xs">
-            <span class="text-space-green">Rev: ₡{{ fmt(economyData.totalRevenue) }}</span>
-            <span class="text-space-red">Cost: ₡{{ fmt(economyData.totalCosts) }}</span>
-            <span :class="economyData.netProfit >= 0 ? 'text-space-green' : 'text-space-red'">
-              Net: ₡{{ fmt(economyData.netProfit) }}
+          <div v-if="economyData.totalRevenue > 0 || economyData.totalCosts > 0" class="flex gap-2 text-xs">
+            <span class="text-space-green" title="Credits earned today">Rev: ⃁{{ fmt(economyData.totalRevenue) }}</span>
+            <span class="text-space-red" title="Credits spent today">Cost: ⃁{{ fmt(economyData.totalCosts) }}</span>
+            <span :class="economyData.netProfit >= 0 ? 'text-space-green' : 'text-space-red'" title="Net profit today">
+              Net: ⃁{{ fmt(economyData.netProfit) }}
             </span>
           </div>
         </div>
-        <div class="p-3">
-          <!-- Deficits -->
-          <div v-if="economyData.deficits?.length" class="mb-3">
-            <span class="text-xs text-space-text-dim uppercase font-semibold">Supply Deficits</span>
+        <div class="p-3 space-y-3">
+          <!-- Active material requests from crafters -->
+          <div v-if="economyData.materialNeeds?.length">
+            <span class="text-xs text-space-text-dim uppercase font-semibold" title="Materials currently requested by crafters via cooperative delivery">Material Needs</span>
             <div class="mt-1 flex flex-wrap gap-2">
-              <div 
+              <div
+                v-for="d in economyData.materialNeeds" :key="d.bot + d.itemId"
+                class="px-2 py-1 rounded text-xs border border-space-accent bg-space-accent/10 text-space-accent"
+                :title="`${d.bot} needs ${d.quantity}x ${d.itemId}` + (d.stationPoiId ? ` at ${d.stationPoiId}` : '')"
+              >
+                {{ formatItemName(d.itemId) }} ×{{ d.quantity }}
+                <span class="opacity-60">← {{ d.bot }}</span>
+              </div>
+            </div>
+          </div>
+          <!-- Observed supply deficits (based on actual production/consumption rates) -->
+          <div v-if="economyData.deficits?.length">
+            <span class="text-xs text-space-text-dim uppercase font-semibold" title="Items consumed faster than they are produced (based on observed rates)">Production Gaps</span>
+            <div class="mt-1 flex flex-wrap gap-2">
+              <div
                 v-for="d in economyData.deficits" :key="d.itemId"
                 class="px-2 py-1 rounded text-xs border"
                 :class="d.priority === 'critical' ? 'border-space-red bg-space-red/10 text-space-red' : 'border-space-yellow bg-space-yellow/10 text-space-yellow'"
               >
                 {{ formatItemName(d.itemId) }}: -{{ d.shortfall.toFixed(1) }}/hr
-                <span class="opacity-60">({{ d.priority }})</span>
               </div>
             </div>
           </div>
           <!-- Surpluses -->
-          <div v-if="economyData.surpluses?.length" class="mb-3">
-            <span class="text-xs text-space-text-dim uppercase font-semibold">Surpluses</span>
+          <div v-if="economyData.surpluses?.length">
+            <span class="text-xs text-space-text-dim uppercase font-semibold" title="Items produced faster than they are consumed">Surplus Production</span>
             <div class="mt-1 flex flex-wrap gap-2">
-              <div 
+              <div
                 v-for="s in economyData.surpluses" :key="s.itemId"
                 class="px-2 py-1 rounded text-xs border border-space-green bg-space-green/10 text-space-green"
               >
@@ -65,15 +78,15 @@
               </div>
             </div>
           </div>
-          <div v-if="!economyData.deficits?.length && !economyData.surpluses?.length" class="text-xs text-space-text-dim">
-            No supply data yet. Economy data accumulates as bots run routines.
+          <div v-if="!economyData.materialNeeds?.length && !economyData.deficits?.length && !economyData.surpluses?.length" class="text-xs text-space-text-dim">
+            No active data. Material needs appear when crafters request cooperative delivery; production gaps appear after bots have been running for a while.
           </div>
         </div>
       </div>
 
       <!-- Commander Suggestions -->
       <div class="flex-1 bg-space-card border border-space-border rounded-lg">
-        <div class="px-3 py-2 border-b border-space-border">
+        <div class="px-2 py-1 border-b border-space-border">
           <span class="text-xs font-semibold text-space-text-dim uppercase">Suggestions</span>
         </div>
         <div class="p-3">
@@ -83,7 +96,7 @@
           <div v-else class="space-y-2">
             <div 
               v-for="s in suggestions" :key="s.username"
-              class="flex items-center justify-between px-3 py-2 rounded border border-space-border bg-space-bg"
+              class="flex items-center justify-between px-2 py-1 rounded border border-space-border bg-space-bg"
             >
               <div class="flex items-center gap-3">
                 <span class="text-sm font-medium text-space-text-bright">{{ s.username }}</span>
@@ -108,7 +121,7 @@
 
     <!-- Credit History Chart -->
     <div class="bg-space-card border border-space-border rounded-lg">
-      <div class="px-3 py-2 border-b border-space-border flex items-center justify-between">
+      <div class="px-2 py-1 border-b border-space-border flex items-center justify-between">
         <span class="text-xs font-semibold text-space-text-dim uppercase">Credit History (24h)</span>
         <span v-if="creditHistory.length" class="text-xs text-space-text-dim">
           {{ creditHistory.length }} data points
@@ -133,10 +146,14 @@
         </div>
       </div>
     </div>
+  </div>
+
+  <!-- Goals Tab -->
+  <div v-else-if="activeTab === 'goals'" class="flex-1 flex flex-col gap-2 p-2 overflow-auto scrollbar-dark">
 
     <!-- Gather Goals -->
     <div class="bg-space-card border border-space-border rounded-lg">
-      <div class="px-3 py-2 border-b border-space-border flex items-center justify-between">
+      <div class="px-2 py-1 border-b border-space-border flex items-center justify-between">
         <span class="text-xs font-semibold text-space-text-dim uppercase">Gather Goals</span>
         <span class="text-xs text-space-text-dim">{{ gathererGoals.length }} active</span>
       </div>
@@ -144,9 +161,9 @@
         <div v-if="!gathererGoals.length" class="text-xs text-space-text-dim italic">
           No gather goals active. Set from Station → Build tab.
         </div>
-        <div v-else class="space-y-3">
-          <div v-for="entry in gathererGoals" :key="entry.username"
-            class="p-3 rounded-md border border-space-border bg-space-bg">
+        <div v-else class="space-y-3 grid grid-cols-4 gap-2.5 mb-2">
+          <div v-for="entry in gathererGoals" :key="entry.username + ':' + entry.goal.id"
+            class="flex flex-col p-3 rounded-md border border-space-border bg-space-bg">
             <!-- Header row -->
             <div class="flex items-center justify-between mb-1.5">
               <div class="flex items-center gap-2 min-w-0">
@@ -157,7 +174,7 @@
               </div>
               <div class="flex items-center gap-2 shrink-0">
                 <span class="text-xs font-bold" :class="entry.overallPct >= 100 ? 'text-space-green' : 'text-space-text-dim'">{{ entry.overallPct }}%</span>
-                <button @click="clearGathererGoal(entry.username)" class="btn btn-secondary text-xs px-2 py-0.5">✕</button>
+                <button @click="clearGathererGoal(entry.username, entry.goal.id)" class="btn btn-secondary text-xs px-2 py-0.5">✕</button>
               </div>
             </div>
             <!-- Location -->
@@ -189,9 +206,86 @@
       </div>
     </div>
 
+    <!-- Craft Planner -->
+    <div class="bg-space-card border border-space-border rounded-lg">
+      <div class="px-2 py-1 border-b border-space-border flex items-center justify-between">
+        <span class="text-xs font-semibold text-space-text-dim uppercase">Craft Planner</span>
+        <span class="text-[10px] text-space-text-dim">Recipe dependency tree → gather goal</span>
+      </div>
+      <div class="p-3">
+        <!-- Controls -->
+        <div class="flex gap-2 items-end mb-3 flex-wrap">
+          <div class="flex-1 min-w-32">
+            <label class="text-[10px] text-space-text-dim">Target item</label>
+            <select v-model="craftPlan.itemId" class="input w-full mt-0.5 text-xs">
+              <option value="">— select item —</option>
+              <option v-for="r in craftableItems" :key="r.item_id" :value="r.item_id">{{ r.name }}</option>
+            </select>
+          </div>
+          <div class="w-20">
+            <label class="text-[10px] text-space-text-dim">Quantity</label>
+            <input v-model.number="craftPlan.quantity" type="number" min="1" class="input w-full mt-0.5 text-xs">
+          </div>
+          <div class="flex-1 min-w-32">
+            <label class="text-[10px] text-space-text-dim">Check stock for bot</label>
+            <select v-model="craftPlan.botName" class="input w-full mt-0.5 text-xs">
+              <option value="">— no bot (ignore stock) —</option>
+              <option v-for="b in botStore.bots" :key="b.username" :value="b.username">{{ b.username }}</option>
+            </select>
+          </div>
+          <button @click="analyzeCraftPlan" :disabled="!craftPlan.itemId" class="btn btn-primary px-3 py-1.5 text-xs self-end">Analyze</button>
+        </div>
+
+        <!-- Result -->
+        <div v-if="craftPlanResult">
+          <!-- Summary + action -->
+          <div class="flex items-center gap-3 mb-2">
+            <span v-if="craftPlanNeeds.length === 0" class="text-xs text-green-400">✓ All materials already available — ready to craft!</span>
+            <span v-else class="text-xs text-space-text">{{ craftPlanNeeds.length }} material type(s) need gathering</span>
+            <button
+              v-if="craftPlanNeeds.length > 0 && craftPlan.botName"
+              @click="createCraftGatherGoal"
+              class="btn btn-primary px-2 py-0.5 text-xs"
+            >📦 Create Gather Goal for {{ craftPlan.botName }}</button>
+          </div>
+
+          <!-- Gather needs summary -->
+          <div v-if="craftPlanNeeds.length" class="mb-3 p-2 rounded border border-orange-800/40 bg-orange-900/10">
+            <div class="text-[10px] text-orange-300 uppercase font-semibold mb-1.5">📦 Items to gather:</div>
+            <div v-for="need in craftPlanNeeds" :key="need.item_id" class="flex items-center justify-between text-xs py-0.5">
+              <span class="text-space-text">{{ need.item_name }}</span>
+              <span class="text-orange-400 font-bold tabular-nums">×{{ need.quantity_needed }}</span>
+            </div>
+          </div>
+
+          <!-- Dependency tree (flat, indented) -->
+          <div class="text-[10px] text-space-text-dim uppercase font-semibold mb-1">Dependency tree:</div>
+          <div class="font-mono text-[11px] space-y-0.5 max-h-56 overflow-auto scrollbar-dark bg-[#0d1117] rounded p-2">
+            <div
+              v-for="(row, i) in flattenedTree"
+              :key="i"
+              class="flex items-center gap-1.5"
+              :style="{ paddingLeft: (row.depth * 14) + 'px' }"
+            >
+              <span :class="row.node.is_satisfied ? 'text-green-400' : row.node.is_leaf ? 'text-orange-400' : 'text-blue-400'">{{ row.node.is_satisfied ? '✓' : row.node.is_leaf ? '◆' : '◇' }}</span>
+              <span :class="row.node.is_satisfied ? 'text-space-text-dim line-through' : row.node.is_leaf ? 'text-orange-300' : 'text-space-text'">{{ row.node.item_name }}</span>
+              <span class="text-space-text-dim">×{{ row.node.quantity_needed }}</span>
+              <span v-if="row.node.quantity_available > 0" class="text-green-400/70">({{ row.node.quantity_available }} avail)</span>
+              <span v-if="row.node.crafts_needed > 0" class="text-blue-400/60">→ {{ row.node.crafts_needed }}× craft</span>
+            </div>
+          </div>
+          <div class="flex gap-3 mt-1.5 text-[10px] text-space-text-dim">
+            <span><span class="text-green-400">✓</span> satisfied</span>
+            <span><span class="text-blue-400">◇</span> craft</span>
+            <span><span class="text-orange-400">◆</span> gather</span>
+          </div>
+        </div>
+      </div>
+    </div>
+
     <!-- Goals Management -->
     <div class="bg-space-card border border-space-border rounded-lg">
-      <div class="px-3 py-2 border-b border-space-border flex items-center justify-between">
+      <div class="px-2 py-1 border-b border-space-border flex items-center justify-between">
         <span class="text-xs font-semibold text-space-text-dim uppercase">Fleet Goals</span>
         <button @click="showAddGoal = !showAddGoal" class="btn btn-primary px-2 py-1 text-xs">
           {{ showAddGoal ? 'Cancel' : '+ Add Goal' }}
@@ -222,7 +316,7 @@
         <div v-else class="space-y-2">
           <div 
             v-for="(goal, i) in goals" :key="i"
-            class="flex items-center justify-between px-3 py-2 rounded border border-space-border bg-space-bg"
+            class="flex items-center justify-between px-2 py-1 rounded border border-space-border bg-space-bg"
           >
             <div class="flex items-center gap-3">
               <span class="text-sm font-medium text-space-text-bright">{{ goal.type }}</span>
@@ -239,6 +333,9 @@
     </div>
   </div>
 
+  <!-- Missions Tab -->
+  <MissionsView v-else-if="activeTab === 'missions'" />
+
   <!-- Stats Tab -->
   <StatsView v-else-if="activeTab === 'stats'" />
 
@@ -246,7 +343,7 @@
   <ActionLogView v-else-if="activeTab === 'log'" />
 
   <!-- AI Agent Tab -->
-  <div v-else-if="activeTab === 'agent'" class="flex-1 flex flex-col gap-3 p-4 overflow-auto scrollbar-dark">
+  <div v-else-if="activeTab === 'agent'" class="flex-1 flex flex-col gap-3 p-2 overflow-auto scrollbar-dark">
     <!-- Bot Selector -->
     <div class="card py-2 px-3">
       <div class="flex items-center gap-3 flex-wrap">
@@ -311,14 +408,18 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, watch, onMounted, onUnmounted } from 'vue'
+import { ref, computed, reactive, watch, onMounted, onUnmounted } from 'vue'
 import { useBotStore } from '../stores/botStore'
 import StatsView from './StatsView.vue'
 import ActionLogView from './ActionLogView.vue'
+import MissionsView from './MissionsView.vue'
+import { buildRecipeIndex, buildNode, extractGatherNeeds, buildAvailabilityMap } from '../utils/recipeTree'
+import type { RecipeNode, GatherNeed } from '../utils/recipeTree'
 
 interface EconomyData {
   deficits: Array<{ itemId: string; shortfall: number; priority: string }>
   surpluses: Array<{ itemId: string; excessPerHour: number }>
+  materialNeeds: Array<{ bot: string; itemId: string; quantity: number; stationPoiId?: string }>
   totalRevenue: number
   totalCosts: number
   netProfit: number
@@ -353,14 +454,16 @@ interface Goal {
 const botStore = useBotStore()
 const TABS = [
   { id: 'advisory', label: '📊 Advisory' },
-  { id: 'stats',    label: '📈 Stats'    },
+  { id: 'goals',    label: '🎯 Goals'     },
+  { id: 'missions', label: '🏹 Missions'  },
+  { id: 'stats',    label: '📈 Stats'     },
   { id: 'log',      label: '📜 Action Log' },
   { id: 'agent',    label: '🤖 AI Agent'  },
 ] as const
 type TabId = typeof TABS[number]['id']
 
 const activeTab = ref<TabId>('advisory')
-const economyData = ref<EconomyData>({ deficits: [], surpluses: [], totalRevenue: 0, totalCosts: 0, netProfit: 0 })
+const economyData = ref<EconomyData>({ deficits: [], surpluses: [], materialNeeds: [], totalRevenue: 0, totalCosts: 0, netProfit: 0 })
 const suggestions = ref<Suggestion[]>([])
 const commanderReasoning = ref('')
 const lastEvalTime = ref<number | null>(null)
@@ -533,13 +636,79 @@ async function refreshAll() {
   await Promise.all([fetchEconomy(), fetchCommander(), fetchCreditHistory(), fetchGoals()])
 }
 
-// ── Gather Goals ─────────────────────────────────────────────
+// ── Craft Planner ────────────────────────────────────────────
 
-const gathererGoals = computed(() =>
-  botStore.bots
-    .map(b => {
-      const goal = (botStore.settings as any)?.[b.username]?.goal ?? null
-      if (!goal) return null
+const craftPlan = reactive({ itemId: '', quantity: 1, botName: '' })
+const craftPlanResult = ref<RecipeNode | null>(null)
+const craftPlanNeeds = ref<GatherNeed[]>([])
+
+const craftableItems = computed(() => {
+  const recipes = (botStore.catalog?.recipes || {}) as Record<string, Record<string, unknown>>
+  const items = (botStore.catalog?.items || {}) as Record<string, { name?: string }>
+  const index = buildRecipeIndex(recipes)
+  return [...index.values()]
+    .map(r => ({ item_id: r.output_item_id, name: items[r.output_item_id]?.name || r.output_name }))
+    .sort((a, b) => a.name.localeCompare(b.name))
+})
+
+function analyzeCraftPlan() {
+  if (!craftPlan.itemId || craftPlan.quantity < 1) return
+  const catalog = botStore.catalog || { recipes: {}, items: {} }
+  const recipeIndex = buildRecipeIndex((catalog.recipes || {}) as Record<string, Record<string, unknown>>)
+  const rawItems = (catalog.items || {}) as Record<string, { name?: string }>
+  const itemNames = new Map(Object.entries(rawItems).map(([id, item]) => [id, item.name || id]))
+  const bot = botStore.bots.find(b => b.username === craftPlan.botName)
+  const available = bot ? buildAvailabilityMap(bot as any) : new Map<string, number>()
+  craftPlanResult.value = buildNode(craftPlan.itemId, craftPlan.quantity, itemNames, recipeIndex, available)
+  craftPlanNeeds.value = extractGatherNeeds(craftPlanResult.value)
+}
+
+function createCraftGatherGoal() {
+  if (!craftPlanNeeds.value.length || !craftPlan.botName) return
+  const bot = botStore.bots.find(b => b.username === craftPlan.botName)
+  if (!bot) return
+  const rawItems = (botStore.catalog?.items || {}) as Record<string, { name?: string }>
+  const targetName = rawItems[craftPlan.itemId]?.name || craftPlan.itemId
+  const newGoal = {
+    id: `craft_${craftPlan.itemId}_${Date.now()}`,
+    target_id: craftPlan.itemId,
+    target_name: targetName,
+    target_poi: (bot as any).poi || '',
+    target_system: (bot as any).system || '',
+    materials: craftPlanNeeds.value.map(n => ({
+      item_id: n.item_id,
+      item_name: n.item_name,
+      quantity_needed: n.quantity_needed,
+    })),
+  }
+  const botSettings = (botStore.settings as any)?.[craftPlan.botName] || {}
+  const existing: any[] = botSettings.goals?.length
+    ? botSettings.goals
+    : (botSettings.goal ? [botSettings.goal] : [])
+  botStore.saveSettings(craftPlan.botName, { goals: [...existing, newGoal], goal: null })
+}
+
+function flattenTree(node: RecipeNode, depth = 0): Array<{ node: RecipeNode; depth: number }> {
+  return [
+    { node, depth },
+    ...node.children.flatMap(c => flattenTree(c, depth + 1)),
+  ]
+}
+
+const flattenedTree = computed(() =>
+  craftPlanResult.value ? flattenTree(craftPlanResult.value) : []
+)
+
+// ── Gather Goals ───────────────────────────────────────────
+
+const gathererGoals = computed(() => {
+  const result: Array<{ username: string; state: string; routine?: string; goal: any; materials: any[]; overallPct: number }> = []
+  for (const b of botStore.bots) {
+    const botSettings = (botStore.settings as any)?.[b.username] || {}
+    const rawGoals: any[] = botSettings.goals?.length
+      ? botSettings.goals
+      : (botSettings.goal ? [botSettings.goal] : [])
+    for (const goal of rawGoals) {
       const materials = (goal.materials || []).map((m: any) => {
         const inFaction = b.factionStorage?.find((i: any) => i.itemId === m.item_id)?.quantity ?? 0
         const inCargo = b.inventory?.find((i: any) => i.itemId === m.item_id)?.quantity ?? 0
@@ -550,13 +719,19 @@ const gathererGoals = computed(() =>
       const totalNeeded = materials.reduce((s: number, m: any) => s + m.quantity_needed, 0)
       const totalCollected = materials.reduce((s: number, m: any) => s + m.collected, 0)
       const overallPct = totalNeeded > 0 ? Math.round(totalCollected / totalNeeded * 100) : 0
-      return { username: b.username, state: b.state, routine: b.routine, goal, materials, overallPct }
-    })
-    .filter((e): e is NonNullable<typeof e> => e !== null)
-)
+      result.push({ username: b.username, state: b.state, routine: b.routine, goal, materials, overallPct })
+    }
+  }
+  return result
+})
 
-function clearGathererGoal(username: string) {
-  botStore.saveSettings(username, { goal: null })
+function clearGathererGoal(username: string, goalId: string) {
+  const botSettings = (botStore.settings as any)?.[username] || {}
+  const rawGoals: any[] = botSettings.goals?.length
+    ? botSettings.goals
+    : (botSettings.goal ? [botSettings.goal] : [])
+  const filtered = rawGoals.filter((g: any) => g.id !== goalId)
+  botStore.saveSettings(username, { goals: filtered, goal: null })
 }
 
 function isBotRunning(username: string): boolean {

@@ -119,6 +119,14 @@
           <input type="number" v-model.number="generalForm.autoApplyMinScore" min="30" max="200" class="input w-20 text-sm" />
         </div>
 
+        <div class="setting-row">
+          <div>
+            <div class="text-sm text-space-text">Alliance leader bot</div>
+            <div class="text-xs text-space-text-dim mt-0.5">Username of the faction leader bot. When docked at a station without faction storage, a gather goal for <strong>Faction Lockbox</strong> is automatically set.</div>
+          </div>
+          <input type="text" v-model="generalForm.leaderBot" placeholder="username" class="input w-40 text-sm" />
+        </div>
+
         <div class="save-bar">
           <button @click="saveGeneral" class="btn btn-primary">Save Settings</button>
         </div>
@@ -1355,7 +1363,7 @@ function oreNameById(id: string): string {
 }
 
 // ── General form ────────────────────────────────────────────
-const generalForm = ref({ factionDonatePct: 10, factionStation: '', enableApiLogging: false, maxJumps: 20, autoApply: false, autoApplyMinScore: 80 });
+const generalForm = ref({ factionDonatePct: 10, factionStation: '', enableApiLogging: false, maxJumps: 20, autoApply: false, autoApplyMinScore: 80, leaderBot: '' });
 
 // ── Miner form ──────────────────────────────────────────────
 const minerForm = ref({
@@ -1716,6 +1724,7 @@ function initForms(s: Record<string, any>) {
     generalForm.value.maxJumps = s.general.maxJumps ?? 20;
     generalForm.value.autoApply = s.general.autoApply ?? false;
     generalForm.value.autoApplyMinScore = s.general.autoApplyMinScore ?? 80;
+    generalForm.value.leaderBot = s.general.leaderBot ?? '';
   }
   if (s.miner) {
     const m = s.miner;
@@ -1957,6 +1966,7 @@ function saveGeneral() {
     maxJumps: generalForm.value.maxJumps,
     autoApply: generalForm.value.autoApply,
     autoApplyMinScore: generalForm.value.autoApplyMinScore,
+    leaderBot: generalForm.value.leaderBot,
   });
 }
 

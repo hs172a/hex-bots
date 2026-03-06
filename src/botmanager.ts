@@ -47,6 +47,7 @@ import { RetentionManager } from "./data/retention.js";
 import { EconomyEngine } from "./commander/economy-engine.js";
 import type { FleetSummary } from "./commander/types.js";
 import { GoalsStore } from "./data/goals-store.js";
+import { getAllMaterialDemands } from "./swarmcoord.js";
 import { GoalSchema } from "./types/config.js";
 import { AdvisoryCommander } from "./commander/advisory-commander.js";
 import { initDataSync, DataSyncClient, DataSyncServer } from "./datasync.js";
@@ -606,7 +607,7 @@ async function handleExec(action: WebAction): Promise<WebActionResult> {
     "refuel", "repair", "deposit_items", "withdraw_items", "jettison",
     "attack", "loot_wreck", "salvage_wreck", "send_gift", "craft",
     "accept_mission", "complete_mission", "abandon_mission",
-    "buy_ship", "sell_ship", "switch_ship", "install_mod", "uninstall_mod", "set_colors",
+    "buy_ship", "sell_ship", "switch_ship", "install_mod", "uninstall_mod", "repair_module", "set_colors",
     "faction_deposit_items", "faction_withdraw_items",
   ]);
   if (refreshCommands.has(command)) {
@@ -779,6 +780,7 @@ async function main(): Promise<void> {
     return await bot.api.getPlayerProfile(playerId);
   };
   server.onEconomyData = () => economy.getSummary(buildFleetSummary());
+  server.onMaterialDemands = () => getAllMaterialDemands();
   server.onCreditHistory = (sinceMs: number) => logger.getCreditHistory(sinceMs);
   server.onCommanderData = () => commander.getLastResult();
 
@@ -1089,6 +1091,8 @@ async function main(): Promise<void> {
   let creditsTargetAlerted = false;
   // A1: track which arbitrage routes have already fired this session (prevent spam)
   const arbitrageAlertedRoutes = new Set<string>();
+  // G1: track stations where leader auto-goal was already set this session (no spam)
+  const leaderGoalAttemptedStations = new Set<string>();
 
   // Periodic stats flush (every 60s) + credit history logging + arbitrage scan
   intervals.push(setInterval(() => {
@@ -1146,6 +1150,75 @@ async function main(): Promise<void> {
           }
         } catch { /* ignore — non-critical background task */ }
       })();
+    }
+
+    // G1: Alliance leader auto-goal — if leader docks at station with no faction storage,
+    //     auto-set a gather goal for Faction Lockbox (then Intel Terminal) without API pre-check.
+    const generalSettings = server.settings?.general as Record<string, unknown> | undefined;
+    const leaderUsername = generalSettings?.leaderBot as string | undefined;
+    if (leaderUsername) {
+      const leaderBot = bots.get(leaderUsername);
+      if (leaderBot && leaderBot.docked && leaderBot.poi && leaderBot.inFaction) {
+        const poiKey = leaderUsername + ":" + leaderBot.poi;
+        const hasFac = mapStore.hasFactionStorage(leaderBot.poi);
+        const currentGoal = (server.settings?.[leaderUsername] as Record<string, unknown> | undefined)?.goal;
+        if (hasFac === false && !currentGoal && !leaderGoalAttemptedStations.has(poiKey)) {
+          leaderGoalAttemptedStations.add(poiKey);
+          // Run async — fetch facility types and set gather goal
+          (async () => {
+            try {
+              const TARGET_NAMES = ["Faction Lockbox", "Intel Terminal"];
+              for (const targetName of TARGET_NAMES) {
+                const typesResp = await leaderBot.exec("facility", { action: "types" });
+                if (typesResp.error) break;
+                const allTypes: Array<{ id: string; name: string; build_materials?: any[] }> =
+                  (typesResp.result as any)?.types ?? (typesResp.result as any) ?? [];
+                const match = allTypes.find((t: any) => t.name === targetName || t.name?.toLowerCase() === targetName.toLowerCase());
+                if (!match) continue;
+
+                // Fetch detailed build materials for this type
+                let mats: Array<{ item_id: string; item_name: string; quantity_needed: number }> = [];
+                if (match.build_materials?.length) {
+                  mats = match.build_materials.map((m: any) => ({
+                    item_id: m.item_id || m.id || "",
+                    item_name: m.name || m.item_name || (m.item_id || "").replace(/_/g, " "),
+                    quantity_needed: m.quantity || m.quantity_needed || 1,
+                  }));
+                } else {
+                  const detResp = await leaderBot.exec("facility", { action: "types", facility_type: match.id });
+                  if (!detResp.error) {
+                    const detail = (detResp.result as any)?.types?.[0] ?? detResp.result ?? {};
+                    mats = (detail.build_materials || []).map((m: any) => ({
+                      item_id: m.item_id || m.id || "",
+                      item_name: m.name || m.item_name || (m.item_id || "").replace(/_/g, " "),
+                      quantity_needed: m.quantity || m.quantity_needed || 1,
+                    }));
+                  }
+                }
+                if (!mats.length) continue;
+
+                const goal = {
+                  id: `leader_${match.id}_${Date.now()}`,
+                  target_id: match.id,
+                  target_name: match.name || targetName,
+                  target_poi: leaderBot.poi!,
+                  target_system: leaderBot.system,
+                  materials: mats,
+                };
+                server.saveRoutineSettings(leaderUsername, { goal });
+                server.logSystem(`[Leader] Auto-goal set for ${leaderUsername}: gather "${match.name}" at ${leaderBot.poi}`);
+                break; // Set one goal at a time; next will be set after this one completes
+              }
+            } catch (err) {
+              server.logSystem(`[Leader] Auto-goal error for ${leaderUsername}: ${err instanceof Error ? err.message : err}`);
+            }
+          })();
+        }
+        // Reset attempted stations when faction storage becomes available (goal achieved or built manually)
+        if (hasFac === true) {
+          leaderGoalAttemptedStations.delete(poiKey);
+        }
+      }
     }
 
     // A1: Price arbitrage scan

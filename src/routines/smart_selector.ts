@@ -218,6 +218,12 @@ async function buildCandidates(
     ctx.log("warn", `SmartSelector: trading restricted for ~${minutesLeft} more minute(s) — skipping trader`);
   }
 
+  // Low-credits penalty: trader needs credits to buy goods; penalise heavily when broke
+  const lowCreditsPenalty = bot.credits < 500 ? 60 : bot.credits < 2000 ? 25 : 0;
+  if (lowCreditsPenalty > 0) {
+    ctx.log("system", `SmartSelector: low credits (${bot.credits}cr) — -${lowCreditsPenalty} to trader`);
+  }
+
   const [missionScore, tradeScore, nearbyResp] = await Promise.all([
     scoreMissions(ctx, settings.minMissionReward),
     isTradeRestricted
@@ -267,7 +273,7 @@ async function buildCandidates(
       key: "trader",
       name: "Trader",
       fn: traderRoutine,
-      score: Math.max(0, tradeScore - enemyPenalty + allyBonus),
+      score: Math.max(0, tradeScore - enemyPenalty + allyBonus - lowCreditsPenalty),
     },
     {
       key: "gas_harvester",
@@ -524,11 +530,29 @@ export const smartSelectorRoutine: Routine = async function* (ctx: RoutineContex
       `| candidates: ${candidates.slice(0, 3).map(c => `${c.key}=${c.score.toFixed(0)}`).join(", ")}`
     );
 
-    yield `running:${winner.key}`;
-    lastRunMs.set(winner.key, Date.now());
-    yield* winner.fn(ctx);
-
-    ctx.log("system", `SmartSelector: ${winner.name} completed — re-evaluating in 5s`);
+    // Try candidates in score order; fall back to the next on routine error
+    let routineCompleted = false;
+    for (const candidate of candidates) {
+      if (candidate.score <= 0) break;
+      yield `running:${candidate.key}`;
+      lastRunMs.set(candidate.key, Date.now());
+      try {
+        yield* candidate.fn(ctx);
+        ctx.log("system", `SmartSelector: ${candidate.name} completed — re-evaluating in 5s`);
+        routineCompleted = true;
+        break;
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        ctx.log("warn", `SmartSelector: ${candidate.name} failed (${msg}) — trying next candidate`);
+        // Short pause before trying next
+        await sleep(3_000);
+      }
+    }
+    if (!routineCompleted) {
+      ctx.log("system", "SmartSelector: all candidates failed — waiting 30s before re-evaluating");
+      await sleep(30_000);
+      continue;
+    }
     await sleep(5_000);
   }
 };

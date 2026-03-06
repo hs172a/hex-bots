@@ -22,6 +22,8 @@ export interface ShipModule {
   slot_type?: string;
   cpu_cost?: number;
   power_cost?: number;
+  wear?: number;
+  wear_status?: string;
 }
 
 export interface BotStats {
@@ -601,6 +603,8 @@ export class Bot extends EventEmitter {
           slot_type: m.slot_type as string | undefined,
           cpu_cost: m.cpu_cost as number | undefined,
           power_cost: m.power_cost as number | undefined,
+          wear: m.wear as number | undefined,
+          wear_status: m.wear_status as string | undefined,
         }));
       }
 

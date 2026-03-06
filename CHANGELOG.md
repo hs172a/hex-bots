@@ -5,6 +5,40 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [2.2.0] - 2026-03-06
+
+### Added
+
+- **Commander: Goals tab** (`CommanderView.vue`):
+  - Moved **Gather Goals**, **Craft Planner**, and **Fleet Goals** out of the Advisory tab into a dedicated `🎯 Goals` tab
+  - Gather Goals now shows **all goals per bot** (previously only one goal per bot was displayed)
+- **Commander: Missions tab** (`CommanderView.vue`):
+  - `MissionsView` embedded as a new `🏹 Missions` tab inside Commander
+  - Removed `Missions` from the top-level App.vue navigation (fewer tabs, less visual noise)
+- **Gatherer: multi-goal queue** (`gatherer.ts`):
+  - Settings now support a `goals: GatherGoal[]` array per bot in addition to the legacy `goal` (single); both formats are read with backward compatibility
+  - The routine processes all queued goals sequentially in one run
+  - `createCraftGatherGoal` in Commander now **appends** to the `goals[]` array instead of overwriting the single goal — multiple craft targets can be queued at once
+- **Gatherer: non-overlapping component allocation** (`gatherer.ts`, `swarmcoord.ts`):
+  - New `GatherComponentClaim` primitive in `swarmcoord.ts`: item-level mutex, keyed by `itemId`, TTL = 45 min
+  - Before acquiring each material, a gatherer bot calls `claimGatherComponent()` — if another bot already holds the claim it logs `⏭ claimed by another gatherer — skipping` and skips that item
+  - Claims are released per-item as each acquisition completes, and all claims are released on routine exit via `releaseAllGatherClaims()`
+  - `releaseAllClaims()` now also calls `releaseAllGatherClaims()` for full cleanup on bot stop
+
+### Changed
+
+- **UI performance: log batching** (`botStore.ts`, `useDashboardLogs.ts`):
+  - All incoming log lines (activity/broadcast/system/faction/per-bot) are now queued in plain non-reactive arrays and flushed to reactive state at most once per 100 ms — single Vue reactivity trigger instead of one per message
+  - `botLogBuffers` converted from `ref` (deep reactive) to `shallowRef`
+  - `groupedBroadcastLogs` now reuses the already-computed `parsedBroadcastLogs` instead of re-parsing the broadcast array a second time
+  - Displayed log sliced to last 200 entries before parsing to reduce per-recomputation cost
+  - Log buffer caps reduced: 500→300 (panels), 200→150 (faction), 200→100 (per-bot), 1000→500 (global `logs[]`)
+- **MissionsView: available missions cap** (`useMissions.ts`):
+  - `groupedAvailable` now renders at most **60 mission cards** (sorted by reward) to prevent DOM overload when hundreds of missions are present across explored systems
+  - Shows "Showing top N of Total — adjust filters to narrow results" when truncated
+
+---
+
 ## [1.9.5] - 2026-03-06
 
 ### Changed

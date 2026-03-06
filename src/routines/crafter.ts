@@ -11,6 +11,7 @@ import {
   sleep,
   logFactionActivity,
   logAgentEvent,
+  getReservedForGoals,
 } from "./common.js";
 
 // ── Settings ─────────────────────────────────────────────────
@@ -185,6 +186,22 @@ function countInCargo(ctx: RoutineContext, itemId: string): number {
   return total;
 }
 
+/**
+ * Count how many of an item are available for crafting.
+ * Items in cargo are fully available; items in station/faction storage are reduced
+ * by the reserved quantity so gather-goal materials are protected.
+ */
+function countItemAvailable(ctx: RoutineContext, itemId: string, reserved: Map<string, number>): number {
+  const { bot } = ctx;
+  const inCargo = countInCargo(ctx, itemId);
+  let inStorage = 0;
+  for (const i of bot.storage) if (i.itemId === itemId) inStorage += i.quantity;
+  let inFaction = 0;
+  for (const i of bot.factionStorage) if (i.itemId === itemId) inFaction += i.quantity;
+  const res = reserved.get(itemId) ?? 0;
+  return inCargo + Math.max(0, inStorage - res) + Math.max(0, inFaction - res);
+}
+
 /** Maximum items per craft API call (enforced by game server). */
 const MAX_CRAFT_BATCH = 10;
 
@@ -270,26 +287,36 @@ function applyCraftDelta(
       else bot.inventory.push({ itemId: out.item_id, name: out.name || out.item_id, quantity: out.quantity });
     }
   }
+  // Re-derive bot.cargo from inventory so cargoCapBatches stays accurate across loop iterations
+  bot.cargo = bot.inventory.reduce((s, i) => s + i.quantity, 0);
 }
 
 /** Withdraw materials from station storage into cargo for a recipe.
  *  count = how many craft batches we want to perform in one go.
+ *  Respects gather goal reservations — leaves reserved quantities untouched.
  *  Updates bot state in-memory from API responses — no extra get_cargo calls. */
 async function withdrawStorageMaterials(ctx: RoutineContext, recipe: Recipe, count = 1): Promise<void> {
   const { bot } = ctx;
+  const reserved = bot.poi ? getReservedForGoals(bot.poi, bot.username) : new Map<string, number>();
   for (const comp of recipe.components) {
     const inCargo = countInCargo(ctx, comp.item_id);
     const wantInCargo = comp.quantity * count;
     if (inCargo >= wantInCargo) continue;
 
-    const freeSpace = bot.cargoMax > 0 ? bot.cargoMax - bot.cargo : 0;
+    const actualCargo = bot.inventory.reduce((s, i) => s + i.quantity, 0);
+    const freeSpace = bot.cargoMax > 0 ? bot.cargoMax - actualCargo : 0;
     if (freeSpace <= 0) break;
 
     const needed = wantInCargo - inCargo;
     const inStorage = bot.storage.find(i => i.itemId === comp.item_id);
     if (!inStorage || inStorage.quantity <= 0) continue;
 
-    const withdrawQty = Math.min(needed, inStorage.quantity, freeSpace);
+    // Leave reserved quantities for active gather goals at this station
+    const reservedQty = reserved.get(comp.item_id) ?? 0;
+    const available = inStorage.quantity - reservedQty;
+    if (available <= 0) continue;
+
+    const withdrawQty = Math.min(needed, available, freeSpace);
     const resp = await bot.exec("withdraw_items", { item_id: comp.item_id, quantity: withdrawQty });
     if (!resp.error) {
       ctx.log("craft", `Withdrew ${withdrawQty}x ${comp.name || comp.item_id} from station storage`);
@@ -300,22 +327,33 @@ async function withdrawStorageMaterials(ctx: RoutineContext, recipe: Recipe, cou
 
 /** Withdraw materials from faction storage into cargo for a recipe.
  *  count = how many craft batches we want to perform in one go.
+ *  Respects gather goal reservations — leaves reserved quantities untouched.
  *  Updates bot state in-memory from API responses — no extra get_cargo calls. */
 async function withdrawFactionMaterials(ctx: RoutineContext, recipe: Recipe, count = 1): Promise<void> {
   const { bot } = ctx;
+  const reserved = bot.poi ? getReservedForGoals(bot.poi, bot.username) : new Map<string, number>();
   for (const comp of recipe.components) {
     const inCargo = countInCargo(ctx, comp.item_id);
     const wantInCargo = comp.quantity * count;
     if (inCargo >= wantInCargo) continue;
 
-    const freeSpace = bot.cargoMax > 0 ? bot.cargoMax - bot.cargo : 0;
+    const actualCargo2 = bot.inventory.reduce((s, i) => s + i.quantity, 0);
+    const freeSpace = bot.cargoMax > 0 ? bot.cargoMax - actualCargo2 : 0;
     if (freeSpace <= 0) break;
 
     const needed = wantInCargo - inCargo;
     const inFaction = bot.factionStorage.find(i => i.itemId === comp.item_id);
     if (!inFaction || inFaction.quantity <= 0) continue;
 
-    const withdrawQty = Math.min(needed, inFaction.quantity, freeSpace);
+    // Leave reserved quantities for active gather goals at this station
+    const reservedQty = reserved.get(comp.item_id) ?? 0;
+    const available = inFaction.quantity - reservedQty;
+    if (available <= 0) {
+      ctx.log("craft", `${comp.name || comp.item_id}: ${reservedQty} reserved for gather goal at ${bot.poi} — skipping`);
+      continue;
+    }
+
+    const withdrawQty = Math.min(needed, available, freeSpace);
     const resp = await bot.exec("faction_withdraw_items", { item_id: comp.item_id, quantity: withdrawQty });
     if (!resp.error) {
       ctx.log("craft", `Withdrew ${withdrawQty}x ${comp.name || comp.item_id} from faction storage`);
@@ -847,19 +885,26 @@ export const crafterRoutine: Routine = async function* (ctx: RoutineContext) {
       while (crafted < needed && bot.state === "running") {
         // ── Calculate how many we can/should craft in one API call ──────────
         const remaining = needed - crafted;
-        // Cap by what's available anywhere (total across cargo + storage + faction)
+        // Cap by what's available anywhere, respecting gather-goal reservations
+        const craftReserved = bot.poi ? getReservedForGoals(bot.poi) : new Map<string, number>();
         const availableFromAll = recipe.components.length > 0
           ? recipe.components.reduce((min, c) => {
-              const total = countItem(ctx, c.item_id);
-              return Math.min(min, Math.floor(total / c.quantity));
+              const avail = countItemAvailable(ctx, c.item_id, craftReserved);
+              return Math.min(min, Math.floor(avail / c.quantity));
             }, remaining)
           : remaining;
         // Cap by cargo capacity: how many full sets fit in free space
+        // Use inventory sum (not bot.cargo) — applyCraftDelta keeps inventory current but not bot.cargo
         let cargoCapBatches = remaining;
         if (recipe.components.length > 0 && bot.cargoMax > 0) {
           const slotsPerCraft = recipe.components.reduce((s, c) => s + c.quantity, 0);
-          const freeSlots = bot.cargoMax - bot.cargo;
+          const currentCargo = bot.inventory.reduce((s, i) => s + i.quantity, 0);
+          const freeSlots = bot.cargoMax - currentCargo;
           if (slotsPerCraft > 0) cargoCapBatches = Math.max(1, Math.floor(freeSlots / slotsPerCraft));
+        }
+        if (availableFromAll === 0) {
+          missingSummary.push(`${recipe.name} (all materials reserved for gather goals)`);
+          break;
         }
         const batchSize = Math.max(1, Math.min(remaining, MAX_CRAFT_BATCH, availableFromAll, cargoCapBatches));
 
@@ -930,10 +975,10 @@ export const crafterRoutine: Routine = async function* (ctx: RoutineContext) {
               return `${c.item_id}(need ${c.quantity}, have ${inCargo})`;
             }).join(", ");
             ctx.log("error", `${recipe.name} components mismatch — local recipe: [${componentList}]`);
-          } else if (msg.includes("illegal") || msg.includes("banned") || msg.includes("forbidden") || msg.includes("production_banned") || msg.includes("restricted")) {
+          } else if (msg.includes("illegal") || msg.includes("banned") || msg.includes("forbidden") || msg.includes("production_banned") || msg.includes("restricted") || msg.includes("facility-only") || msg.includes("cannot be crafted manually")) {
             illegalRecipes.add(recipe.recipe_id);
             illegalRecipes.add(recipeId);
-            ctx.log("error", `Craft ${recipe.name}: BANNED by game rules — blacklisting for this session`);
+            ctx.log("error", `Craft ${recipe.name}: not manually craftable — blacklisting for this session`);
           } else {
             ctx.log("error", `Craft ${recipe.name}: ${craftResp.error.message}`);
           }
@@ -1003,28 +1048,47 @@ export const crafterRoutine: Routine = async function* (ctx: RoutineContext) {
 
         if (!hasMaterialsAnywhere(ctx, recipe)) continue; // materials may have been consumed
 
-        await withdrawFactionMaterials(ctx, recipe);
-        await withdrawStorageMaterials(ctx, recipe);
+        // Compute maximum viable batch respecting gather-goal reservations
+        const autoReserved = bot.poi ? getReservedForGoals(bot.poi) : new Map<string, number>();
+        const targetBatch = (): number => recipe.components.length > 0
+          ? Math.min(MAX_CRAFT_BATCH, recipe.components.reduce((min, c) =>
+              Math.min(min, Math.floor(countItemAvailable(ctx, c.item_id, autoReserved) / c.quantity)), MAX_CRAFT_BATCH))
+          : MAX_CRAFT_BATCH;
+
+        if (targetBatch() === 0) continue; // all materials reserved — skip this recipe
+
+        await withdrawFactionMaterials(ctx, recipe, targetBatch());
+        await withdrawStorageMaterials(ctx, recipe, targetBatch());
         if (getMissingMaterial(ctx, recipe)) {
           // Try prereqs once
           const preC = await craftPrerequisites(ctx, recipe, recipeIndex);
           if (preC.length > 0) prereqSummary.push(...preC);
-          await withdrawFactionMaterials(ctx, recipe);
-          await withdrawStorageMaterials(ctx, recipe);
+          await withdrawFactionMaterials(ctx, recipe, targetBatch());
+          await withdrawStorageMaterials(ctx, recipe, targetBatch());
           if (getMissingMaterial(ctx, recipe)) continue;
         }
 
         // Calculate max batches from current cargo and craft in one shot, then loop if more available
         while (hasMaterialsAnywhere(ctx, recipe) && bot.state === "running") {
           const batchCount = recipe.components.length > 0
-            ? Math.max(1, Math.min(MAX_CRAFT_BATCH, recipe.components.reduce((min, c) => {
+            ? Math.min(MAX_CRAFT_BATCH, recipe.components.reduce((min, c) => {
                 const have = countInCargo(ctx, c.item_id);
                 return Math.min(min, Math.floor(have / c.quantity));
-              }, MAX_CRAFT_BATCH)))
+              }, MAX_CRAFT_BATCH))
             : 1;
+          if (batchCount === 0) break; // nothing in cargo after withdrawal — all reserved
           yield `auto_craft_${recipe.recipe_id}`;
           const craftResp = await bot.exec("craft", { recipe_id: recipe.recipe_id, count: batchCount });
-          if (craftResp.error) break;
+          if (craftResp.error) {
+            const emsg = craftResp.error.message.toLowerCase();
+            if (emsg.includes("facility-only") || emsg.includes("cannot be crafted manually") || emsg.includes("illegal") || emsg.includes("banned") || emsg.includes("production_banned")) {
+              illegalRecipes.add(recipe.recipe_id);
+              ctx.log("error", `autoCraft ${recipe.name}: not manually craftable — blacklisting`);
+            } else {
+              ctx.log("error", `autoCraft ${recipe.name}: ${craftResp.error.message}`);
+            }
+            break;
+          }
           const result = craftResp.result as Record<string, unknown> || {};
           const qty = (result?.count as number) || (result?.quantity as number) || recipe.output_quantity * batchCount;
           totalCrafted += qty;
@@ -1032,8 +1096,8 @@ export const crafterRoutine: Routine = async function* (ctx: RoutineContext) {
           craftedSummary.push(`${qty}x ${recipe.name}`);
           applyCraftDelta(ctx, recipe, batchCount, result);
           if (!hasMaterialsAnywhere(ctx, recipe)) break;
-          await withdrawFactionMaterials(ctx, recipe);
-          await withdrawStorageMaterials(ctx, recipe);
+          await withdrawFactionMaterials(ctx, recipe, targetBatch());
+          await withdrawStorageMaterials(ctx, recipe, targetBatch());
           if (getMissingMaterial(ctx, recipe)) break;
         }
       }

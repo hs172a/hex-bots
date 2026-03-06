@@ -159,21 +159,31 @@ export function useMissions(
     return [...types].sort();
   });
 
+  const MAX_AVAILABLE_DISPLAY = 60;
+
+  const filteredAvailableAll = computed(() =>
+    availableMissions.value.filter(matchesFilter)
+  );
+
   const groupedAvailable = computed((): [string, [string, any[]][]][] => {
     const bySystem = new Map<string, Map<string, any[]>>();
-    for (const m of availableMissions.value) {
-      if (!matchesFilter(m)) continue;
+    let count = 0;
+    for (const m of filteredAvailableAll.value) {
+      if (count >= MAX_AVAILABLE_DISPLAY) break;
       const sys = m._sysName;
       const sta = m._stationName;
       if (!bySystem.has(sys)) bySystem.set(sys, new Map());
       const byStation = bySystem.get(sys)!;
       if (!byStation.has(sta)) byStation.set(sta, []);
       byStation.get(sta)!.push(m);
+      count++;
     }
     return [...bySystem.entries()].map(([sys, stations]) => [sys, [...stations.entries()]]);
   });
 
-  const filteredAvailableCount = computed(() =>
+  const filteredAvailableCount = computed(() => filteredAvailableAll.value.length);
+
+  const displayedAvailableCount = computed(() =>
     groupedAvailable.value.reduce((n, [, stations]) =>
       n + stations.reduce((sn, [, ms]) => sn + ms.length, 0), 0)
   );
@@ -184,6 +194,7 @@ export function useMissions(
     allTypes,
     groupedAvailable,
     filteredAvailableCount,
+    displayedAvailableCount,
     matchesFilter,
   };
 }

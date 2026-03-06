@@ -167,6 +167,55 @@ function parseAvailableMissions(data: unknown): Mission[] {
   return arr.map(parseMission).filter((m): m is Mission => m !== null);
 }
 
+// ── Craft-objective helpers ────────────────────────────────────
+
+/** Minimal recipe shape used by the mission runner craft handler. */
+interface MissionRecipe {
+  recipe_id: string;
+  output_item_id: string;
+  output_name: string;
+  output_quantity: number;
+  components: Array<{ item_id: string; quantity: number }>;
+}
+
+/** Parse a raw game API recipe list into MissionRecipe objects. */
+function parseMissionRecipes(data: unknown): MissionRecipe[] {
+  if (!data || typeof data !== "object") return [];
+  const d = data as Record<string, unknown>;
+  let raw: Array<Record<string, unknown>> = [];
+  if (Array.isArray(d)) raw = d as Array<Record<string, unknown>>;
+  else if (Array.isArray(d.recipes)) raw = d.recipes as Array<Record<string, unknown>>;
+  else if (Array.isArray(d.items)) raw = d.items as Array<Record<string, unknown>>;
+  else raw = Object.values(d).filter(v => v && typeof v === "object") as Array<Record<string, unknown>>;
+  return raw.map(r => {
+    const comps = (r.components || r.ingredients || r.inputs || r.materials || []) as Array<Record<string, unknown>>;
+    const rawOut = r.outputs || r.output || r.result || r.produces;
+    const out = (Array.isArray(rawOut) ? rawOut[0] : rawOut) as Record<string, unknown> | undefined ?? {};
+    return {
+      recipe_id: (r.recipe_id as string) || (r.id as string) || "",
+      output_item_id: (out.item_id as string) || (r.output_item_id as string) || "",
+      output_name: (out.name as string) || (out.item_name as string) || (r.output_name as string) || "",
+      output_quantity: (out.quantity as number) || (r.output_quantity as number) || 1,
+      components: comps.map(c => ({
+        item_id: (c.item_id as string) || (c.id as string) || "",
+        quantity: (c.quantity as number) || 1,
+      })).filter(c => c.item_id),
+    };
+  }).filter(r => r.recipe_id);
+}
+
+type ItemStack = Array<{ itemId: string; quantity: number }>;
+
+function countMissionCargo(inventory: ItemStack, itemId: string): number {
+  return inventory.reduce((n, i) => i.itemId === itemId ? n + i.quantity : n, 0);
+}
+function countMissionStorage(storage: ItemStack, itemId: string): number {
+  return storage.reduce((n, i) => i.itemId === itemId ? n + i.quantity : n, 0);
+}
+function countMissionItem(inventory: ItemStack, storage: ItemStack, itemId: string): number {
+  return countMissionCargo(inventory, itemId) + countMissionStorage(storage, itemId);
+}
+
 /**
  * Estimate relative completion effort for scoring (lower = faster).
  * Used to rank missions by reward-per-effort rather than raw reward.
@@ -538,6 +587,7 @@ async function* executeObjective(
         ctx.log("info", `Navigating to ${targetSys}...`);
         await navigateToSystem(ctx, targetSys, { fuelThresholdPct: settings.refuelThreshold, hullThresholdPct: 30 });
         await bot.refreshStatus();
+        if (bot.system !== targetSys) return; // navigation didn't reach target — retry on next iteration
       }
       if (obj.targetPoi && bot.poi !== obj.targetPoi) {
         await ensureUndocked(ctx);
@@ -605,19 +655,167 @@ async function* executeObjective(
       break;
     }
 
-    // ── Craft (stub) ──
+    // ── Craft ──
     case "craft": {
       yield "obj_craft";
-      ctx.log("warn", `Craft objective not fully supported — skipping: ${obj.targetName || obj.target}`);
-      obj.complete = true;
+      if (bot.docked) await syncMissionProgress(ctx, missionId, objectives);
+      if (obj.complete || obj.current >= obj.quantity) { obj.complete = true; return; }
+
+      const needed = obj.quantity - obj.current;
+      await ensureDocked(ctx);
+
+      // Step 1: load recipes from catalog cache (same source as crafter routine)
+      yield "obj_craft_recipes";
+      let catalogRecipes = Object.values(ctx.catalogStore.getAll().recipes);
+      if (catalogRecipes.length === 0) {
+        ctx.log("info", "Craft obj: catalog empty — fetching...");
+        try {
+          await ctx.catalogStore.fetchAll(ctx.api);
+          catalogRecipes = Object.values(ctx.catalogStore.getAll().recipes);
+        } catch (err) {
+          ctx.log("warn", `Craft obj: catalog fetch failed — ${err}`);
+          return;
+        }
+      }
+      const allRecipes = parseMissionRecipes(catalogRecipes);
+      if (allRecipes.length === 0) {
+        ctx.log("warn", "Craft obj: no recipes in catalog");
+        return;
+      }
+
+      // Step 2: find which recipe to use
+      const targetId = (obj.target || "").toLowerCase();
+      let mRecipe: MissionRecipe | null = null;
+      if (targetId && targetId !== "any") {
+        mRecipe = allRecipes.find(r =>
+          r.output_item_id.toLowerCase() === targetId ||
+          r.output_item_id.toLowerCase().includes(targetId) ||
+          (obj.targetName ? r.output_name.toLowerCase().includes(obj.targetName.toLowerCase()) : false)
+        ) ?? null;
+        if (!mRecipe) {
+          ctx.log("warn", `Craft obj: no recipe produces "${obj.targetName || obj.target}"`);
+          return;
+        }
+      } else {
+        // "Craft any N items" — prefer recipes where all materials are already available
+        await bot.refreshStorage();
+        const funded = allRecipes.filter(r =>
+          r.components.every(c => countMissionItem(bot.inventory, bot.storage, c.item_id) >= c.quantity)
+        );
+        if (funded.length > 0) {
+          mRecipe = funded.sort((a, b) => a.components.length - b.components.length)[0];
+        } else if (settings.preferBuying) {
+          mRecipe = [...allRecipes]
+            .filter(r => r.components.length > 0)
+            .sort((a, b) => a.components.length - b.components.length)[0] ?? null;
+        }
+        if (!mRecipe) {
+          ctx.log("warn", "Craft obj: no craftable recipe (no stock and preferBuying=false)");
+          return;
+        }
+      }
+
+      // Step 3: check and acquire materials
+      await bot.refreshStorage();
+      const batchCount = Math.min(needed, 10);
+      for (const comp of mRecipe.components) {
+        const required = comp.quantity * batchCount;
+        const have = countMissionItem(bot.inventory, bot.storage, comp.item_id);
+        if (have < required) {
+          if (settings.preferBuying) {
+            const toBuy = required - have;
+            yield "obj_craft_buy";
+            const buyResp = await bot.exec("buy", { item_id: comp.item_id, quantity: toBuy });
+            if (buyResp.error) {
+              ctx.log("warn", `Craft obj: cannot buy ${comp.item_id} (need ${toBuy}) — ${buyResp.error.message}`);
+              return;
+            }
+            ctx.log("info", `Craft obj: bought ${toBuy}x ${comp.item_id}`);
+          } else {
+            ctx.log("warn", `Craft obj: missing ${comp.item_id} (have ${have}, need ${required})`);
+            return;
+          }
+        }
+      }
+
+      // Step 4: withdraw materials from station storage to cargo
+      for (const comp of mRecipe.components) {
+        const inCargo = countMissionCargo(bot.inventory, comp.item_id);
+        const need4batch = comp.quantity * batchCount;
+        if (inCargo < need4batch) {
+          const inStorage = countMissionStorage(bot.storage, comp.item_id);
+          const toWithdraw = Math.min(need4batch - inCargo, inStorage);
+          if (toWithdraw > 0) {
+            yield "obj_craft_withdraw";
+            await bot.exec("withdraw_items", { item_id: comp.item_id, quantity: toWithdraw });
+          }
+        }
+      }
+
+      // Step 5: craft
+      yield "obj_craft_execute";
+      const craftResp = await bot.exec("craft", { recipe_id: mRecipe.recipe_id, count: batchCount });
+      if (craftResp.error) {
+        const emsg = craftResp.error.message.toLowerCase();
+        if (emsg.includes("facility-only") || emsg.includes("cannot be crafted manually")) {
+          ctx.log("warn", `Craft obj: "${mRecipe.recipe_id}" is facility-only — cannot craft manually`);
+        } else {
+          ctx.log("warn", `Craft obj: craft failed — ${craftResp.error.message}`);
+        }
+        return;
+      }
+      const craftResult = craftResp.result as Record<string, unknown> | undefined ?? {};
+      const crafted = (craftResult?.count as number) || (craftResult?.quantity as number) || batchCount;
+      obj.current += crafted;
+      ctx.log("info", `Craft obj: ${obj.current}/${obj.quantity} done (crafted ${crafted}x ${mRecipe.output_name})`);
+      if (obj.current >= obj.quantity) obj.complete = true;
       break;
     }
 
-    // ── Kill (not supported) ──
+    // ── Kill ──
     case "kill": {
       yield "obj_kill";
-      ctx.log("warn", `Kill objective not supported — skipping: ${obj.targetName || obj.target}`);
-      obj.complete = true;
+      if (bot.docked) await syncMissionProgress(ctx, missionId, objectives);
+      if (obj.complete || obj.current >= obj.quantity) { obj.complete = true; return; }
+
+      const killTarget = obj.targetSystem || obj.targetPoi || obj.target;
+
+      // Navigate to target system if specified
+      if (obj.targetSystem && bot.system !== obj.targetSystem) {
+        yield "obj_kill_navigate";
+        await ensureUndocked(ctx);
+        await navigateToSystem(ctx, obj.targetSystem, { fuelThresholdPct: settings.refuelThreshold, hullThresholdPct: 30 });
+        await bot.refreshStatus();
+        return;
+      }
+
+      // Travel to target POI if specified
+      if (obj.targetPoi && bot.poi !== obj.targetPoi) {
+        yield "obj_kill_travel";
+        await ensureUndocked(ctx);
+        const tResp = await bot.exec("travel", { target_poi: obj.targetPoi });
+        if (!tResp.error) await bot.refreshStatus();
+        return;
+      }
+
+      // Attempt combat
+      yield "obj_kill_hunt";
+      await ensureUndocked(ctx);
+      const huntResp = await bot.exec("hunt", { target: obj.target || undefined });
+      if (huntResp.error) {
+        ctx.log("warn", `Kill obj: hunt failed — ${huntResp.error.message} (target: ${killTarget || "any"})`);
+        return;
+      }
+      const hResult = huntResp.result as Record<string, unknown> | undefined ?? {};
+      const killed = (hResult?.killed as number) || (hResult?.count as number) || 0;
+      if (killed > 0) {
+        obj.current += killed;
+        ctx.log("info", `Kill obj: eliminated ${killed} — total ${obj.current}/${obj.quantity}`);
+      } else {
+        // Server may track kills independently — sync and check
+        await syncMissionProgress(ctx, missionId, objectives);
+      }
+      if (obj.current >= obj.quantity) obj.complete = true;
       break;
     }
 
@@ -635,6 +833,8 @@ export const missionRunnerRoutine: Routine = async function* (ctx: RoutineContex
 
   let sessCompleted = 0;
   let sessFailed = 0;
+  /** Session-level blacklist: IDs and titles of missions that failed unrecoverably this session. */
+  const abandonedMissions = new Set<string>();
 
   while (bot.state === "running") {
     const alive = await detectAndRecoverFromDeath(ctx);
@@ -683,6 +883,9 @@ export const missionRunnerRoutine: Routine = async function* (ctx: RoutineContex
               yield "accept_manual_mission";
               const ar = await bot.exec("accept_mission", { mission_id: onBoard.id });
               if (!ar.error) {
+                const arResult = ar.result as Record<string, unknown> | null;
+                const arId = (arResult?.mission_id as string) || (arResult?.id as string);
+                if (arId) onBoard.id = arId;
                 ctx.log("info", `Manual mission accepted: "${onBoard.title}"`);
                 activeMissions.push(onBoard);
                 manualMission = onBoard;
@@ -690,7 +893,25 @@ export const missionRunnerRoutine: Routine = async function* (ctx: RoutineContex
                 ctx.log("warn", `Could not accept manual mission "${settings.manualMissionId}": ${ar.error.message}`);
               }
             } else {
-              ctx.log("warn", `Mission slots full — cannot accept manual mission "${onBoard.title}" yet`);
+              // Displace the lowest-scoring active mission to make room for the manual target
+              const toDisplace = [...activeMissions].sort((a, b) => scoreMission(a) - scoreMission(b))[0];
+              ctx.log("info", `Slots full — displacing "${toDisplace.title}" to make room for manual mission "${onBoard.title}"`);
+              const dispResp = await bot.exec("abandon_mission", { mission_id: toDisplace.id });
+              if (!dispResp.error) {
+                activeMissions = activeMissions.filter(m => m.id !== toDisplace.id);
+                yield "accept_manual_mission";
+                const ar2 = await bot.exec("accept_mission", { mission_id: onBoard.id });
+                if (!ar2.error) {
+                  const ar2Result = ar2.result as Record<string, unknown> | null;
+                  const ar2Id = (ar2Result?.mission_id as string) || (ar2Result?.id as string);
+                  if (ar2Id) onBoard.id = ar2Id;
+                  ctx.log("info", `Manual mission accepted after displacing: "${onBoard.title}"`);
+                  activeMissions.push(onBoard);
+                  manualMission = onBoard;
+                } else {
+                  ctx.log("warn", `Could not accept manual mission after displacing: ${ar2.error.message}`);
+                }
+              }
             }
           } else {
             ctx.log("info", `Manual mission "${settings.manualMissionId}" not found on board — auto mode`);
@@ -711,7 +932,8 @@ export const missionRunnerRoutine: Routine = async function* (ctx: RoutineContex
       } else {
         const availableMissions = parseAvailableMissions(boardResp.result);
         ctx.log("info", `Available on board: ${availableMissions.length}`);
-        const candidates = filterMissions(availableMissions, settings);
+        const candidates = filterMissions(availableMissions, settings)
+          .filter(m => !abandonedMissions.has(m.id) && !abandonedMissions.has(m.title));
         const feasible = candidates.filter(m =>
           canAcceptMission(m, bot.installedMods, bot.credits, settings)
         );
@@ -721,6 +943,10 @@ export const missionRunnerRoutine: Routine = async function* (ctx: RoutineContex
           yield "accept_mission";
           const acceptResp = await bot.exec("accept_mission", { mission_id: toAccept.id });
           if (!acceptResp.error) {
+            // Capture the instance mission_id (differs from board template id)
+            const acceptedResult = acceptResp.result as Record<string, unknown> | null;
+            const instanceId = (acceptedResult?.mission_id as string) || (acceptedResult?.id as string);
+            if (instanceId) toAccept.id = instanceId;
             ctx.log("info", `Accepted: "${toAccept.title}"`);
             await bot.refreshStatus();
             activeMissions.push(toAccept);
@@ -799,6 +1025,10 @@ export const missionRunnerRoutine: Routine = async function* (ctx: RoutineContex
     yield "finalize";
 
     if (missionFailed || bot.state !== "running") {
+      if (missionFailed) {
+        abandonedMissions.add(mission.id);
+        abandonedMissions.add(mission.title);
+      }
       const abandonResp = await bot.exec("abandon_mission", { mission_id: mission.id });
       if (!abandonResp.error) ctx.log("info", `Abandoned: "${mission.title}"`);
       sessFailed++;
@@ -834,6 +1064,8 @@ export const missionRunnerRoutine: Routine = async function* (ctx: RoutineContex
       }
       if (completeResp.error) {
         ctx.log("warn", `Complete failed after retry: ${completeResp.error.message} — abandoning`);
+        abandonedMissions.add(mission.id);
+        abandonedMissions.add(mission.title);
         const abResp = await bot.exec("abandon_mission", { mission_id: mission.id });
         if (abResp.error) ctx.log("warn", `Abandon also failed: ${abResp.error.message}`);
         sessFailed++;

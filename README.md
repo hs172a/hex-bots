@@ -101,9 +101,10 @@ Suggestion scoring factors: base routine score, goal strategy weights, supply ch
 - **Faction Management** — members, storage, facilities, diplomacy, missions, trade intel
 - **Galaxy Map** — auto-built from explorer data, shared via DataSync across VMs
 - **Market Orders** — view, edit prices, and cancel active buy/sell orders per bot
-- **Missions** — three-tab browser with live progress tracking
 - **Shipyard** — commission ships, manage fleet and modules
-- **Commander tab** — advisory scoring, fleet goals, economy analysis, credit history chart, AI agent control
+- **Commander tab** — six sub-tabs: Advisory scoring, Goals (Gather Goals + Craft Planner + Fleet Goals), Missions browser, Stats, Action Log, AI Agent
+  - **Missions** — three-tab browser (Active / Available / Completed) with live objective progress, embedded in Commander
+  - **Goals** — Gather Goals shows all queued goals per bot; Craft Planner appends to goal queue; Gatherer routine distributes materials across bots with non-overlapping component claims
 - **Stats View** — unified fleet statistics aggregated from all VMs (no pool splitting)
 - **Rate-limit protection** — IP blocking with live header countdown
 - **Catalog caching** — 24 h SQLite cache, zero repeated catalog API calls

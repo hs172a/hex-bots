@@ -270,13 +270,13 @@ export function useDashboardLogs() {
   }
 
   const filteredActivityLogs = computed((): ParsedLogEntry[] => {
-    const entries = botStore.activityLogs.map(parseLogLine);
+    const entries = botStore.activityLogs.slice(-200).map(parseLogLine);
     if (!activityBotFilter.value) return entries;
     return entries.filter(e => e.parsed?.username === activityBotFilter.value);
   });
 
   const filteredSystemLogs = computed((): ParsedLogEntry[] => {
-    const entries = botStore.systemLogs.map(parseLogLine);
+    const entries = botStore.systemLogs.slice(-200).map(parseLogLine);
     if (!systemBotFilter.value && !systemCatFilter.value) return entries;
     return entries.filter(e => {
       if (!e.parsed) return !systemBotFilter.value;
@@ -287,11 +287,11 @@ export function useDashboardLogs() {
   });
 
   const parsedBroadcastLogs = computed((): ParsedBroadcastEntry[] =>
-    botStore.broadcastLogs.map(parseBroadcastLine)
+    botStore.broadcastLogs.slice(-200).map(parseBroadcastLine)
   );
 
   const groupedBroadcastLogs = computed((): BroadcastGroup[] =>
-    deduplicateGroups(botStore.broadcastLogs.map(parseBroadcastLine))
+    deduplicateGroups(parsedBroadcastLogs.value)
   );
 
   return {

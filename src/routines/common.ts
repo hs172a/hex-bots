@@ -469,6 +469,14 @@ export async function transferStationToFaction(ctx: RoutineContext): Promise<num
   const { bot } = ctx;
   if (!bot.docked) return 0;
 
+  // Skip entirely if bot is not in a faction — faction_deposit_items will always fail,
+  // causing a pointless withdraw-from-storage → deposit-back-to-storage loop.
+  if (!bot.inFaction) return 0;
+
+  // Skip if this station is already known to have no faction storage
+  const cachedFac = bot.poi ? ctx.mapStore.hasFactionStorage(bot.poi) : null;
+  if (cachedFac === false) return 0;
+
   await bot.refreshStorage();
   if (bot.storage.length === 0) return 0;
 
@@ -550,6 +558,74 @@ export async function transferStationToFaction(ctx: RoutineContext): Promise<num
 }
 
 // ── Refueling ────────────────────────────────────────────────
+
+/**
+ * Last-resort fuel helper: when the bot has no credits and no cargo.
+ * 1. Withdraw fuel cells from station storage → carry and use directly.
+ * 2. Withdraw fuel cells from faction storage → carry and use directly.
+ * 3. Withdraw sellable items from station storage → sell for credits.
+ * 4. Withdraw sellable items from faction storage → sell for credits.
+ * Returns true if something was withdrawn (caller should retry the refuel loop).
+ */
+async function tryFuelFromStorage(ctx: RoutineContext): Promise<boolean> {
+  const { bot } = ctx;
+  const FUEL_CELL = "fuel_cell";
+
+  await bot.refreshStorage();
+  await bot.refreshFactionStorage();
+
+  // 1. Station storage: fuel cells
+  const stFuel = bot.storage.find(i => i.itemId === FUEL_CELL && i.quantity > 0);
+  if (stFuel) {
+    const wr = await bot.exec("withdraw_items", { item_id: FUEL_CELL, quantity: stFuel.quantity });
+    if (!wr.error) {
+      ctx.log("system", `Withdrew ${stFuel.quantity}x fuel_cell from station storage for refueling`);
+      return true;
+    }
+  }
+
+  // 2. Faction storage: fuel cells
+  const facFuel = bot.factionStorage.find(i => i.itemId === FUEL_CELL && i.quantity > 0);
+  if (facFuel) {
+    const wr = await bot.exec("faction_withdraw_items", { item_id: FUEL_CELL, quantity: facFuel.quantity });
+    if (!wr.error) {
+      ctx.log("system", `Withdrew ${facFuel.quantity}x fuel_cell from faction storage for refueling`);
+      return true;
+    }
+  }
+
+  // 3. Station storage: withdraw everything sellable and sell it
+  const sellableStation = bot.storage.filter(i => i.itemId !== FUEL_CELL && i.quantity > 0);
+  if (sellableStation.length > 0) {
+    let withdrawn = false;
+    for (const item of sellableStation) {
+      const wr = await bot.exec("withdraw_items", { item_id: item.itemId, quantity: item.quantity });
+      if (!wr.error) withdrawn = true;
+    }
+    if (withdrawn) {
+      ctx.log("system", "Withdrew items from station storage to sell for fuel credits");
+      await sellAllCargo(ctx);
+      return true;
+    }
+  }
+
+  // 4. Faction storage: withdraw everything sellable and sell it
+  const sellableFaction = bot.factionStorage.filter(i => i.itemId !== FUEL_CELL && i.quantity > 0);
+  if (sellableFaction.length > 0) {
+    let withdrawn = false;
+    for (const item of sellableFaction) {
+      const wr = await bot.exec("faction_withdraw_items", { item_id: item.itemId, quantity: item.quantity });
+      if (!wr.error) withdrawn = true;
+    }
+    if (withdrawn) {
+      ctx.log("system", "Withdrew items from faction storage to sell for fuel credits");
+      await sellAllCargo(ctx);
+      return true;
+    }
+  }
+
+  return false;
+}
 
 /** Sell all cargo to raise credits. Returns number of items sold. */
 export async function sellAllCargo(ctx: RoutineContext): Promise<number> {
@@ -708,10 +784,23 @@ export async function tryRefuel(ctx: RoutineContext): Promise<void> {
           await bot.refreshStatus();
           continue;
         }
-        // No cargo to sell and no credits — permanently broke
+        // Cargo empty — try withdrawing fuel cells or sellable items from storage
+        const gotSomething = await tryFuelFromStorage(ctx);
+        if (gotSomething) {
+          brokeAttempts = 0;
+          await bot.refreshStatus();
+          continue;
+        }
+        // Nothing left anywhere — check if fuel level is still sufficient
         brokeAttempts++;
         if (brokeAttempts >= 2) {
-          ctx.log("error", `Cannot refuel — no credits and no cargo to sell. Stopping routine until rescue arrives.`);
+          await bot.refreshStatus();
+          const curFuelPct = bot.maxFuel > 0 ? Math.round((bot.fuel / bot.maxFuel) * 100) : 100;
+          if (curFuelPct >= 40) {
+            ctx.log("warn", `Cannot fully refuel (no credits, no cargo, no storage items) — fuel is ${curFuelPct}%, sufficient to continue`);
+            return; // Adequate fuel remaining, no need to stop the routine
+          }
+          ctx.log("error", `Cannot refuel — no credits, no cargo, and no items in storage. Fuel critical (${curFuelPct}%). Stopping routine until rescue arrives.`);
           throw new Error("no_fuel_source: bankrupt — no credits and no cargo to sell");
         }
       }
@@ -789,6 +878,69 @@ export async function repairShip(ctx: RoutineContext): Promise<void> {
     const endHull = bot.maxHull > 0 ? Math.round((bot.hull / bot.maxHull) * 100) : 100;
     if (endHull > startHull) ctx.log("system", `Repaired hull ${startHull}% → ${endHull}%`);
   }
+}
+
+/**
+ * Repair worn modules using Repair Kits (v0.179.0).
+ * Flow per module: uninstall_mod → repair_module → install_mod.
+ * Only runs if repair_kit items are available in cargo or station storage.
+ * Assumes docked at a base with repair service.
+ */
+export async function repairModules(ctx: RoutineContext): Promise<void> {
+  const { bot } = ctx;
+  if (!bot.docked) return;
+
+  await bot.refreshStatus();
+  const wornModules = bot.shipModules.filter(m => m.id && (m.wear ?? 0) > 0);
+  if (wornModules.length === 0) return;
+
+  // Check repair_kit availability in cargo
+  let kitsInCargo = bot.inventory.filter(i => i.itemId === "repair_kit").reduce((s, i) => s + i.quantity, 0);
+
+  // Also try to pull from station storage if needed
+  if (kitsInCargo === 0 && bot.storage.some(i => i.itemId === "repair_kit" && i.quantity > 0)) {
+    const storageKits = bot.storage.find(i => i.itemId === "repair_kit")!;
+    const wr = await bot.exec("withdraw_items", { item_id: "repair_kit", quantity: storageKits.quantity });
+    if (!wr.error) {
+      kitsInCargo = storageKits.quantity;
+      ctx.log("system", `Withdrew ${storageKits.quantity}x repair_kit from storage for module repair`);
+    }
+  }
+
+  if (kitsInCargo === 0) return; // no repair kits available
+
+  for (const mod of wornModules) {
+    if (kitsInCargo <= 0) break;
+
+    ctx.log("system", `Repairing module ${mod.name || mod.type_id} (wear: ${mod.wear}%)`);
+
+    // Uninstall module into cargo
+    const uninstResp = await bot.exec("uninstall_mod", { module_id: mod.id });
+    if (uninstResp.error) {
+      ctx.log("warn", `Could not uninstall ${mod.name || mod.type_id}: ${uninstResp.error.message}`);
+      continue;
+    }
+
+    // Repair (consumes 1 repair_kit per call)
+    const repResp = await bot.exec("repair_module", { module_id: mod.id });
+    if (repResp.error) {
+      ctx.log("warn", `repair_module failed for ${mod.name || mod.type_id}: ${repResp.error.message}`);
+    } else {
+      kitsInCargo--;
+      const result = repResp.result as Record<string, unknown> | undefined;
+      const newWear = result?.wear as number | undefined;
+      const newStatus = result?.wear_status as string | undefined;
+      ctx.log("system", `Repaired ${mod.name || mod.type_id}${newWear !== undefined ? ` → wear ${newWear}% (${newStatus})` : ""}`);
+    }
+
+    // Reinstall module
+    const instResp = await bot.exec("install_mod", { module_id: mod.id });
+    if (instResp.error) {
+      ctx.log("warn", `Could not reinstall ${mod.name || mod.type_id}: ${instResp.error.message}`);
+    }
+  }
+
+  await bot.refreshStatus();
 }
 
 // ── Safety checks ────────────────────────────────────────────
@@ -1941,6 +2093,26 @@ export async function detectAndRecoverFromDeath(ctx: RoutineContext): Promise<bo
 }
 
 // ── Settings ─────────────────────────────────────────────────
+
+/**
+ * Returns itemId → total quantity reserved for active gather goals at the given station.
+ * Items at this amount should NOT be withdrawn from faction/station storage by ANY routine,
+ * including the bot that owns the goal (prevents the owner from consuming its own target materials).
+ */
+export function getReservedForGoals(poiId: string, _excludeUsername?: string): Map<string, number> {
+  const reserved = new Map<string, number>();
+  if (!poiId) return reserved;
+  const allSettings = readSettings();
+  for (const [, settings] of Object.entries(allSettings)) {
+    const goal = (settings as Record<string, unknown>)?.goal as Record<string, unknown> | undefined;
+    if (!goal || goal.target_poi !== poiId) continue;
+    for (const mat of (goal.materials as Array<{ item_id: string; quantity_needed: number }> || [])) {
+      const qty = (mat.quantity_needed as number) || 0;
+      if (qty > 0) reserved.set(mat.item_id, (reserved.get(mat.item_id) ?? 0) + qty);
+    }
+  }
+  return reserved;
+}
 
 /** Read settings from data/settings.json. */
 export function readSettings(): Record<string, Record<string, unknown>> {

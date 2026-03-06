@@ -144,7 +144,6 @@ import Dashboard from './views/DashboardView.vue';
 import BotProfile from './components/BotProfile.vue';
 import SettingsView from './views/SettingsView.vue';
 import MarketView from './views/MarketView.vue';
-import MissionsView from './views/MissionsView.vue';
 import FactionView from './views/FactionView.vue';
 import MapView from './views/MapView.vue';
 import ShipyardView from './views/ShipyardView.vue';
@@ -155,7 +154,6 @@ const tabs = [
   { id: 'dashboard', label: 'Dashboard', component: Dashboard, icon: '📊' },
   { id: 'map', label: 'Map', component: MapView, icon: '🗺️' },
   { id: 'market', label: 'Market', component: MarketView, icon: '🛒' },
-  { id: 'missions', label: 'Missions', component: MissionsView, icon: '🎯' },
   { id: 'faction', label: 'Faction', component: FactionView, icon: '🏛️' },
   { id: 'shipyard', label: 'Shipyard', component: ShipyardView, icon: '🛠️' },
   { id: 'commander', label: 'Commander', component: CommanderView, icon: '🧠' },
@@ -177,10 +175,16 @@ const dataSyncMode = computed(() => botStore.dataSyncMode);
 const vmStatuses = computed(() => botStore.vmStatuses);
 const vmList = computed(() => botStore.vmList);
 
-const vmStateClass = (state: string) => ({
-  'text-green-400 border-green-700/50 bg-green-900/20': state === 'online',
-  'text-yellow-400 border-yellow-700/50 bg-yellow-900/20': state === 'connecting',
-  'text-red-400 border-red-700/50 bg-red-900/20': state === 'offline',
+const vmStateClass = computed(() => (state: string) => {
+  switch (state) {
+    case 'online':
+      return 'text-green-400 border-green-700/50 bg-green-900/20';
+    case 'connecting':
+      return 'text-yellow-400 border-yellow-700/50 bg-yellow-900/20';
+    case 'offline':
+    default:
+      return 'text-red-400 border-red-700/50 bg-red-900/20';
+  }
 });
 
 // ── IP block state ──
