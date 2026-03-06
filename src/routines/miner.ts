@@ -3,7 +3,9 @@ import type { CargoItem } from "../bot.js";
 import type { MapStore } from "../mapstore.js";
 import type { CatalogStore } from "../catalogstore.js";
 import { claimMiningSystem, releaseMiningClaim, miningClaimCount } from "../miningclaims.js";
+import { claimStation, releaseStationClaim, getMostNeededItem } from "../swarmcoord.js";
 import {
+  checkAndDeliverDemands,
   type SystemPOI,
   isOreBeltPoi,
   isStationPoi,
@@ -299,7 +301,7 @@ async function handleCargoFromResponse(
       return false;
     }
     if (mode === "faction") {
-      if (noFactionStorage) return false;
+      if (!bot.inFaction || noFactionStorage) return false;
       const factionResp = await bot.exec("faction_deposit_items", { item_id: itemId, quantity });
       if (!factionResp.error) {
         if (bot.poi) ctx.mapStore.setFactionStorage(bot.poi, true);
@@ -307,7 +309,8 @@ async function handleCargoFromResponse(
       }
       const ec = factionResp.error.code ?? "";
       const em = factionResp.error.message ?? "";
-      if (ec === "no_faction_storage" || em.includes("no_faction_storage") || em.includes("faction_lockbox")) {
+      if (ec === "no_faction_storage" || em.includes("no_faction_storage") || em.includes("faction_lockbox") ||
+          ec === "not_in_faction" || em.includes("not_in_faction")) {
         noFactionStorage = true;
         if (bot.poi) ctx.mapStore.setFactionStorage(bot.poi, false);
       } else {
@@ -512,6 +515,20 @@ export const minerRoutineV2: Routine = async function* (ctx: RoutineContext) {
       } else if (pick.target > 0) {
         targetOre = "";
         ctx.log("mining", "All ore quotas met — mining locally");
+      }
+    }
+
+    // Swarm demand override: if another bot (crafter) needs a specific ore and we haven't
+    // already chosen one via quotas, honour the highest-demand signal.
+    if (!targetOre) {
+      const mostNeeded = getMostNeededItem();
+      if (mostNeeded) {
+        const locs = ctx.mapStore.findOreLocations(mostNeeded.itemId);
+        if (locs.length > 0) {
+          targetOre = mostNeeded.itemId;
+          const oreName = ctx.catalogStore.resolveItemName(mostNeeded.itemId);
+          ctx.log("mining", `Swarm demand: mining ${oreName} (${mostNeeded.totalQuantity} units requested by crafters)`);
+        }
       }
     }
 
@@ -890,14 +907,27 @@ export const minerRoutineV2: Routine = async function* (ctx: RoutineContext) {
         const foundStation = findStation(homePois);
         stationPoi = foundStation ? { id: foundStation.id, name: foundStation.name } : null;
       }
-    } else if (homeStationId && bot.system === homeSystem) {
-      // Already in home system — use the specific home base station for docking
-      stationPoi = { id: homeStationId, name: homeStationId };
+    } else if (bot.system === homeSystem) {
+      // Already in home system — use homeStationId only if it exists in the current system's POIs
+      // (prevents wrong_system error when homeBase POI is from a different system than bot.system)
+      const homeInCurrentSystem = homeStationId && cachedSystemInfo?.pois.some(p => p.id === homeStationId);
+      if (homeInCurrentSystem) {
+        stationPoi = { id: homeStationId, name: homeStationId };
+      } else {
+        const localStation = findStation(cachedSystemInfo?.pois ?? []);
+        if (localStation) stationPoi = { id: localStation.id, name: localStation.name };
+      }
     }
 
     // ── Travel to station ──
     yield "travel_to_station";
     if (stationPoi) {
+      // Register swarm intent so other bots know this station is being used
+      const cargoItemsDict: Record<string, number> = {};
+      for (const item of bot.inventory) {
+        if (item.quantity > 0) cargoItemsDict[item.itemId] = item.quantity;
+      }
+      claimStation(bot.username, stationPoi.id, cargoItemsDict);
       const travelStationResp = await bot.exec("travel", { target_poi: stationPoi.id });
       if (travelStationResp.error && !travelStationResp.error.message.includes("already")) {
         ctx.log("error", `Travel to station failed: ${travelStationResp.error.message}`);
@@ -940,6 +970,7 @@ export const minerRoutineV2: Routine = async function* (ctx: RoutineContext) {
 
     // ── Collect gifted credits/items + record market prices ──
     await collectFromStorage(ctx);
+    await checkAndDeliverDemands(ctx);
     const creditsBefore = bot.credits;
 
     // ── Complete active missions before unloading ──
@@ -967,6 +998,7 @@ export const minerRoutineV2: Routine = async function* (ctx: RoutineContext) {
     if (cargoUnloadItems.length > 0) {
       await handleCargoFromResponse(ctx, cargoUnloadItems, settings);
     }
+    releaseStationClaim(bot.username);
 
     // Update status after unloading (single call instead of multiple)
     await batchStatusUpdate(ctx, false);

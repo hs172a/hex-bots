@@ -229,6 +229,53 @@ export class TrainingLogger {
     }));
   }
 
+  /**
+   * Get recent episode outcomes for experience replay (ai_commander context injection).
+   * Returns the N most recent episode entries from decision_log, newest first.
+   * Each entry has: botId, episodeType, profit, success, durationTicks, timestamp.
+   */
+  getRecentEpisodes(limit = 20): Array<{
+    botId: string;
+    episodeType: string;
+    profit: number;
+    success: boolean;
+    durationTicks: number;
+    timestamp: number;
+  }> {
+    const rows = this.db.query(`
+      SELECT bot_id, action, result, created_at
+      FROM decision_log
+      WHERE action LIKE 'episode:%'
+      ORDER BY id DESC
+      LIMIT ?
+    `).all(limit) as Array<{
+      bot_id: string;
+      action: string;
+      result: string | null;
+      created_at: string;
+    }>;
+
+    return rows.map(row => {
+      let profit = 0;
+      let success = false;
+      let durationTicks = 0;
+      try {
+        const r = JSON.parse(row.result ?? "{}") as Record<string, unknown>;
+        profit = (r.profit as number) ?? 0;
+        success = !!(r.success);
+        durationTicks = (r.duration as number) ?? 0;
+      } catch { /* malformed row */ }
+      return {
+        botId: row.bot_id,
+        episodeType: row.action.replace("episode:", ""),
+        profit,
+        success,
+        durationTicks,
+        timestamp: row.created_at ? new Date(row.created_at).getTime() : 0,
+      };
+    });
+  }
+
   /** Get training data stats */
   getStats(): {
     decisions: number;

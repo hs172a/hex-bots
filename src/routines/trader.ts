@@ -1,4 +1,5 @@
 import type { Bot, Routine, RoutineContext } from "../bot.js";
+import { isTradeRouteClaimed, claimTradeRoute, releaseTradeRouteClaim } from "../swarmcoord.js";
 import type { MapStore } from "../mapstore.js";
 import {
   ensureDocked,
@@ -441,7 +442,7 @@ async function tryMissions(ctx: RoutineContext): Promise<void> {
  */
 async function sellFactionStorageItems(ctx: RoutineContext): Promise<{ count: number; revenue: number }> {
   const { bot } = ctx;
-  if (!bot.docked) return { count: 0, revenue: 0 };
+  if (!bot.docked || !bot.inFaction) return { count: 0, revenue: 0 };
 
   await bot.refreshStatus();
   const creditsBefore = bot.credits;
@@ -501,10 +502,10 @@ async function sellFactionStorageItems(ctx: RoutineContext): Promise<{ count: nu
     // Withdraw from faction storage
     const wResp = await bot.exec("faction_withdraw_items", { item_id: item.itemId, quantity: qty });
     if (wResp.error) {
-      if (wResp.error.code === "not_docked" || wResp.error.message?.includes("not_docked")) {
-        bot.docked = false;
-        break;
-      }
+      const ec = wResp.error.code ?? "";
+      const em = wResp.error.message ?? "";
+      if (ec === "not_docked" || em.includes("not_docked")) { bot.docked = false; break; }
+      if (ec === "not_in_faction" || em.includes("not_in_faction")) break;
       continue;
     }
 
@@ -705,13 +706,20 @@ export const traderRoutine: Routine = async function* (ctx: RoutineContext) {
       if (soldLocallyIds.has(r.itemId) && r.destSystem === bot.system && r.destPoi === currentPoi) return false;
       return true;
     });
+    // Economy surplus boost: items with excess supply get a profit multiplier
+    const econSnap = ctx.getEconomySnapshot?.();
+    const surplusItems = new Set(econSnap?.surpluses.map(s => s.itemId) ?? []);
+
     // Cargo routes first (already have the goods), then by profit
     let routes = allRoutes.sort((a, b) => {
       // Cargo routes get priority — sort them first, then by profit
       const aIsCargo = a.sourcePoi === "cargo" ? 1 : 0;
       const bIsCargo = b.sourcePoi === "cargo" ? 1 : 0;
       if (aIsCargo !== bIsCargo) return bIsCargo - aIsCargo;
-      return b.totalProfit - a.totalProfit;
+      // Surplus items get a 25% profit boost to push them to the top
+      const aSurplus = surplusItems.has(a.itemId) ? a.totalProfit * 0.25 : 0;
+      const bSurplus = surplusItems.has(b.itemId) ? b.totalProfit * 0.25 : 0;
+      return (b.totalProfit + bSurplus) - (a.totalProfit + aSurplus);
     });
 
     const routeCounts = [
@@ -757,6 +765,11 @@ export const traderRoutine: Routine = async function* (ctx: RoutineContext) {
       // Skip routes with same source+item as a previous failure
       const sourceKey = `${candidate.sourceSystem}:${candidate.sourcePoi}:${candidate.itemId}`;
       if (failedSources.has(sourceKey)) continue;
+      // Skip routes already claimed by another trader in this fleet (swarm coordination)
+      if (isTradeRouteClaimed(candidate.sourceSystem, candidate.destSystem, candidate.itemId, bot.username)) {
+        ctx.log("trade", `Route #${ri + 1}: ${candidate.itemName} → ${candidate.destPoiName} already claimed by another trader — skipping`);
+        continue;
+      }
       attempts++;
       const isFactionRoute = candidate.sourcePoi === "";
       const isCargoRoute = candidate.sourcePoi === "cargo";
@@ -780,6 +793,7 @@ export const traderRoutine: Routine = async function* (ctx: RoutineContext) {
         route = candidate;
         buyQty = Math.min(inCargo, candidate.buyQty);
         investedCredits = 0; // already have the items
+        claimTradeRoute(bot.username, candidate.sourceSystem, candidate.destSystem, candidate.destPoi, candidate.itemId);
         ctx.log("trade", `Selling ${buyQty}x ${candidate.itemName} from cargo`);
         break;
       }
@@ -860,12 +874,12 @@ export const traderRoutine: Routine = async function* (ctx: RoutineContext) {
             }
 
             if (wResp.error) {
-              if (wResp.error.code === "not_docked" || wResp.error.message?.includes("not_docked")) {
-                bot.docked = false;
-                break;
-              }
+              const ec2 = wResp.error.code ?? "";
+              const em2 = wResp.error.message ?? "";
+              if (ec2 === "not_docked" || em2.includes("not_docked")) { bot.docked = false; break; }
+              if (ec2 === "not_in_faction" || em2.includes("not_in_faction")) break;
               if (totalSold > 0) break;
-              ctx.log("error", `Withdraw from faction storage failed: ${wResp.error.message} — trying next route`);
+              ctx.log("error", `Withdraw from faction storage failed: ${em2} — trying next route`);
               break;
             }
 
@@ -915,11 +929,11 @@ export const traderRoutine: Routine = async function* (ctx: RoutineContext) {
         }
 
         if (wResp.error) {
-          if (wResp.error.code === "not_docked" || wResp.error.message?.includes("not_docked")) {
-            bot.docked = false;
-            break;
-          }
-          ctx.log("error", `Withdraw from faction storage failed: ${wResp.error.message} — trying next route`);
+          const ec3 = wResp.error.code ?? "";
+          const em3 = wResp.error.message ?? "";
+          if (ec3 === "not_docked" || em3.includes("not_docked")) { bot.docked = false; break; }
+          if (ec3 === "not_in_faction" || em3.includes("not_in_faction")) continue;
+          ctx.log("error", `Withdraw from faction storage failed: ${em3} — trying next route`);
           continue;
         }
 
@@ -1452,8 +1466,12 @@ export const traderRoutine: Routine = async function* (ctx: RoutineContext) {
       const lower = item.itemId.toLowerCase();
       if (lower.includes("fuel") || lower.includes("energy_cell")) continue;
       if (item.quantity <= 0) continue;
-      const fResp = await bot.exec("faction_deposit_items", { item_id: item.itemId, quantity: item.quantity });
-      if (fResp.error) {
+      if (bot.inFaction) {
+        const fResp = await bot.exec("faction_deposit_items", { item_id: item.itemId, quantity: item.quantity });
+        if (fResp.error) {
+          await bot.exec("deposit_items", { item_id: item.itemId, quantity: item.quantity });
+        }
+      } else {
         await bot.exec("deposit_items", { item_id: item.itemId, quantity: item.quantity });
       }
       ctx.log("trade", `Deposited ${item.quantity}x ${item.name} (extra cargo)`);
@@ -1462,6 +1480,9 @@ export const traderRoutine: Routine = async function* (ctx: RoutineContext) {
     // Sell faction storage items at this market too
     const { revenue: fsRevenue2 } = await sellFactionStorageItems(ctx);
     extraRevenue += fsRevenue2;
+
+    // Release trade route claim now that delivery is complete
+    releaseTradeRouteClaim(bot.username);
 
     // Profit = sell revenue + other sales - cost of market purchases (faction storage is free)
     const actualProfit = sellRevenue + extraRevenue - investedCredits;

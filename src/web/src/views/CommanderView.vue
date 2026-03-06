@@ -134,6 +134,61 @@
       </div>
     </div>
 
+    <!-- Gather Goals -->
+    <div class="bg-space-card border border-space-border rounded-lg">
+      <div class="px-3 py-2 border-b border-space-border flex items-center justify-between">
+        <span class="text-xs font-semibold text-space-text-dim uppercase">Gather Goals</span>
+        <span class="text-xs text-space-text-dim">{{ gathererGoals.length }} active</span>
+      </div>
+      <div class="p-3">
+        <div v-if="!gathererGoals.length" class="text-xs text-space-text-dim italic">
+          No gather goals active. Set from Station → Build tab.
+        </div>
+        <div v-else class="space-y-3">
+          <div v-for="entry in gathererGoals" :key="entry.username"
+            class="p-3 rounded-md border border-space-border bg-space-bg">
+            <!-- Header row -->
+            <div class="flex items-center justify-between mb-1.5">
+              <div class="flex items-center gap-2 min-w-0">
+                <span class="text-[11px] px-1.5 py-0.5 rounded bg-[#21262d] text-space-accent font-mono shrink-0">{{ entry.username }}</span>
+                <span class="text-sm text-space-text-bright font-medium truncate">{{ entry.goal.target_name }}</span>
+                <span v-if="entry.state === 'running' && entry.routine === 'gatherer'" class="text-[10px] px-1.5 py-0.5 rounded bg-space-green/20 text-space-green shrink-0">running</span>
+                <span v-else-if="entry.state === 'idle'" class="text-[10px] px-1.5 py-0.5 rounded bg-space-yellow/20 text-space-yellow shrink-0">idle</span>
+              </div>
+              <div class="flex items-center gap-2 shrink-0">
+                <span class="text-xs font-bold" :class="entry.overallPct >= 100 ? 'text-space-green' : 'text-space-text-dim'">{{ entry.overallPct }}%</span>
+                <button @click="clearGathererGoal(entry.username)" class="btn btn-secondary text-xs px-2 py-0.5">✕</button>
+              </div>
+            </div>
+            <!-- Location -->
+            <div class="text-[11px] text-space-text-dim mb-2">{{ entry.goal.target_system || '—' }} · {{ entry.goal.target_poi || '—' }}</div>
+            <!-- Overall progress bar -->
+            <div class="h-1.5 bg-space-border rounded-full mb-2.5">
+              <div class="h-full rounded-full transition-all duration-500"
+                :class="entry.overallPct >= 100 ? 'bg-space-green' : 'bg-space-accent'"
+                :style="{ width: Math.min(entry.overallPct, 100) + '%' }"></div>
+            </div>
+            <!-- Per-material rows -->
+            <div class="space-y-1.5">
+              <div v-for="m in entry.materials" :key="m.item_id" class="flex items-center gap-2">
+                <div class="flex-1 min-w-0">
+                  <div class="flex items-center justify-between text-[11px] mb-0.5">
+                    <span class="text-space-text truncate">{{ m.item_name }}</span>
+                    <span class="shrink-0 ml-2" :class="m.pct >= 100 ? 'text-space-green' : 'text-space-text-dim'">{{ m.collected }}/{{ m.quantity_needed }}</span>
+                  </div>
+                  <div class="h-1 bg-space-border rounded-full">
+                    <div class="h-full rounded-full transition-all duration-500"
+                      :class="m.pct >= 100 ? 'bg-space-green' : 'bg-space-accent/60'"
+                      :style="{ width: Math.min(m.pct, 100) + '%' }"></div>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
     <!-- Goals Management -->
     <div class="bg-space-card border border-space-border rounded-lg">
       <div class="px-3 py-2 border-b border-space-border flex items-center justify-between">
@@ -476,6 +531,32 @@ async function removeGoal(index: number) {
 
 async function refreshAll() {
   await Promise.all([fetchEconomy(), fetchCommander(), fetchCreditHistory(), fetchGoals()])
+}
+
+// ── Gather Goals ─────────────────────────────────────────────
+
+const gathererGoals = computed(() =>
+  botStore.bots
+    .map(b => {
+      const goal = (botStore.settings as any)?.[b.username]?.goal ?? null
+      if (!goal) return null
+      const materials = (goal.materials || []).map((m: any) => {
+        const inFaction = b.factionStorage?.find((i: any) => i.itemId === m.item_id)?.quantity ?? 0
+        const inCargo = b.inventory?.find((i: any) => i.itemId === m.item_id)?.quantity ?? 0
+        const collected = Math.min(inFaction + inCargo, m.quantity_needed)
+        const pct = m.quantity_needed > 0 ? Math.round(collected / m.quantity_needed * 100) : 0
+        return { ...m, collected, pct }
+      })
+      const totalNeeded = materials.reduce((s: number, m: any) => s + m.quantity_needed, 0)
+      const totalCollected = materials.reduce((s: number, m: any) => s + m.collected, 0)
+      const overallPct = totalNeeded > 0 ? Math.round(totalCollected / totalNeeded * 100) : 0
+      return { username: b.username, state: b.state, routine: b.routine, goal, materials, overallPct }
+    })
+    .filter((e): e is NonNullable<typeof e> => e !== null)
+)
+
+function clearGathererGoal(username: string) {
+  botStore.saveSettings(username, { goal: null })
 }
 
 function isBotRunning(username: string): boolean {

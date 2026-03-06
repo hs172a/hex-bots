@@ -7,6 +7,7 @@
 import type { RoutineContext } from "../bot.js";
 import { catalogStore } from "../catalogstore.js";
 import type { MapStore } from "../mapstore.js";
+import { getAllMaterialDemands, clearMaterialNeed } from "../swarmcoord.js";
 
 // ── Types ────────────────────────────────────────────────────
 
@@ -445,15 +446,9 @@ export async function collectFromStorage(ctx: RoutineContext): Promise<void> {
     }
   }
 
-  // Probe faction storage availability for this station and cache result
-  if (bot.poi && ctx.mapStore.hasFactionStorage(bot.poi) === null) {
-    const fvResp = await bot.exec("view_faction_storage");
-    const available = !fvResp.error ||
-      !(fvResp.error.code === "no_faction_storage" ||
-        (fvResp.error.message ?? "").includes("no_faction_storage"));
-    ctx.mapStore.setFactionStorage(bot.poi, available);
-    if (!available) ctx.log("trade", `No faction storage at ${bot.poi} (cached for 15 min)`);
-  }
+  // NOTE: do NOT probe with view_faction_storage here — the API returns global faction
+  // inventory (all stations) even when the current station has no lockbox, causing false
+  // positives. hasFactionStorage is instead set to true/false lazily via deposit attempts.
 
   // Transfer all station storage items → faction storage (shared pool)
   await transferStationToFaction(ctx);
@@ -518,7 +513,7 @@ export async function transferStationToFaction(ctx: RoutineContext): Promise<num
       if (item.quantity <= 0) continue;
 
       let deposited = false;
-      if (!noFacStorage) {
+      if (bot.inFaction && !noFacStorage) {
         const dResp = await bot.exec("faction_deposit_items", { item_id: item.itemId, quantity: item.quantity });
         if (!dResp.error) {
           if (bot.poi) ctx.mapStore.setFactionStorage(bot.poi, true);
@@ -528,9 +523,12 @@ export async function transferStationToFaction(ctx: RoutineContext): Promise<num
         } else {
           const ec = dResp.error.code ?? "";
           const em = dResp.error.message ?? "";
-          if (ec === "no_faction_storage" || em.includes("no_faction_storage") || em.includes("faction_lockbox")) {
+          if (ec === "no_faction_storage" || em.includes("no_faction_storage") ||
+              em.includes("faction_lockbox") || em.includes("storage facility") ||
+              ec === "not_in_faction" || em.includes("not_in_faction")) {
             noFacStorage = true;
             if (bot.poi) ctx.mapStore.setFactionStorage(bot.poi, false);
+            ctx.log("trade", `No faction storage at ${bot.poi} (cached)`);
           }
         }
       }
@@ -1132,7 +1130,7 @@ export async function depositNonFuelCargo(ctx: RoutineContext): Promise<boolean>
 
     const displayName = (item.name as string) || itemId;
     let usedFaction = false;
-    if (!noFactionStorage) {
+    if (bot.inFaction && !noFactionStorage) {
       const fResp = await bot.exec("faction_deposit_items", { item_id: itemId, quantity });
       if (!fResp.error) {
         if (bot.poi) ctx.mapStore.setFactionStorage(bot.poi, true);
@@ -1142,7 +1140,9 @@ export async function depositNonFuelCargo(ctx: RoutineContext): Promise<boolean>
       } else {
         const errCode = fResp.error.code ?? "";
         const errMsg = fResp.error.message ?? "";
-        if (errCode === "no_faction_storage" || errMsg.includes("no_faction_storage") || errMsg.includes("faction_lockbox")) {
+        if (errCode === "no_faction_storage" || errMsg.includes("no_faction_storage") ||
+            errMsg.includes("faction_lockbox") || errMsg.includes("storage facility") ||
+            errCode === "not_in_faction" || errMsg.includes("not_in_faction")) {
           noFactionStorage = true;
           if (bot.poi) ctx.mapStore.setFactionStorage(bot.poi, false);
         } else {
@@ -1258,7 +1258,7 @@ export async function clearStartupCargo(
   for (const item of toDeposit) {
     if (item.quantity <= 0) continue;
     let ok = false;
-    if (depositMode === "faction") {
+    if (depositMode === "faction" && bot.inFaction) {
       const fResp = await bot.exec("faction_deposit_items", { item_id: item.itemId, quantity: item.quantity });
       ok = !fResp.error;
     }
@@ -2026,7 +2026,7 @@ export async function factionDonateProfit(ctx: RoutineContext, profit: number): 
 }
 
 /**
- * Post a structured event to the game's agentLogs endpoint (fire-and-forget).
+ * Post a structured event to the game's agentlogs endpoint (fire-and-forget).
  * Used for key bot milestones: kills, profitable trades, mining trips, etc.
  *
  * @param category - e.g. "combat", "economy", "navigation"
@@ -2042,7 +2042,7 @@ export function logAgentEvent(
   data?: Record<string, unknown>,
 ): void {
   const { bot } = ctx;
-  bot.exec("agentLogs", {
+  bot.exec("agentlogs", {
     category,
     severity,
     message,
@@ -2050,4 +2050,78 @@ export function logAgentEvent(
     poi_id: bot.poi || undefined,
     ...(data ? { data } : {}),
   }).catch(() => {});
+}
+
+/**
+ * s4: Opportunistic demand fulfillment — call this whenever a bot is docked at a station
+ * that might match an active gatherer/crafter demand.
+ *
+ * Algorithm:
+ *  1. Get all active MaterialDemands from SwarmCoord.
+ *  2. For each demand whose stationPoiId matches bot.poi (or has no poi constraint):
+ *     - If bot has the item in cargo, deliver as much as possible.
+ *     - Delivery path A (faction storage at station): faction_deposit_items
+ *     - Delivery path B (demand.useGift or no faction storage): send_gift to demand.bot
+ *  3. Clear the demand when fully fulfilled; emit a system log entry.
+ *
+ * Returns the number of different demands at least partially fulfilled.
+ * Non-blocking: does not navigate — only acts when ALREADY docked at the right station.
+ */
+export async function checkAndDeliverDemands(ctx: RoutineContext): Promise<number> {
+  const { bot } = ctx;
+  if (!bot.docked || !bot.poi) return 0;
+
+  const demands = getAllMaterialDemands();
+  if (demands.length === 0) return 0;
+
+  await bot.refreshCargo();
+  let fulfilled = 0;
+
+  for (const demand of demands) {
+    if (bot.state !== "running") break;
+    // Skip demands where we are not at the target station (if station is specified)
+    if (demand.stationPoiId && demand.stationPoiId !== bot.poi) continue;
+    // Don't deliver to yourself
+    if (demand.bot === bot.username) continue;
+
+    const itemInCargo = bot.inventory.find(i => i.itemId === demand.itemId);
+    if (!itemInCargo || itemInCargo.quantity <= 0) continue;
+
+    const qty = Math.min(itemInCargo.quantity, demand.quantity);
+    if (qty <= 0) continue;
+
+    const useGift = demand.useGift ||
+      (demand.stationPoiId && ctx.mapStore.hasFactionStorage(demand.stationPoiId) === false);
+
+    if (useGift) {
+      // No faction storage → gift directly to the requesting bot
+      const resp = await bot.exec("send_gift", {
+        recipient: demand.bot,
+        item_id: demand.itemId,
+        quantity: qty,
+        message: `Delivery from ${bot.username} for your gather goal`,
+      });
+      if (!resp.error) {
+        ctx.log("trade", `[Demand delivery] Gifted ${qty}x ${demand.itemId} to ${demand.bot}`);
+        clearMaterialNeed(demand.bot, demand.itemId);
+        bot.emit("systemLog", `Demand fulfilled: ${bot.username} gifted ${qty}x ${demand.itemId} to ${demand.bot}`);
+        fulfilled++;
+      }
+    } else {
+      // Faction storage available → deposit so gatherer can pick it up
+      const resp = await bot.exec("faction_deposit_items", {
+        item_id: demand.itemId,
+        quantity: qty,
+      });
+      if (!resp.error) {
+        ctx.log("trade", `[Demand delivery] Deposited ${qty}x ${demand.itemId} to faction storage for ${demand.bot}`);
+        clearMaterialNeed(demand.bot, demand.itemId);
+        bot.emit("systemLog", `Demand fulfilled: ${bot.username} deposited ${qty}x ${demand.itemId} for ${demand.bot}`);
+        fulfilled++;
+      }
+    }
+    await bot.refreshCargo();
+  }
+
+  return fulfilled;
 }

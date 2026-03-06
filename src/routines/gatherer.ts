@@ -32,6 +32,7 @@ import {
   isMinablePoi,
   safetyCheck,
 } from "./common.js";
+import { broadcastMaterialNeed, clearMaterialNeed, clearAllMaterialNeeds } from "../swarmcoord.js";
 
 // ── Types ─────────────────────────────────────────────────────
 
@@ -452,6 +453,18 @@ export const gathererRoutine: Routine = async function* (ctx: RoutineContext) {
   yield "acquire";
   ctx.log("system", "Phase 3: Acquiring materials...");
 
+  // Broadcast demand signals so other bots can opportunistically deliver
+  for (const task of tasks) {
+    if (task.remaining > 0 && task.source !== "skip") {
+      const hasFaction = ctx.mapStore.hasFactionStorage(goal.target_poi);
+      broadcastMaterialNeed(bot.username, task.mat.item_id, task.remaining, {
+        stationPoiId: goal.target_poi,
+        stationSystem: goal.target_system,
+        useGift: hasFaction === false,
+      });
+    }
+  }
+
   for (const task of tasks) {
     if (bot.state !== "running") break;
     if (task.remaining <= 0 || task.source === "skip") continue;
@@ -548,6 +561,7 @@ export const gathererRoutine: Routine = async function* (ctx: RoutineContext) {
 
         acquired += bought;
         ctx.log("trade", `Acquired ${acquired}/${task.remaining} ${task.mat.item_name}`);
+        if (acquired >= task.remaining) clearMaterialNeed(bot.username, task.mat.item_id);
 
         await ensureUndocked(ctx);
 
@@ -598,6 +612,7 @@ export const gathererRoutine: Routine = async function* (ctx: RoutineContext) {
 
         acquired += mined;
         ctx.log("mine", `Acquired ${acquired}/${task.remaining} ${task.mat.item_name}`);
+        if (acquired >= task.remaining) clearMaterialNeed(bot.username, task.mat.item_id);
       }
 
       // ── After each trip: check if we should deposit ──────────────────────
@@ -653,5 +668,7 @@ export const gathererRoutine: Routine = async function* (ctx: RoutineContext) {
     return `${m.item_name}: ${status}`;
   }).join(" | ");
 
+  clearAllMaterialNeeds(bot.username);
   ctx.log("system", `=== Gatherer complete === ${summary}`);
+  bot.emit("systemLog", `[Gatherer] ${bot.username} completed gather goal for ${goal.target_name}: ${summary}`);
 };

@@ -478,7 +478,9 @@ async function* executeObjective(
           }
         }
       } else {
-        ctx.log("warn", `Cannot acquire ${obj.target}: preferBuying=false and preferMining=false`);
+        // No acquisition method configured — cannot complete this objective
+        ctx.log("error", `Cannot acquire ${obj.target}: preferBuying=false and preferMining=false — abandoning mission`);
+        return; // Exit generator; outer loop sees obj still incomplete → missionFailed via MAX_ATTEMPTS
       }
       break;
     }
@@ -761,17 +763,10 @@ export const missionRunnerRoutine: Routine = async function* (ctx: RoutineContex
     // ── Execute objectives loop ──
     yield "execute_mission";
     let missionFailed = false;
-    const MAX_ATTEMPTS = 40;
-    let attempts = 0;
+    const MAX_OBJ_ATTEMPTS = 15; // per-objective attempt limit
+    const objAttempts = new Map<number, number>(); // objective index → attempt count
 
     while (bot.state === "running") {
-      attempts++;
-      if (attempts > MAX_ATTEMPTS) {
-        ctx.log("error", `Exceeded ${MAX_ATTEMPTS} objective attempts — abandoning "${mission.title}"`);
-        missionFailed = true;
-        break;
-      }
-
       if (bot.docked) await syncMissionProgress(ctx, mission.id, objectives);
 
       const incomplete = objectives.filter(o => !o.complete);
@@ -781,6 +776,14 @@ export const missionRunnerRoutine: Routine = async function* (ctx: RoutineContex
       }
 
       const obj = incomplete[0];
+      const objIdx = objectives.indexOf(obj);
+      const prevAttempts = objAttempts.get(objIdx) ?? 0;
+      if (prevAttempts >= MAX_OBJ_ATTEMPTS) {
+        ctx.log("error", `Objective [${obj.type}] exceeded ${MAX_OBJ_ATTEMPTS} attempts — abandoning "${mission.title}"`);
+        missionFailed = true;
+        break;
+      }
+      objAttempts.set(objIdx, prevAttempts + 1);
       ctx.log("info", `Objective [${obj.type}]: ${obj.targetName || obj.target} (${obj.current}/${obj.quantity})`);
 
       for await (const step of executeObjective(ctx, obj, settings, mission.id, objectives)) {
@@ -823,10 +826,16 @@ export const missionRunnerRoutine: Routine = async function* (ctx: RoutineContex
       }
 
       yield "complete_mission";
-      const completeResp = await bot.exec("complete_mission", { mission_id: mission.id });
+      let completeResp = await bot.exec("complete_mission", { mission_id: mission.id });
       if (completeResp.error) {
-        ctx.log("warn", `Complete failed: ${completeResp.error.message}`);
-        await bot.exec("abandon_mission", { mission_id: mission.id });
+        // Retry once after a short delay (transient dock/server error)
+        await sleep(3000);
+        completeResp = await bot.exec("complete_mission", { mission_id: mission.id });
+      }
+      if (completeResp.error) {
+        ctx.log("warn", `Complete failed after retry: ${completeResp.error.message} — abandoning`);
+        const abResp = await bot.exec("abandon_mission", { mission_id: mission.id });
+        if (abResp.error) ctx.log("warn", `Abandon also failed: ${abResp.error.message}`);
         sessFailed++;
       } else {
         sessCompleted++;

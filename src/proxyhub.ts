@@ -42,6 +42,8 @@ export class ProxyHub {
 
   /** vm → tagged bot status array */
   private remoteStatuses = new Map<string, unknown[]>();
+  /** vm → last-known settings (cached for replaying to new UI clients) */
+  private remoteSettings = new Map<string, Record<string, unknown>>();
 
   constructor(clientConfigs: HubClient[], server: ProxyHubServer) {
     this.server = server;
@@ -76,6 +78,7 @@ export class ProxyHub {
     if (!this.sessions.has(vmName)) return;
     this.sessions.delete(vmName);
     this.remoteStatuses.delete(vmName);
+    this.remoteSettings.delete(vmName);
     this.server.mergeRemoteBots(this.getAllRemoteBots());
     this.server.broadcastVmStatus(vmName, "offline");
     console.warn(`[ProxyHub] VM ${vmName} disconnected`);
@@ -103,8 +106,9 @@ export class ProxyHub {
             this.server.remoteBotLogs.set(username, (lines as string[]).slice(-MAX_BOT_LOG_LINES));
           }
         }
-        // Broadcast remote VM's settings to UI so master can show per-VM settings
+        // Cache + broadcast remote VM's settings so new clients can receive them on connect
         if (msg.settings && typeof msg.settings === "object") {
+          this.remoteSettings.set(vm, msg.settings as Record<string, unknown>);
           this.server.broadcastToClients({ type: "vmSettings", vm, settings: msg.settings });
         }
         // Do NOT re-broadcast the full init (catalog/map data is huge and local is authoritative)
@@ -176,6 +180,15 @@ export class ProxyHub {
       return;
     }
     session.send(msg);
+  }
+
+  /** Snapshot of all cached remote VM settings (for replaying to new UI clients on connect). */
+  getAllVmSettings(): Record<string, Record<string, unknown>> {
+    const result: Record<string, Record<string, unknown>> = {};
+    for (const [vm, settings] of this.remoteSettings) {
+      result[vm] = settings;
+    }
+    return result;
   }
 
   /** Flat list of all bot statuses from all connected remote VMs. */

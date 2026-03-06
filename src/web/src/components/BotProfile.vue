@@ -7,15 +7,6 @@
         <button @click="$emit('close')" class="text-space-text-dim hover:text-space-text-bright transition-colors text-sm shrink-0">← Back</button>
         <h2 class="text-base font-semibold text-space-text-bright">🤖 {{ currentBot.username }}</h2>
         <span v-if="currentBot.empire" :title="empireName(currentBot.empire)" class="text-base shrink-0 leading-none">{{ empireIcon(currentBot.empire) }}</span>
-        <div class="flex-1"></div>
-        <span class="badge" :class="{ 'badge-green': currentBot.state === 'running', 'badge-yellow': currentBot.state === 'idle' || currentBot.state === 'stopped', 'badge-red': currentBot.state === 'error' }">{{ currentBot.state }}</span>
-        <div class="flex gap-1.5 shrink-0">
-          <button v-if="currentBot.state === 'running'" @click="$emit('stop')" class="btn-danger text-xs px-3 py-1">Stop Bot</button>
-          <button v-if="currentBot.state === 'idle' || currentBot.state === 'stopped'" @click="$emit('start')" class="btn btn-primary text-xs py-1 px-2">Start Bot</button>
-        </div>
-      </div>
-      <!-- Row 2: ship, location, status pills -->
-      <div class="flex items-center gap-2 flex-wrap text-xs">
         <!-- Ship name with tooltip -->
         <span v-if="headerShipClassId"
           @mouseenter="onShipNameHover($event)"
@@ -29,6 +20,15 @@
           <span class="text-[11px] text-space-text-dim">({{ headerShipClassId }})</span>
         </span>
         <span v-else class="text-space-text-dim shrink-0">🚀 {{ currentBot.shipName || 'Unknown Ship' }}</span>
+        <div class="flex-1"></div>
+        <span class="badge" :class="{ 'badge-green': currentBot.state === 'running', 'badge-yellow': currentBot.state === 'idle' || currentBot.state === 'stopped', 'badge-red': currentBot.state === 'error' }">{{ currentBot.state }}</span>
+        <div class="flex gap-1.5 shrink-0">
+          <button v-if="currentBot.state === 'running'" @click="$emit('stop')" class="btn-danger text-xs px-3 py-1">Stop Bot</button>
+          <button v-if="currentBot.state === 'idle' || currentBot.state === 'stopped'" @click="$emit('start')" class="btn btn-primary text-xs py-1 px-2">Start Bot</button>
+        </div>
+      </div>
+      <!-- Row 2: ship, location, status pills -->
+      <div class="flex items-center gap-2 flex-wrap text-xs">
         <!-- System / POI -->
         <span v-if="currentBot.system" class="flex items-center gap-1 text-[11px] text-space-text-dim shrink-0">
           <span class="opacity-40">|</span>
@@ -201,7 +201,7 @@
                   <span class="text-[11px] uppercase font-semibold tracking-wide" :class="CATEGORY_COLOR[category] || 'text-gray-400'">{{ category }}</span>
                   <div class="flex-1 h-px bg-space-border"></div>
                 </div>
-                <div class="space-y-1 pl-1 !mt-0.5 !mb-2">
+                <div class="space-y-1 pl-2 !mt-0.5 !mb-2">
                   <div v-for="skill in catSkills" :key="skill.skill_id" class="text-xs">
                     <div class="flex justify-between items-baseline">
                       <span class="text-gray-300 text-[11px]">{{ formatSkillName(skill.skill_id) }}</span>

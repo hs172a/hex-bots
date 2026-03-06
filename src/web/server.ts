@@ -180,6 +180,9 @@ export class WebServer {
   // Commander advisory data — set by botmanager
   onCommanderData: (() => unknown) | null = null;
 
+  // s2: Game server stats cache (proxied from game API)
+  private gameStatsCache: { data: Record<string, unknown>; expiry: number } | null = null;
+
   // PI Commander TODO read/write — set by botmanager
   onGetPiTodo: ((session: string) => string) | null = null;
   onSavePiTodo: ((session: string, content: string) => void) | null = null;
@@ -387,6 +390,21 @@ export class WebServer {
           if (this.onCommanderData) return Response.json(this.onCommanderData());
           return Response.json(null);
         }
+        if (url.pathname === "/api/game-stats") {
+          const now = Date.now();
+          if (this.gameStatsCache && this.gameStatsCache.expiry > now) {
+            return Response.json(this.gameStatsCache.data);
+          }
+          try {
+            const resp = await fetch("https://game.spacemolt.com/api/stats", { signal: AbortSignal.timeout(6000) });
+            if (resp.ok) {
+              const data = await resp.json() as Record<string, unknown>;
+              this.gameStatsCache = { data, expiry: now + 60_000 };
+              return Response.json(data);
+            }
+          } catch { /* return stale cache or empty */ }
+          return Response.json(this.gameStatsCache?.data ?? {});
+        }
         if (url.pathname === "/api/pi-todo") {
           const session = url.searchParams.get("session") || "default";
           if (req.method === "POST") {
@@ -545,6 +563,7 @@ export class WebServer {
             type: "init",
             bots: [...this.latestStatuses, ...this.remoteBots],
             vmStates: this.proxyHub?.getVmStates() ?? {},
+            vmSettingsSnapshot: this.proxyHub?.getAllVmSettings() ?? {},
             routines: this.routines,
             settings: this.settings,
             knownSystems,

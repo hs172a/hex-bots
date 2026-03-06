@@ -83,16 +83,20 @@ export const quartermasterRoutine: Routine = async function* (ctx: RoutineContex
       return i.qty >= settings.sellThreshold;
     });
 
-    for (const item of sellable) {
-      ctx.log("info", `Withdrawing ${item.qty}x ${item.name} from faction storage...`);
-      const wResp = await bot.exec("faction_withdraw_items", {
-        item_id: item.id,
-        quantity: item.qty,
-      });
-      if (wResp.error) {
-        ctx.log("warn", `Withdraw failed: ${wResp.error.message}`);
+    if (!bot.inFaction) {
+      ctx.log("info", "Quartermaster: not in a faction — skipping faction storage withdrawal");
+    } else {
+      for (const item of sellable) {
+        ctx.log("info", `Withdrawing ${item.qty}x ${item.name} from faction storage...`);
+        const wResp = await bot.exec("faction_withdraw_items", {
+          item_id: item.id,
+          quantity: item.qty,
+        });
+        if (wResp.error) {
+          ctx.log("warn", `Withdraw failed: ${wResp.error.message}`);
+        }
+        await sleep(1000);
       }
-      await sleep(1000);
     }
 
     // ── Sell on market ──
@@ -123,10 +127,17 @@ export const quartermasterRoutine: Routine = async function* (ctx: RoutineContex
     for (const cargo of bot.inventory) {
       if (cargo.itemId.startsWith("ore_") && cargo.quantity > 0) {
         ctx.log("info", `Depositing ${cargo.quantity}x ${cargo.name} to faction storage...`);
-        await bot.exec("faction_deposit_items", {
-          item_id: cargo.itemId,
-          quantity: cargo.quantity,
-        });
+        if (bot.inFaction) {
+          const dResp = await bot.exec("faction_deposit_items", {
+            item_id: cargo.itemId,
+            quantity: cargo.quantity,
+          });
+          if (dResp.error) {
+            await bot.exec("deposit_items", { item_id: cargo.itemId, quantity: cargo.quantity });
+          }
+        } else {
+          await bot.exec("deposit_items", { item_id: cargo.itemId, quantity: cargo.quantity });
+        }
         await sleep(1000);
       }
     }

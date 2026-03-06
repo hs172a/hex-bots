@@ -226,6 +226,10 @@ export const useBotStore = defineStore('bots', () => {
         if (data.logs?.faction) factionLogLines.value = data.logs.faction.slice(-200);
         if (data.botLogs) botLogBuffers.value = data.botLogs;
         if (data.dataSyncMode) dataSyncMode.value = data.dataSyncMode;
+        // Replay cached per-VM settings so clients connecting after VM init still see them
+        if (data.vmSettingsSnapshot && typeof data.vmSettingsSnapshot === 'object') {
+          vmSettings.value = { ...vmSettings.value, ...(data.vmSettingsSnapshot as Record<string, Record<string, Record<string, unknown>>>) };
+        }
         break;
 
       case 'status':

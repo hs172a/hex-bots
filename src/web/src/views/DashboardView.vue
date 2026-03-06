@@ -37,7 +37,22 @@
         <span class="text-xl font-bold text-space-text-bright">{{ formatNumber(totalSystems) }}</span>
         <span class="text-xs text-space-text-dim">Explored</span>
       </div>
-      <div class="flex gap-2">
+      <!-- Game server stats (polled from /api/game-stats every 60s) -->
+      <div v-if="gameStats.online_players" class="flex items-center gap-3 ml-auto border-l border-space-border pl-4">
+        <div class="flex flex-col items-center min-w-14">
+          <span class="text-base font-bold text-space-cyan">{{ gameStats.online_players }} / {{ gameStats.total_players }}</span>
+          <span class="text-[10px] text-space-text-dim">Online</span>
+        </div>
+        <div class="flex flex-col items-center min-w-14">
+          <span class="text-base font-bold text-space-text-bright">#{{ gameStats.tick?.toLocaleString() }}</span>
+          <span class="text-[10px] text-space-text-dim">Tick</span>
+        </div>
+        <div class="flex flex-col items-center min-w-16">
+          <span class="text-[11px] font-mono text-space-text-dim">v{{ gameStats.version }}</span>
+          <span class="text-[10px] text-space-text-dim">Game API</span>
+        </div>
+      </div>
+      <div class="flex gap-2" :class="gameStats.online_players ? '' : 'ml-auto'">
         <button @click="showAddBot = true" class="btn btn-primary px-2 py-1 text-xs">
           Add Bot
         </button>
@@ -430,7 +445,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, ref, watch, nextTick, onMounted } from 'vue';
+import { computed, ref, watch, nextTick, onMounted, onUnmounted } from 'vue';
 import { useBotStore } from '../stores/botStore';
 import { empireIcon, empireName } from '../utils/empires';
 import ProgressBar from '../components/ProgressBar.vue';
@@ -463,6 +478,21 @@ const chatMessage = ref('');
 const availableRoutines = computed(() => 
   botStore.routines.map(r => ({ id: r.id, name: r.name, description: '' }))
 );
+
+// s2: Game server stats (polled from /api/game-stats)
+const gameStats = ref<{ online_players?: number; total_players?: number, tick?: number; version?: string }>({});
+async function fetchGameStats() {
+  try {
+    const r = await fetch('/api/game-stats');
+    if (r.ok) gameStats.value = await r.json();
+  } catch { /* ignore — stale data stays */ }
+}
+let gameStatsTimer: ReturnType<typeof setInterval> | null = null;
+onMounted(() => {
+  fetchGameStats();
+  gameStatsTimer = setInterval(fetchGameStats, 10_000);
+});
+onUnmounted(() => { if (gameStatsTimer) clearInterval(gameStatsTimer); });
 
 const activeBots = computed(() => botStore.bots.filter(b => b.state === 'running').length);
 const fleetCredits = computed(() => botStore.bots.reduce((sum, b) => sum + b.credits, 0));

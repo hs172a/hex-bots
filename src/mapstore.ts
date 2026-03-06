@@ -618,6 +618,53 @@ export class MapStore {
     return Object.keys(this.data.systems);
   }
 
+  /** How many systems are currently in memory (useful for bootstrap decisions). */
+  getSystemCount(): number {
+    return Object.keys(this.data.systems).length;
+  }
+
+  /**
+   * Seed map topology from a pre-saved JSON file (e.g. data/galaxy_bootstrap.json).
+   * Same format as the /api/map response: { systems: [{id, name, connections, pois?, security_level?}] }.
+   * Only inserts systems that are NOT already known (non-destructive).
+   * Returns the number of new systems inserted.
+   */
+  seedFromBootstrapFile(filePath?: string): number {
+    const path = filePath ?? join(DATA_DIR, "galaxy_bootstrap.json");
+    if (!existsSync(path)) return 0;
+    try {
+      const raw = JSON.parse(readFileSync(path, "utf-8")) as Record<string, unknown>;
+      const systems = Array.isArray(raw.systems)
+        ? (raw.systems as Array<Record<string, unknown>>)
+        : [];
+      if (systems.length === 0) return 0;
+
+      const nameById = new Map<string, string>();
+      for (const sys of systems) {
+        if (sys.id && sys.name) nameById.set(sys.id as string, sys.name as string);
+      }
+
+      let inserted = 0;
+      for (const sys of systems) {
+        const id = sys.id as string;
+        if (!id || this.data.systems[id]) continue; // skip already-known systems
+        const rawConns = sys.connections;
+        const connections: Array<Record<string, unknown>> = Array.isArray(rawConns)
+          ? (rawConns as Array<string | Record<string, unknown>>).map((conn) =>
+              typeof conn === "string"
+                ? { system_id: conn, system_name: nameById.get(conn) || conn }
+                : conn as Record<string, unknown> // already a {system_id, system_name} object
+            )
+          : [];
+        this.updateSystem({ ...sys, connections });
+        inserted++;
+      }
+      return inserted;
+    } catch {
+      return 0;
+    }
+  }
+
   /** Mark a POI as having no dockable base — called when dock returns "No base at this location". */
   markNoBase(systemId: string, poiId: string): void {
     const sys = this.data.systems[systemId];

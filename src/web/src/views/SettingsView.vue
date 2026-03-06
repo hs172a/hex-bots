@@ -100,6 +100,25 @@
           </label>
         </div>
 
+        <div class="text-xs font-semibold text-space-text-dim uppercase mt-6 mb-2">Commander Advisory — Auto-apply</div>
+        <div class="setting-row">
+          <div>
+            <div class="text-sm text-space-text">Auto-apply suggestions</div>
+            <div class="text-xs text-space-text-dim mt-0.5">Automatically start the suggested routine when the Advisory Commander scores it above the minimum. <span class="text-yellow-400">⚠️ Will stop running bots.</span></div>
+          </div>
+          <label class="flex items-center gap-2 cursor-pointer select-none">
+            <input type="checkbox" v-model="generalForm.autoApply" class="w-4 h-4 accent-space-accent" />
+            <span class="text-sm" :class="generalForm.autoApply ? 'text-space-green' : 'text-space-text-dim'">{{ generalForm.autoApply ? 'Enabled' : 'Disabled' }}</span>
+          </label>
+        </div>
+        <div class="setting-row">
+          <div>
+            <div class="text-sm text-space-text">Min score to auto-apply</div>
+            <div class="text-xs text-space-text-dim mt-0.5">Only apply suggestions with this score or higher (0–200). Default: 80. Higher = more conservative.</div>
+          </div>
+          <input type="number" v-model.number="generalForm.autoApplyMinScore" min="30" max="200" class="input w-20 text-sm" />
+        </div>
+
         <div class="save-bar">
           <button @click="saveGeneral" class="btn btn-primary">Save Settings</button>
         </div>
@@ -545,30 +564,6 @@ remote_port  = 4001   # master's DataSync HTTP port</pre>
       <div v-else-if="activeTab === 'gatherer'">
         <h3 class="text-[15px] font-semibold text-space-text-bright mb-1">Gatherer Settings</h3>
         <p class="text-xs text-space-text-dim mb-5">Collects build materials for a facility. Goal is assigned from the Station → Build tab.</p>
-
-        <!-- Per-bot goals (read-only) -->
-        <div class="mb-4">
-          <div class="text-xs font-semibold text-space-text-dim uppercase mb-2">Active Goals</div>
-          <div v-if="!botGathererGoals.length" class="p-3 rounded-md border border-space-border bg-space-bg text-xs text-space-text-dim italic">No goals set. Click 📦 Gather on a facility in the Station → Build tab.</div>
-          <div v-for="entry in botGathererGoals" :key="entry.username"
-            class="p-3 rounded-md border border-space-border bg-space-bg mb-2">
-            <div class="flex items-start justify-between gap-2">
-              <div class="min-w-0">
-                <div class="flex items-center gap-2 mb-1">
-                  <span class="text-[11px] px-1.5 py-0.5 rounded bg-[#21262d] text-space-accent font-mono">{{ entry.username }}</span>
-                  <span class="text-sm text-space-text-bright font-medium truncate">{{ entry.goal.target_name }}</span>
-                </div>
-                <div class="text-[11px] text-space-text-dim">{{ entry.goal.target_system || '—' }} · {{ entry.goal.target_poi || '—' }}</div>
-                <div class="flex flex-wrap gap-1 mt-1.5">
-                  <span v-for="m in entry.goal.materials" :key="m.item_id" class="px-1.5 py-0.5 rounded text-[11px] bg-[#21262d] text-space-text">
-                    {{ m.quantity_needed }}× {{ m.item_name }}
-                  </span>
-                </div>
-              </div>
-              <button @click="clearGathererGoal(entry.username)" class="btn btn-secondary text-xs px-2 py-0.5 shrink-0">✕</button>
-            </div>
-          </div>
-        </div>
 
         <div class="setting-row">
           <div><div class="text-sm text-space-text">Refuel Threshold (%)</div><div class="text-xs text-space-text-dim mt-0.5">Refuel when fuel drops below this %.</div></div>
@@ -1153,6 +1148,11 @@ remote_port  = 4001   # master's DataSync HTTP port</pre>
           <input type="number" v-model.number="alertsForm.creditsTarget" min="0" class="input w-32 text-sm" />
         </div>
 
+        <div class="setting-row">
+          <div><div class="text-sm text-space-text">Arbitrage Min Profit %</div><div class="text-xs text-space-text-dim mt-0.5">Minimum margin (%) between buy and sell price to trigger an arbitrage alert. Requires <em>Price arbitrage found</em> trigger enabled.</div></div>
+          <input type="number" v-model.number="alertsForm.arbitrageMinProfit" min="5" max="500" class="input w-24 text-sm" />
+        </div>
+
         <div class="flex gap-3 mt-6">
           <button @click="saveAlerts" class="btn btn-primary">Save Settings</button>
           <button @click="testWebhook" :disabled="!alertsForm.webhookUrl || testingWebhook" class="btn btn-secondary text-sm px-4">
@@ -1355,7 +1355,7 @@ function oreNameById(id: string): string {
 }
 
 // ── General form ────────────────────────────────────────────
-const generalForm = ref({ factionDonatePct: 10, factionStation: '', enableApiLogging: false, maxJumps: 20 });
+const generalForm = ref({ factionDonatePct: 10, factionStation: '', enableApiLogging: false, maxJumps: 20, autoApply: false, autoApplyMinScore: 80 });
 
 // ── Miner form ──────────────────────────────────────────────
 const minerForm = ref({
@@ -1559,13 +1559,16 @@ const alertTriggers = [
   { key: 'missionComplete', label: 'Mission completed',     description: 'When a bot completes and claims a mission reward.' },
   { key: 'goalReached',     label: 'Goal reached',          description: 'When a fleet goal is marked as achieved.' },
   { key: 'creditsTarget',   label: 'Credits target hit',    description: 'When total fleet credits exceed the configured target.' },
+  { key: 'priceArbitrage',    label: 'Price arbitrage found',   description: 'When a profitable buy-low/sell-high route is detected across known stations.' },
+  { key: 'gatherGoalReached', label: 'Gather goal completed',   description: 'When a gatherer bot finishes collecting all materials for a build goal.' },
 ];
 
 const alertsForm = ref({
   webhookUrl: '',
   webhookType: 'discord' as 'discord' | 'telegram' | 'generic',
   creditsTarget: 0,
-  triggers: { botStopped: true, ipBlocked: true, missionComplete: false, goalReached: true, creditsTarget: false },
+  arbitrageMinProfit: 30,
+  triggers: { botStopped: true, ipBlocked: true, missionComplete: false, goalReached: true, creditsTarget: false, priceArbitrage: false, gatherGoalReached: false },
 });
 const testingWebhook = ref(false);
 
@@ -1711,6 +1714,8 @@ function initForms(s: Record<string, any>) {
     generalForm.value.factionStation = fSys && fSta ? `${fSys}|${fSta}` : '';
     generalForm.value.enableApiLogging = s.general.enableApiLogging ?? false;
     generalForm.value.maxJumps = s.general.maxJumps ?? 20;
+    generalForm.value.autoApply = s.general.autoApply ?? false;
+    generalForm.value.autoApplyMinScore = s.general.autoApplyMinScore ?? 80;
   }
   if (s.miner) {
     const m = s.miner;
@@ -1888,6 +1893,7 @@ function initForms(s: Record<string, any>) {
     alertsForm.value.webhookUrl = a.webhookUrl || '';
     alertsForm.value.webhookType = (a.webhookType as any) || 'discord';
     alertsForm.value.creditsTarget = a.creditsTarget ?? 0;
+    alertsForm.value.arbitrageMinProfit = a.arbitrageMinProfit ?? 30;
     if (a.triggers) {
       Object.assign(alertsForm.value.triggers, a.triggers);
     }
@@ -1949,6 +1955,8 @@ function saveGeneral() {
     factionStorageSystem, factionStorageStation,
     enableApiLogging: generalForm.value.enableApiLogging,
     maxJumps: generalForm.value.maxJumps,
+    autoApply: generalForm.value.autoApply,
+    autoApplyMinScore: generalForm.value.autoApplyMinScore,
   });
 }
 
@@ -2083,6 +2091,7 @@ function saveAlerts() {
     webhookUrl: alertsForm.value.webhookUrl,
     webhookType: alertsForm.value.webhookType,
     creditsTarget: alertsForm.value.creditsTarget,
+    arbitrageMinProfit: alertsForm.value.arbitrageMinProfit,
     triggers: { ...alertsForm.value.triggers },
   });
 }

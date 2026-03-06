@@ -1,7 +1,7 @@
 import { existsSync, readdirSync, appendFileSync, mkdirSync, rmSync } from "fs";
 import { join, basename } from "path";
 import { hostname } from "os";
-import { Bot, type Routine, type BotStatus } from "./bot.js";
+import { Bot, type Routine, type BotStatus, type RoutineContext } from "./bot.js";
 import { SessionManager } from "./session.js";
 import { minerRoutineV2 } from "./routines/miner.js";
 import { explorerRoutine } from "./routines/explorer.js";
@@ -208,6 +208,13 @@ function setupBotLogging(bot: Bot): void {
     server.logFaction(line);
   });
 
+  bot.on("systemLog", (line: string) => {
+    server.logSystem(line);
+    if (line.includes("[Gatherer]") && line.includes("completed gather goal")) {
+      server.fireAlert("gatherGoalReached", `📦 Hex-Bots: ${line}`);
+    }
+  });
+
   bot.on("notifications", (notifications: unknown[], username: string) => {
     logNotifications(notifications, username);
     // Route chat/broadcast notifications to the dashboard Broadcast panel
@@ -306,6 +313,82 @@ async function handleSaveSettings(action: WebAction): Promise<WebActionResult> {
   return { ok: true, message: `${routine} settings saved`, settings: server.settings };
 }
 
+/**
+ * A1: Scan all known stations in mapStore for the single best buy-low/sell-high
+ * opportunity across all items. Returns null if nothing meets minProfitPct.
+ */
+function findBestArbitrageOpportunity(minProfitPct: number): {
+  itemId: string; itemName: string;
+  buyPoiId: string; buyPoiName: string; buyPrice: number;
+  sellPoiId: string; sellPoiName: string; sellPrice: number;
+  profitPct: number;
+} | null {
+  // Collect all (poiId, poiName, itemId, buyPrice, sellPrice) from mapStore market data
+  type PriceEntry = { poiId: string; poiName: string; itemId: string; itemName: string; buy: number | null; sell: number | null };
+  const entries: PriceEntry[] = [];
+
+  for (const sysId of mapStore.getAllSystemIds()) {
+    const sys = mapStore.getSystem(sysId);
+    if (!sys) continue;
+    for (const poi of sys.pois) {
+      for (const m of poi.market) {
+        if (!m.item_id) continue;
+        entries.push({
+          poiId: poi.id,
+          poiName: poi.name || poi.id,
+          itemId: m.item_id,
+          itemName: (m as unknown as Record<string, unknown>).item_name as string || m.item_id,
+          buy: m.best_buy,   // price we pay to BUY from market (someone is selling)
+          sell: m.best_sell, // price we receive to SELL to market (someone is buying)
+        });
+      }
+    }
+  }
+
+  if (entries.length === 0) return null;
+
+  // Group by itemId → find min buy price and max sell price at different POIs
+  const byItem = new Map<string, { buy: PriceEntry[]; sell: PriceEntry[] }>();
+  for (const e of entries) {
+    if (!byItem.has(e.itemId)) byItem.set(e.itemId, { buy: [], sell: [] });
+    const g = byItem.get(e.itemId)!;
+    if (e.buy !== null && e.buy > 0) g.buy.push(e);
+    if (e.sell !== null && e.sell > 0) g.sell.push(e);
+  }
+
+  let best: ReturnType<typeof findBestArbitrageOpportunity> = null;
+
+  for (const [itemId, { buy, sell }] of byItem) {
+    if (buy.length === 0 || sell.length === 0) continue;
+    const cheapest = buy.reduce((a, b) => (a.buy! < b.buy! ? a : b));
+    const priciest = sell.reduce((a, b) => (a.sell! > b.sell! ? a : b));
+    // Don't route to the same POI (no point)
+    if (cheapest.poiId === priciest.poiId) continue;
+    const profitPct = ((priciest.sell! - cheapest.buy!) / cheapest.buy!) * 100;
+    if (profitPct >= minProfitPct) {
+      if (!best || profitPct > best.profitPct) {
+        best = {
+          itemId,
+          itemName: cheapest.itemName,
+          buyPoiId: cheapest.poiId,
+          buyPoiName: cheapest.poiName,
+          buyPrice: cheapest.buy!,
+          sellPoiId: priciest.poiId,
+          sellPoiName: priciest.poiName,
+          sellPrice: priciest.sell!,
+          profitPct,
+        };
+      }
+    }
+  }
+  return best;
+}
+
+/** Set in main() once the EconomyEngine is initialized; used by handleStart. */
+let economySnapshotGetter: RoutineContext["getEconomySnapshot"] | null = null;
+/** Set in main() once the TrainingLogger is initialized; used by handleStart. */
+let episodesGetter: RoutineContext["getRecentEpisodes"] | null = null;
+
 async function handleStart(action: WebAction): Promise<WebActionResult> {
   const botName = action.bot;
   if (!botName) return { ok: false, error: "No bot specified" };
@@ -321,16 +404,18 @@ async function handleStart(action: WebAction): Promise<WebActionResult> {
   server.logSystem(`Starting ${bot.username} with ${routine.name} routine...`);
 
   const needsFleet = routineKey === "rescue" || routineKey === "coordinator" || routineKey === "ai_commander";
-  const startOpts = needsFleet
-    ? {
-        getFleetStatus: () => [...bots.values()].map(b => b.status()),
-        sendBotAction: routineKey === "ai_commander"
-          ? async (a: { type: string; bot?: string; routine?: string; command?: string; params?: Record<string, unknown> }) => {
-              return handleAction(a as WebAction);
-            }
-          : undefined,
-      }
-    : undefined;
+  const startOpts = {
+    ...(needsFleet ? {
+      getFleetStatus: () => [...bots.values()].map(b => b.status()),
+      sendBotAction: routineKey === "ai_commander"
+        ? async (a: { type: string; bot?: string; routine?: string; command?: string; params?: Record<string, unknown> }) => {
+            return handleAction(a as WebAction);
+          }
+        : undefined,
+    } : {}),
+    getEconomySnapshot: economySnapshotGetter ?? undefined,
+    getRecentEpisodes: episodesGetter ?? undefined,
+  };
 
   bot.start(routineKey, routine.fn, startOpts).then(() => {
     server.logSystem(`Bot ${bot.username} routine finished.`);
@@ -628,6 +713,7 @@ async function main(): Promise<void> {
 
   // Training logger + data retention
   const logger = new TrainingLogger(db);
+  episodesGetter = (limit?: number) => logger.getRecentEpisodes(limit);
   logger.startSnapshotFlush();
 
   const retention = new RetentionManager(db);
@@ -649,6 +735,11 @@ async function main(): Promise<void> {
     economy.setStockTargets(config.inventory_targets);
     console.log(`[Economy] ${config.inventory_targets.length} stock target(s) loaded`);
   }
+  // Wire economy into the module-level getter so handleStart can pass it to routines
+  economySnapshotGetter = () => {
+    const snap = economy.getSummary(buildFleetSummary());
+    return { deficits: snap.deficits, surpluses: snap.surpluses };
+  };
 
   /** Build FleetSummary from current bot states (for economy analysis) */
   function buildFleetSummary(): FleetSummary {
@@ -847,18 +938,33 @@ async function main(): Promise<void> {
   discoverBots();
   discoverBotsFromDB(sessionStore);
 
-  // Seed public catalog (ships + stations) from public API
-  publicCatalog.refreshIfStale().then(({ ships, stations }) => {
-    const parts = [];
+  // Seed public catalog (ships, stations, galaxy topology) — all 24h-cached JSON files
+  // F2: galaxy_bootstrap.json is written here; mapStore.seedFromBootstrapFile() reads it back.
+
+  // Instant sync seed: if DB has 0 systems and the bootstrap file exists from a previous run,
+  // load it immediately so pathfinding is available before the async refresh completes.
+  if (mapStore.getSystemCount() === 0) {
+    const pre = mapStore.seedFromBootstrapFile();
+    if (pre > 0) server.logSystem(`Galaxy bootstrap: ${pre} system(s) pre-seeded from cache`);
+  }
+
+  publicCatalog.refreshIfStale().then(({ ships, stations, galaxy }) => {
+    const parts: string[] = [];
     if (ships) parts.push("ships");
     if (stations) parts.push("stations");
+    if (galaxy) {
+      parts.push("galaxy");
+      // After fresh fetch, seed any new systems into mapStore
+      const added = mapStore.seedFromBootstrapFile();
+      if (added > 0) server.logSystem(`Galaxy topology updated: +${added} new system(s)`);
+    }
     if (parts.length > 0) server.logSystem(`Public catalog refreshed: ${parts.join(", ")} (${publicCatalog.getSummary()})`);
     else server.logSystem(`Public catalog loaded from cache (${publicCatalog.getSummary()})`);
   }).catch(err => {
-    server.logSystem(`Public catalog refresh failed: ${err}`);
+    server.logSystem(`Public catalog refresh failed: ${err instanceof Error ? err.message : err}`);
   });
 
-  // Seed galaxy map from public API so pathfinding works from first run
+  // Also kick off the live-data mapAPI seed (updates POI details, market hints, etc.)
   server.logSystem("Seeding galaxy map from /api/map...");
   mapStore.seedFromMapAPI().then(({ seeded, known, failed }) => {
     if (failed) {
@@ -962,11 +1068,29 @@ async function main(): Promise<void> {
         server.logSystem(`  ${s.username}: ${s.currentRoutine || "idle"} → ${s.suggestedRoutine} (score ${s.score})`);
       }
     }
+
+    // A2: Auto-apply high-confidence suggestions if enabled in general settings
+    const generalSettings = server.settings?.general as Record<string, unknown> | undefined;
+    if (generalSettings?.autoApply === true && result.suggestions.length > 0) {
+      const minScore = Number(generalSettings.autoApplyMinScore ?? 80);
+      for (const s of result.suggestions) {
+        if (s.score < minScore) continue;
+        const bot = bots.get(s.username);
+        if (!bot || bot.state === "stopping") continue;
+        // Only apply to local bots (remote bots may be on different VMs)
+        server.logSystem(`[Commander Auto-apply] ${s.username}: ${s.currentRoutine || "idle"} → ${s.suggestedRoutine} (score ${s.score})`);
+        handleStart({ type: "start", bot: s.username, routine: s.suggestedRoutine }).catch(err => {
+          server.logSystem(`[Commander Auto-apply] Failed for ${s.username}: ${err instanceof Error ? err.message : err}`);
+        });
+      }
+    }
   }, config.commander.evaluation_interval * 1000));
 
   let creditsTargetAlerted = false;
+  // A1: track which arbitrage routes have already fired this session (prevent spam)
+  const arbitrageAlertedRoutes = new Set<string>();
 
-  // Periodic stats flush (every 60s) + credit history logging
+  // Periodic stats flush (every 60s) + credit history logging + arbitrage scan
   intervals.push(setInterval(() => {
     const statuses = [...bots.values()].map(b => b.status());
     server.flushBotStats(statuses);
@@ -986,6 +1110,62 @@ async function main(): Promise<void> {
     }
     if (activeBots > 0) {
       logger.logCreditHistory(totalCredits, activeBots);
+    }
+
+    // f3: Auto-transfer station storage → faction storage for idle bots
+    for (const [, bot] of bots) {
+      if (bot.state !== "idle") continue;
+      if (!bot.docked || !bot.poi || !bot.inFaction) continue;
+      if (mapStore.hasFactionStorage(bot.poi) === false) continue;
+      // Run async without blocking the timer
+      (async () => {
+        try {
+          const storageResp = await bot.exec("view_storage");
+          const items: Array<{ itemId: string; item_id?: string; name?: string; quantity: number }> =
+            (storageResp.result as any)?.items ?? (storageResp.result as any)?.storage ?? [];
+          if (!Array.isArray(items) || items.length === 0) return;
+          let transferred = 0;
+          for (const item of items) {
+            if (bot.state !== "idle") break;
+            const itemId = item.itemId || item.item_id;
+            if (!itemId || item.quantity <= 0) continue;
+            const resp = await bot.exec("faction_deposit_items", { item_id: itemId, quantity: item.quantity });
+            if (!resp.error) {
+              transferred += item.quantity;
+              mapStore.setFactionStorage(bot.poi!, true);
+            } else {
+              const em = resp.error.message ?? "";
+              if (em.includes("no_faction_storage") || em.includes("faction_lockbox") || em.includes("storage facility")) {
+                mapStore.setFactionStorage(bot.poi!, false);
+                break;
+              }
+            }
+          }
+          if (transferred > 0) {
+            server.logSystem(`[Auto] ${bot.username}: transferred ${transferred} items from station → faction storage`);
+          }
+        } catch { /* ignore — non-critical background task */ }
+      })();
+    }
+
+    // A1: Price arbitrage scan
+    const triggers = (alertsSettings?.triggers ?? {}) as Record<string, boolean>;
+    if (triggers.priceArbitrage) {
+      const minProfitPct = Number(alertsSettings?.arbitrageMinProfit ?? 30);
+      const opp = findBestArbitrageOpportunity(minProfitPct);
+      if (opp) {
+        const routeKey = `${opp.itemId}:${opp.buyPoiId}→${opp.sellPoiId}`;
+        if (!arbitrageAlertedRoutes.has(routeKey)) {
+          arbitrageAlertedRoutes.add(routeKey);
+          server.fireAlert(
+            "priceArbitrage",
+            `📈 Hex-Bots: Arbitrage — ${opp.itemName}: buy at ${opp.buyPoiName} ₡${opp.buyPrice} → sell at ${opp.sellPoiName} ₡${opp.sellPrice} (+${opp.profitPct.toFixed(0)}% margin)`,
+          );
+        }
+      } else {
+        // Opportunity closed — clear cache so it re-alerts when it returns
+        arbitrageAlertedRoutes.clear();
+      }
     }
   }, 60000));
 

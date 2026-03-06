@@ -229,6 +229,21 @@ export const aiCommanderRoutine: Routine = async function* (ctx: RoutineContext)
       `  [${d.timestamp}] ${d.summary}`
     ).join("\n");
 
+    // Cross-session experience: fetch last 15 episode outcomes from the training DB
+    const episodeLines: string[] = [];
+    if (ctx.getRecentEpisodes) {
+      const episodes = ctx.getRecentEpisodes(15);
+      for (const ep of episodes) {
+        const ago = ep.timestamp > 0
+          ? Math.round((Date.now() - ep.timestamp) / 60_000) + "min ago"
+          : "?";
+        const profitStr = ep.profit >= 0 ? `+${ep.profit}cr` : `${ep.profit}cr`;
+        episodeLines.push(
+          `  ${ep.botId} [${ep.episodeType}] ${ep.success ? "✓" : "✗"} ${profitStr} (${ago})`
+        );
+      }
+    }
+
     const systemPrompt = [
       "You are an AI fleet commander for SpaceMolt, a multiplayer space MMO.",
       "You control multiple bots and must optimize fleet performance.",
@@ -255,6 +270,7 @@ export const aiCommanderRoutine: Routine = async function* (ctx: RoutineContext)
       `Total fleet credits: ${totalCredits.toLocaleString()}`,
       "",
       recentDecisions ? `RECENT DECISIONS:\n${recentDecisions}` : "",
+      episodeLines.length > 0 ? `HISTORICAL EPISODE OUTCOMES (cross-session):\n${episodeLines.join("\n")}` : "",
       "",
       "Evaluate the fleet and issue commands if needed.",
     ].filter(Boolean).join("\n");

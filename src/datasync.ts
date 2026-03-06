@@ -358,6 +358,29 @@ export class DataSyncServer {
           }
         }
 
+        // ── GET /sync/mining-claims ───────────────────────────────────────
+        // Returns current local mining claims so clients can merge them
+        if (req.method === "GET" && url.pathname === "/sync/mining-claims") {
+          const { getAllMiningClaims } = await import("./miningclaims.js");
+          return json({ claims: getAllMiningClaims() });
+        }
+
+        // ── POST /sync/mining-claims ──────────────────────────────────────
+        // Clients push their local mining claims; server merges them
+        if (req.method === "POST" && url.pathname === "/sync/mining-claims") {
+          try {
+            const body = await req.json() as { claims?: Record<string, string[]> };
+            if (body.claims && typeof body.claims === "object") {
+              const { mergeRemoteClaims } = await import("./miningclaims.js");
+              mergeRemoteClaims(body.claims);
+              return json({ ok: true });
+            }
+            return json({ error: "Missing claims" }, 400);
+          } catch {
+            return json({ error: "Invalid JSON" }, 400);
+          }
+        }
+
         return json({ error: "Not Found" }, 404);
       },
     });
@@ -432,12 +455,21 @@ export class DataSyncClient {
         console.warn("[DataSync] Slow pull error:", e instanceof Error ? e.message : e));
     }, pullMs);
 
-    // Fast push: market prices + pirate sightings (high-freq)
+    // Fast push: market prices + pirate sightings + mining claims (high-freq)
     const fastPushMs = (push_interval_sec || 60) * 1000;
     this.fastPushTimer = setInterval(() => {
       this.pushFast().catch(e =>
         console.warn("[DataSync] Fast push error:", e instanceof Error ? e.message : e));
+      this.pushMiningClaims().catch(e =>
+        console.warn("[DataSync] Mining claims push error:", e instanceof Error ? e.message : e));
     }, fastPushMs);
+
+    // Pull mining claims from master at same cadence as pull timer
+    this.pullMiningClaims().catch(() => { /* ignore first-run errors */ });
+    setInterval(() => {
+      this.pullMiningClaims().catch(e =>
+        console.warn("[DataSync] Mining claims pull error:", e instanceof Error ? e.message : e));
+    }, pullMs);
 
     // Slow push: full topology changes (low-freq)
     const slowPushMs = (slow_push_interval_sec || 600) * 1000;
@@ -770,6 +802,34 @@ export class DataSyncClient {
     } else {
       this.recordFailure();
       console.warn(`[DataSync] POST /sync/stats → ${resp.status}`);
+    }
+  }
+
+  private async pushMiningClaims(): Promise<void> {
+    const { getAllMiningClaims } = await import("./miningclaims.js");
+    const claims = getAllMiningClaims();
+    const resp = await fetch(`${this.cfg.master_url}/sync/mining-claims`, {
+      method: "POST",
+      headers: this.headers(),
+      body: JSON.stringify({ claims }),
+      signal: AbortSignal.timeout(10_000),
+    });
+    if (!resp.ok) console.warn(`[DataSync] POST /sync/mining-claims → ${resp.status}`);
+  }
+
+  private async pullMiningClaims(): Promise<void> {
+    const resp = await fetch(`${this.cfg.master_url}/sync/mining-claims`, {
+      headers: this.headers(),
+      signal: AbortSignal.timeout(10_000),
+    });
+    if (resp.ok) {
+      const body = await resp.json() as { claims?: Record<string, string[]> };
+      if (body.claims) {
+        const { mergeRemoteClaims } = await import("./miningclaims.js");
+        mergeRemoteClaims(body.claims);
+      }
+    } else {
+      console.warn(`[DataSync] GET /sync/mining-claims → ${resp.status}`);
     }
   }
 

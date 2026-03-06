@@ -4,6 +4,7 @@ import { mapStore, MapStore } from "./mapstore.js";
 import { catalogStore, CatalogStore } from "./catalogstore.js";
 import { sharedMarketCache } from "./shared-cache.js";
 import { EventEmitter } from "events";
+import { releaseAllClaims } from "./swarmcoord.js";
 
 export type BotState = "idle" | "running" | "stopping" | "error";
 
@@ -115,6 +116,23 @@ export interface RoutineContext {
   getFleetStatus?: () => BotStatus[];
   /** Optional: send a start/stop/exec action for any bot (used by ai_commander). */
   sendBotAction?: (action: { type: string; bot?: string; routine?: string; command?: string; params?: Record<string, unknown> }) => Promise<{ ok: boolean; error?: string }>;
+  /**
+   * Optional: get the latest economy snapshot (deficits/surpluses).
+   * Provided by botmanager from EconomyEngine — available to crafter, trader, miner.
+   */
+  getEconomySnapshot?: () => { deficits: Array<{ itemId: string; shortfall: number; priority: string }>; surpluses: Array<{ itemId: string; excessPerHour: number }> } | null;
+  /**
+   * Optional: get recent episode outcomes from the training DB for experience replay.
+   * Used by ai_commander to inject historical bot performance into the LLM prompt.
+   */
+  getRecentEpisodes?: (limit?: number) => Array<{
+    botId: string;
+    episodeType: string;
+    profit: number;
+    success: boolean;
+    durationTicks: number;
+    timestamp: number;
+  }>;
 }
 
 /** A routine is an async generator that yields state names as it progresses. */
@@ -181,6 +199,9 @@ export class Bot extends EventEmitter {
   homePoI = "";
   factionId = "";
   factionRank = "";
+
+  /** True when this bot is a member of a faction and can use faction storage. */
+  get inFaction(): boolean { return this.factionId !== ""; }
 
   /** Station IDs known to have items in storage (populated from not_docked error messages). */
   storageStations: Set<string> = new Set();
@@ -684,7 +705,12 @@ export class Bot extends EventEmitter {
   async start(
     routineName: string,
     routine: Routine,
-    opts?: { getFleetStatus?: () => BotStatus[]; sendBotAction?: RoutineContext["sendBotAction"] },
+    opts?: {
+      getFleetStatus?: () => BotStatus[];
+      sendBotAction?: RoutineContext["sendBotAction"];
+      getEconomySnapshot?: RoutineContext["getEconomySnapshot"];
+      getRecentEpisodes?: RoutineContext["getRecentEpisodes"];
+    },
   ): Promise<void> {
     if (this._state === "running" || this._state === "stopping") {
       this.log("error", "Bot is already running or stopping");
@@ -716,6 +742,8 @@ export class Bot extends EventEmitter {
       catalogStore,
       getFleetStatus: opts?.getFleetStatus,
       sendBotAction: opts?.sendBotAction,
+      getEconomySnapshot: opts?.getEconomySnapshot,
+      getRecentEpisodes: opts?.getRecentEpisodes,
     };
 
     try {
@@ -742,6 +770,7 @@ export class Bot extends EventEmitter {
       throw err;
     }
 
+    releaseAllClaims(this.username);
     this.state = "idle";
     this._routine = null;
     this.log("system", "Routine finished");

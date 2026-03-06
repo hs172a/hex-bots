@@ -125,8 +125,8 @@
                 <div v-for="c in selectedRecipeInfo.components" :key="c.item_id" class="flex items-center gap-1.5 leading-5">
                   <span class="text-space-accent font-semibold w-8 text-right">{{ c.quantity || 1 }}x</span>
                   <span class="flex-1">{{ c.name || c.item_id }}</span>
-                  <span class="text-space-text-dim">
-                    ({{ inventory.find((i: any) => i.itemId === c.item_id || i.item_id === c.item_id)?.quantity ?? 0 }} in cargo)
+                  <span :class="(combinedCraftInventory.get(c.item_id) ?? 0) >= (c.quantity || 1) ? 'text-space-green' : 'text-red-400'">
+                    ({{ combinedCraftInventory.get(c.item_id) ?? 0 }} {{ currentBot.docked ? 'avail' : 'in cargo' }})
                   </span>
                 </div>
               </template>
@@ -248,9 +248,16 @@
             <button @click="execSendCredits" class="btn text-xs px-3 py-1">Send</button>
           </div>
 
+          <!-- Withdraw Credits (gifts arrive as stored credits) -->
+          <div class="flex gap-2 items-center">
+            <label class="text-xs text-space-text-dim w-20">W.Credits</label>
+            <input v-model.number="withdrawCreditsAmount" type="number" min="1" class="input text-xs w-28 !p-1 scrollbar-dark" placeholder="Amount" />
+            <button @click="execWithdrawCredits" class="btn text-xs px-3 py-1" title="Collect gifted/stored credits into your balance">Collect ₡</button>
+          </div>
+
           <!-- Status Commands -->
-          <div class="flex gap-2 items-center col-span-2">
-            <label class="text-xs text-space-text-dim w-20"></label>
+          <div class="flex gap-2 items-center">
+            <label class="text-xs text-space-text-dim"></label>
             <button @click="execCommand('get_status')" class="btn text-xs px-2 py-1">🚀 Status</button>
             <button @click="execCommand('get_cargo')" class="btn text-xs px-2 py-1">📦 Cargo</button>
             <button @click="execCommand('view_storage')" class="btn text-xs px-2 py-1">🏠 Storage</button>
@@ -359,6 +366,7 @@ const depositItem = ref('');
 const depositQty = ref(1);
 const withdrawItem = ref('');
 const withdrawQty = ref(1);
+const withdrawCreditsAmount = ref(100);
 const factionDepositItem = ref('');
 const factionDepositQty = ref(1);
 const factionWithdrawItem = ref('');
@@ -723,15 +731,34 @@ function extractRecipes(data: any): any[] {
   }));
 }
 
+/** Combined item quantities for crafting: cargo + (when docked) station storage + faction storage */
+const combinedCraftInventory = computed(() => {
+  const totals = new Map<string, number>();
+  for (const item of inventory.value) {
+    const id = item.itemId || item.item_id;
+    if (id) totals.set(id, (totals.get(id) ?? 0) + (item.quantity ?? 0));
+  }
+  if (currentBot.value.docked) {
+    for (const item of storage.value) {
+      const id = item.itemId || item.item_id;
+      if (id) totals.set(id, (totals.get(id) ?? 0) + (item.quantity ?? 0));
+    }
+    for (const item of factionStorage.value) {
+      const id = item.itemId || item.item_id;
+      if (id) totals.set(id, (totals.get(id) ?? 0) + (item.quantity ?? 0));
+    }
+  }
+  return totals;
+});
+
 const craftableRecipes = computed(() => {
-  const inv = inventory.value;
+  const totals = combinedCraftInventory.value;
   return recipes.value
     .filter(r => {
       if (!r.components?.length) return true;
-      return r.components.every((comp: any) => {
-        const item = inv.find((i: any) => i.itemId === comp.item_id || i.item_id === comp.item_id);
-        return item && (item.quantity ?? 0) >= (comp.quantity || 1);
-      });
+      return r.components.every((comp: any) =>
+        (totals.get(comp.item_id) ?? 0) >= (comp.quantity || 1)
+      );
     })
     .sort((a, b) => (a.name || a.id).localeCompare(b.name || b.id));
 });
@@ -877,6 +904,7 @@ function execSell() { if (sellItem.value) execCommand('sell', { item_id: sellIte
 function execBuy() { if (buyItem.value) execCommand('buy', { item_id: buyItem.value, quantity: buyQty.value }); }
 function execDeposit() { if (depositItem.value) execCommand('deposit_items', { item_id: depositItem.value, quantity: depositQty.value }); }
 function execWithdraw() { if (withdrawItem.value) execCommand('withdraw_items', { item_id: withdrawItem.value, quantity: withdrawQty.value }); }
+function execWithdrawCredits() { if (withdrawCreditsAmount.value > 0) execCommand('withdraw_credits', { amount: withdrawCreditsAmount.value }); }
 function execFactionDeposit() { if (factionDepositItem.value) execCommand('faction_deposit_items', { item_id: factionDepositItem.value, quantity: factionDepositQty.value }); }
 function execFactionWithdraw() { if (factionWithdrawItem.value) execCommand('faction_withdraw_items', { item_id: factionWithdrawItem.value, quantity: factionWithdrawQty.value }); }
 function execGiftItem() { if (giftTarget.value && giftItem.value) execCommand('send_gift', { recipient: giftTarget.value, item_id: giftItem.value, quantity: giftQty.value }); }

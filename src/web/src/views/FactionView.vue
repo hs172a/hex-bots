@@ -1076,13 +1076,14 @@ function gatherFacilityMaterials(bt: any) {
 
 function doSaveGatherGoal(typeId: string, typeName: string, mats: any[]) {
   if (!selectedBot.value) return;
+  const botStatus = botStore.bots.find(b => b.username === selectedBot.value);
   botStore.saveSettings(selectedBot.value, {
     goal: {
       id: `faction_${typeId}_${Date.now()}`,
       target_id: typeId,
       target_name: typeName,
-      target_poi: '',
-      target_system: '',
+      target_poi: botStatus?.poi || '',
+      target_system: botStatus?.system || '',
       materials: mats.map((m: any) => ({
         item_id: m.item_id,
         item_name: m.name || m.item_name,
@@ -1090,7 +1091,7 @@ function doSaveGatherGoal(typeId: string, typeName: string, mats: any[]) {
       })),
     },
   });
-  setStatus(`📦 Gather goal created: ${typeName}`);
+  setStatus(`📦 Gather goal created: ${typeName}${botStatus?.poi ? ` @ ${botStatus.poi}` : ''}`);
 }
 
 function clearGatherGoal() {

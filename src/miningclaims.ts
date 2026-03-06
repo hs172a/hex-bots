@@ -45,3 +45,56 @@ export function getAllMiningClaims(): Record<string, string[]> {
   }
   return out;
 }
+
+// ── Remote claims (from other VMs via DataSync) ───────────────
+
+/**
+ * Remote claims synced from other VMs: systemId → Set of bot usernames.
+ * Populated by DataSyncClient.pushMiningClaims() / DataSyncServer /sync/mining-claims.
+ * TTL-based: each entry expires after REMOTE_CLAIM_TTL_MS.
+ */
+const REMOTE_CLAIM_TTL_MS = 3 * 60 * 1000; // 3 minutes (fast push cadence × 3)
+
+interface RemoteClaim {
+  bots: string[];
+  expiresAt: number;
+}
+
+const remoteClaims = new Map<string, RemoteClaim>();
+
+/** Merge remote claim snapshot received from another VM (or the master). */
+export function mergeRemoteClaims(snapshot: Record<string, string[]>): void {
+  const now = Date.now();
+  const expiresAt = now + REMOTE_CLAIM_TTL_MS;
+  // Clear stale remote entries first
+  for (const [sysId, rc] of remoteClaims) {
+    if (rc.expiresAt <= now) remoteClaims.delete(sysId);
+  }
+  // Apply snapshot
+  for (const [sysId, bots] of Object.entries(snapshot)) {
+    if (bots.length > 0) remoteClaims.set(sysId, { bots, expiresAt });
+    else remoteClaims.delete(sysId);
+  }
+}
+
+/**
+ * How many bots (local + remote VMs) are currently mining the given system.
+ * Returns 0 if unclaimed everywhere.
+ */
+export function miningClaimCountAll(systemId: string): number {
+  const local = claims.get(systemId)?.size ?? 0;
+  const now = Date.now();
+  const rc = remoteClaims.get(systemId);
+  const remote = (rc && rc.expiresAt > now) ? rc.bots.length : 0;
+  return local + remote;
+}
+
+/** Get all remote claims for UI / debug. */
+export function getRemoteMiningClaims(): Record<string, string[]> {
+  const now = Date.now();
+  const out: Record<string, string[]> = {};
+  for (const [sysId, rc] of remoteClaims) {
+    if (rc.expiresAt > now && rc.bots.length > 0) out[sysId] = rc.bots;
+  }
+  return out;
+}

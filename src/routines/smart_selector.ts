@@ -472,14 +472,16 @@ export const smartSelectorRoutine: Routine = async function* (ctx: RoutineContex
           const sellResp = await bot.exec("sell", { item_id: item.itemId, quantity: item.quantity });
           if (sellResp.error) {
             let deposited = false;
-            if (!noFacStorage) {
+            if (bot.inFaction && !noFacStorage) {
               const facResp = await bot.exec("faction_deposit_items", { item_id: item.itemId, quantity: item.quantity });
               if (!facResp.error) {
                 if (bot.poi) ctx.mapStore.setFactionStorage(bot.poi, true);
                 deposited = true;
               } else {
                 const em = facResp.error.message ?? "";
-                if (em.includes("no_faction_storage") || em.includes("faction_lockbox")) {
+                const ec = facResp.error.code ?? "";
+                if (em.includes("no_faction_storage") || em.includes("faction_lockbox") ||
+                    ec === "not_in_faction" || em.includes("not_in_faction")) {
                   noFacStorage = true;
                   if (bot.poi) ctx.mapStore.setFactionStorage(bot.poi, false);
                 }
