@@ -527,6 +527,34 @@ function findNextHuntSystem(fromSystemId: string, ms: MapStore): string | null {
 // ── Ammo management ──────────────────────────────────────────
 
 /**
+ * Maps weapon ammo_type category tag → default purchasable catalog item ID.
+ * Prefer wep.ammo_item_id from the API when present.
+ */
+const AMMO_TYPE_TO_ITEM_ID: Record<string, string> = {
+  autocannon:    'standard_rounds_box',
+  plasma:        'plasma_cell_pack',
+  plasma_cannon: 'plasma_cell_pack',
+  ion:           'ion_charge_pack',
+  ion_cannon:    'ion_charge_pack',
+  flak:          'shaped_charge_slug_case',
+  flak_cannon:   'shaped_charge_slug_case',
+  emp:           'em_charge_pack',
+  emp_cannon:    'em_charge_pack',
+  void:          'void_core_pack',
+  void_cannon:   'void_core_pack',
+  null:          'null_void_core_pack',
+  null_cannon:   'null_void_core_pack',
+  fury:          'void_core_pack',
+  fury_cannon:   'void_core_pack',
+};
+
+function resolveAmmoItemId(wep: any): string | null {
+  if (wep.ammo_item_id) return wep.ammo_item_id as string;
+  const ammoType = ((wep.ammo_type as string) ?? '').toLowerCase();
+  return AMMO_TYPE_TO_ITEM_ID[ammoType] ?? null;
+}
+
+/**
  * Buy ammo for all fitted weapon modules when docked.
  * Targets 5 magazines worth of stock per weapon.
  */
@@ -544,19 +572,31 @@ async function buyAmmoIfNeeded(ctx: RoutineContext): Promise<void> {
 
   await bot.refreshCargo();
 
+  const unavailableAmmo = new Set<string>(); // ammo IDs that failed item_not_available
+
   for (const wep of weaponMods) {
+    const ammoItemId = resolveAmmoItemId(wep);
+    if (!ammoItemId) {
+      ctx.log("combat", `⚠️  No ammo item mapping for weapon type '${wep.ammo_type}' — skipping`);
+      continue;
+    }
+    if (unavailableAmmo.has(ammoItemId)) continue; // already failed for this item at this station
+
     const magazineSize = (wep.magazine_size as number) ?? 100;
     const target = magazineSize * 5;
-    const inCargo = bot.inventory.find((i) => i.itemId === wep.ammo_type)?.quantity ?? 0;
+    const inCargo = bot.inventory.find((i) => i.itemId === ammoItemId)?.quantity ?? 0;
     if (inCargo >= magazineSize) continue;
 
     const toBuy = target - inCargo;
-    ctx.log("combat", `Buying ${toBuy}x ${wep.ammo_type} for ${wep.name || wep.id}...`);
-    const resp = await bot.exec("buy", { item_id: wep.ammo_type, quantity: toBuy });
+    ctx.log("combat", `Buying ${toBuy}x ${ammoItemId} for ${wep.name || wep.id} (type: ${wep.ammo_type})...`);
+    const resp = await bot.exec("buy", { item_id: ammoItemId, quantity: toBuy });
     if (resp.error) {
-      ctx.log("combat", `Could not buy ${wep.ammo_type}: ${resp.error.message}`);
+      ctx.log("combat", `Could not buy ${ammoItemId}: ${resp.error.message}`);
+      if ((resp.error.code || "").includes("not_available") || (resp.error.message || "").includes("not_available")) {
+        unavailableAmmo.add(ammoItemId); // skip this item for all remaining weapons
+      }
     } else {
-      ctx.log("combat", `Bought ammo ${wep.ammo_type} (cargo: ${inCargo} → ~${inCargo + toBuy})`);
+      ctx.log("combat", `Bought ${ammoItemId} (cargo: ${inCargo} → ~${inCargo + toBuy})`);
     }
   }
 
@@ -584,7 +624,7 @@ async function ensureAmmoLoaded(
   const shipResp = await bot.exec("get_ship");
   const rawModules: any[] = (shipResp.result as any)?.modules ?? [];
   const weaponModules = rawModules.filter(
-    (m: any) => m.ammo_type && m.id && (m.slot_type === "weapon" || m.damage != null),
+    (m: any) => m.ammo_type && m.id && (m.type === "weapon" || m.slot_type === "weapon" || m.damage != null),
   );
 
   if (weaponModules.length === 0) {
@@ -598,11 +638,14 @@ async function ensureAmmoLoaded(
   // Build reload pairs: weapon → matching cargo ammo item
   const reloadPairs: { weapon_instance_id: string; ammo_item_id: string }[] = [];
   for (const wep of weaponModules) {
-    const ammoItem = bot.inventory.find((item) => item.itemId === wep.ammo_type);
+    const ammoItemId = resolveAmmoItemId(wep);
+    const ammoItem = ammoItemId
+      ? bot.inventory.find((item) => item.itemId === ammoItemId)
+      : undefined;
     if (ammoItem) {
       reloadPairs.push({ weapon_instance_id: wep.id, ammo_item_id: ammoItem.itemId });
     } else {
-      ctx.log("combat", `No cargo ammo for weapon ${wep.id} (needs ${wep.ammo_type})`);
+      ctx.log("combat", `No cargo ammo for weapon ${wep.id} (needs ${ammoItemId ?? wep.ammo_type})`);
     }
   }
 
@@ -958,6 +1001,7 @@ export const hunterRoutine: Routine = async function* (ctx: RoutineContext) {
         if (won) {
           totalKills++;
           patrolKills++;
+          bot.stats.totalKills = (bot.stats.totalKills ?? 0) + 1;
           ctx.log("combat", `Kill #${totalKills} — looting wreck...`);
           logAgentEvent(ctx, "combat", "info",
             `Kill #${totalKills}: ${target.name} eliminated at ${poi.name} (${bot.system})`,
@@ -1073,6 +1117,11 @@ export const hunterRoutine: Routine = async function* (ctx: RoutineContext) {
           ctx.log("combat", `Ammo after restock: ${bot.ammo}`);
         }
         await ensureUndocked(ctx);
+        // Abort patrol if still out of ammo after restock attempt
+        if (bot.ammo >= 0 && bot.ammo < settings.ammoThreshold) {
+          ctx.log("combat", `Still no ammo (${bot.ammo}) after restock — aborting patrol to re-evaluate`);
+          return;
+        }
       }
 
       if (!patrolSystem) {

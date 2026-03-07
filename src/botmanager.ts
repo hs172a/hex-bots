@@ -47,6 +47,8 @@ import { RetentionManager } from "./data/retention.js";
 import { EconomyEngine } from "./commander/economy-engine.js";
 import type { FleetSummary } from "./commander/types.js";
 import { GoalsStore } from "./data/goals-store.js";
+import { FactionStorageDb } from "./data/faction-storage-db.js";
+import { initMarketPricesStore } from "./data/market-prices-store.js";
 import { getAllMaterialDemands } from "./swarmcoord.js";
 import { GoalSchema } from "./types/config.js";
 import { AdvisoryCommander } from "./commander/advisory-commander.js";
@@ -208,6 +210,14 @@ function setupBotLogging(bot: Bot): void {
   bot.on("factionLog", (_username: string, line: string) => {
     server.logFaction(line);
   });
+
+  // Wire faction storage DB snapshot: fires whenever bot.refreshFactionStorage() succeeds
+  bot.onFactionStorageViewed = (rawItems, poiId, systemId) => {
+    if (!poiId) return;
+    const sysName = mapStore.getSystem(systemId)?.name || systemId;
+    const poiName = mapStore.getSystem(systemId)?.pois?.find((p: any) => p.id === poiId)?.name || poiId;
+    mapStore.updateFactionStorageItems(poiId, systemId, sysName, poiName, rawItems as any[]);
+  };
 
   bot.on("systemLog", (line: string) => {
     server.logSystem(line);
@@ -616,8 +626,20 @@ async function handleExec(action: WebAction): Promise<WebActionResult> {
     // Also refresh faction storage cache after faction deposit/withdraw
     if (command === "faction_deposit_items" || command === "faction_withdraw_items") {
       await bot.refreshFactionStorage();
+      // Optimistic DB delta so other routines see the change immediately
+      if (bot.poi) {
+        const p2 = params as Record<string, unknown> | undefined;
+        const itemId = p2?.item_id as string | undefined;
+        const qty = (p2?.quantity as number | undefined) || 1;
+        if (itemId) {
+          mapStore.adjustFactionStorageItem(
+            bot.poi,
+            itemId,
+            command === "faction_deposit_items" ? qty : -qty,
+          );
+        }
+      }
     }
-
     // Also refresh the recipient bot after gift/trade
     if (command === "send_gift" || command === "trade_offer") {
       const recipient = (params as Record<string, unknown> | undefined)?.recipient as string | undefined;
@@ -639,17 +661,40 @@ async function handleExec(action: WebAction): Promise<WebActionResult> {
   }
 
   // Sync bot cached state after read commands so periodic status broadcasts stay correct
-  if (!resp.error) {
-    if (command === "view_faction_storage") {
+  if (command === "view_faction_storage") {
+    if (!resp.error) {
       await bot.refreshFactionStorage();
-      refreshStatusTable();
-    } else if (command === "view_storage") {
+      // Persist canonical snapshot to DB (overwrites any optimistic updates)
+      if (bot.poi) {
+        const rawItems = Array.isArray(resp.result)
+          ? resp.result
+          : ((resp.result as any)?.items || (resp.result as any)?.storage || []);
+        const sys = bot.system || "";
+        const sysName = mapStore.getSystem(sys)?.name || sys;
+        const poiName = mapStore.getSystem(sys)?.pois?.find((p: any) => p.id === bot.poi)?.name || bot.poi;
+        mapStore.updateFactionStorageItems(bot.poi, sys, sysName, poiName, rawItems);
+      }
+    } else {
+      // Station has no faction storage facility — clear any stale cached items
+      bot.factionStorage = [];
+      if (bot.poi) mapStore.clearFactionStorageItems(bot.poi);
+    }
+    refreshStatusTable();
+  }
+  if (!resp.error) {
+    if (command === "view_storage") {
       await bot.refreshStorage();
       refreshStatusTable();
     } else if (command === "get_cargo") {
       await bot.refreshCargo();
       refreshStatusTable();
     }
+  }
+
+  // Persist faction building list whenever it is successfully loaded
+  if (!resp.error && command === "facility" && (params as any)?.action === "list") {
+    const facilities: any[] = (resp.result as any)?.faction_facilities || [];
+    if (facilities.length > 0) mapStore.updateFactionBuildings(facilities);
   }
 
   // Log manual faction operations to faction activity log
@@ -711,6 +756,31 @@ async function main(): Promise<void> {
 
   catalogStore.connectToDb(db);
   mapStore.connectToDb(db);
+  const factionStorageDb = new FactionStorageDb(db);
+  mapStore.connectToFactionStorageDb(factionStorageDb);
+  initMarketPricesStore(db);
+
+  // Live in-memory fallback: synthesizes faction storage from bot.factionStorage arrays when
+  // the DB is empty (e.g. first run after upgrade before any refreshFactionStorage() fires).
+  mapStore.setLiveFactionStorageProvider(() => {
+    const result: import("./data/faction-storage-db.js").FactionStorageEntry[] = [];
+    const now = new Date().toISOString();
+    for (const [, bot] of bots) {
+      if (!bot.poi || !bot.factionStorage.length) continue;
+      const sysId = bot.system ?? "";
+      const sysName = mapStore.getSystem(sysId)?.name || sysId;
+      const poiName = mapStore.getSystem(sysId)?.pois?.find((p: any) => p.id === bot.poi)?.name || bot.poi;
+      for (const item of bot.factionStorage) {
+        const existing = result.find(r => r.poi_id === bot.poi && r.item_id === item.itemId);
+        if (existing) {
+          existing.quantity = Math.max(existing.quantity, item.quantity);
+        } else {
+          result.push({ poi_id: bot.poi!, system_id: sysId, system_name: sysName, poi_name: poiName, item_id: item.itemId, item_name: item.name || item.itemId, quantity: item.quantity, updated_at: now });
+        }
+      }
+    }
+    return result;
+  });
 
   // Training logger + data retention
   const logger = new TrainingLogger(db);
@@ -772,6 +842,7 @@ async function main(): Promise<void> {
 
   const port = config.server.port;
   server = new WebServer(port);
+  server.setDatabase(db);
   server.routines = Object.entries(ROUTINES).map(([id, { name }]) => ({ id, name }));
   server.onAction = handleAction;
   server.onPlayerInfo = async (playerId: string) => {
@@ -1117,36 +1188,49 @@ async function main(): Promise<void> {
     }
 
     // f3: Auto-transfer station storage → faction storage for idle bots
+    // Correct flow: withdraw to cargo first, then faction_deposit_items from cargo.
     for (const [, bot] of bots) {
       if (bot.state !== "idle") continue;
       if (!bot.docked || !bot.poi || !bot.inFaction) continue;
       if (mapStore.hasFactionStorage(bot.poi) === false) continue;
-      // Run async without blocking the timer
       (async () => {
         try {
           const storageResp = await bot.exec("view_storage");
-          const items: Array<{ itemId: string; item_id?: string; name?: string; quantity: number }> =
+          if (storageResp.error) return;
+          const items: Array<{ item_id?: string; itemId?: string; name?: string; quantity: number }> =
             (storageResp.result as any)?.items ?? (storageResp.result as any)?.storage ?? [];
           if (!Array.isArray(items) || items.length === 0) return;
+
           let transferred = 0;
+          let noFacStorage = false;
+
           for (const item of items) {
-            if (bot.state !== "idle") break;
-            const itemId = item.itemId || item.item_id;
-            if (!itemId || item.quantity <= 0) continue;
-            const resp = await bot.exec("faction_deposit_items", { item_id: itemId, quantity: item.quantity });
-            if (!resp.error) {
+            if (bot.state !== "idle" || noFacStorage) break;
+            const itemId = item.item_id || item.itemId;
+            if (!itemId || (item.quantity ?? 0) <= 0) continue;
+
+            // Step 1: withdraw from station storage to ship cargo
+            const wResp = await bot.exec("withdraw_items", { item_id: itemId, quantity: item.quantity });
+            if (wResp.error) continue;
+
+            // Step 2: deposit from cargo to faction storage
+            const dResp = await bot.exec("faction_deposit_items", { item_id: itemId, quantity: item.quantity });
+            if (!dResp.error) {
               transferred += item.quantity;
               mapStore.setFactionStorage(bot.poi!, true);
+              mapStore.adjustFactionStorageItem(bot.poi!, itemId, item.quantity);
             } else {
-              const em = resp.error.message ?? "";
+              // Put back to station storage so nothing is lost
+              await bot.exec("deposit_items", { item_id: itemId, quantity: item.quantity });
+              const em = dResp.error.message ?? "";
               if (em.includes("no_faction_storage") || em.includes("faction_lockbox") || em.includes("storage facility")) {
                 mapStore.setFactionStorage(bot.poi!, false);
-                break;
+                noFacStorage = true;
               }
             }
           }
           if (transferred > 0) {
-            server.logSystem(`[Auto] ${bot.username}: transferred ${transferred} items from station → faction storage`);
+            server.logSystem(`[Auto] ${bot.username}: transferred ${transferred} items station storage → faction storage`);
           }
         } catch { /* ignore — non-critical background task */ }
       })();

@@ -69,6 +69,11 @@
     @apply inline-flex items-center px-2 py-1 rounded-full text-xs font-medium;
     @apply bg-yellow-900/30 text-space-yellow border border-yellow-800;
   }
+
+  .badge-cyan {
+    @apply inline-flex items-center px-2 py-1 rounded-full text-xs font-medium;
+    @apply bg-cyan-900/30 text-space-cyan border border-cyan-800;
+  }
 }
 
 /* Custom scrollbar стилі для темної теми */

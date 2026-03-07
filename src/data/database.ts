@@ -7,7 +7,7 @@ import { Database } from "bun:sqlite";
 import { mkdirSync } from "fs";
 
 const DB_PATH = "data/hex-bots.db";
-const CURRENT_SCHEMA_VERSION = 5;
+const CURRENT_SCHEMA_VERSION = 7;
 
 export function createDatabase(): Database {
   mkdirSync("data", { recursive: true });
@@ -41,6 +41,8 @@ function applyMigrations(db: Database, fromVersion: number): void {
     if (fromVersion < 3) migrateV3(db);
     if (fromVersion < 4) migrateV4(db);
     if (fromVersion < 5) migrateV5(db);
+    if (fromVersion < 6) migrateV6(db);
+    if (fromVersion < 7) migrateV7(db);
 
     // Update schema version
     db.run("DELETE FROM schema_version");
@@ -270,6 +272,94 @@ function migrateV5(db: Database): void {
   try {
     db.run("ALTER TABLE map_systems ADD COLUMN last_updated TEXT NOT NULL DEFAULT '1970-01-01T00:00:00'");
   } catch { /* column already exists — ok */ }
+}
+
+function migrateV7(db: Database): void {
+  // ── Expand bot_stats with additional metrics ──
+  const newStatCols = [
+    "earned INTEGER NOT NULL DEFAULT 0",
+    "spent INTEGER NOT NULL DEFAULT 0",
+    "donated INTEGER NOT NULL DEFAULT 0",
+    "ore_units INTEGER NOT NULL DEFAULT 0",
+    "kills INTEGER NOT NULL DEFAULT 0",
+    "deaths INTEGER NOT NULL DEFAULT 0",
+    "loot_value INTEGER NOT NULL DEFAULT 0",
+    "craft_units INTEGER NOT NULL DEFAULT 0",
+    "jumps INTEGER NOT NULL DEFAULT 0",
+    "missions INTEGER NOT NULL DEFAULT 0",
+    "mission_rewards INTEGER NOT NULL DEFAULT 0",
+    "markets_scanned INTEGER NOT NULL DEFAULT 0",
+  ];
+  for (const col of newStatCols) {
+    try { db.run(`ALTER TABLE bot_stats ADD COLUMN ${col}`); } catch { /* already exists */ }
+  }
+
+  // ── Add item_name to market_history ──
+  try { db.run("ALTER TABLE market_history ADD COLUMN item_name TEXT NOT NULL DEFAULT ''"); } catch { /* already exists */ }
+  try { db.run("ALTER TABLE market_history ADD COLUMN station_name TEXT NOT NULL DEFAULT ''"); } catch { /* already exists */ }
+
+  // ── Structured market prices (current state per station/item) ──
+  db.run(`
+    CREATE TABLE IF NOT EXISTS market_prices (
+      station_id TEXT NOT NULL,
+      system_id TEXT NOT NULL DEFAULT '',
+      station_name TEXT NOT NULL DEFAULT '',
+      system_name TEXT NOT NULL DEFAULT '',
+      item_id TEXT NOT NULL,
+      item_name TEXT NOT NULL DEFAULT '',
+      sell_price REAL,
+      sell_quantity INTEGER NOT NULL DEFAULT 0,
+      buy_price REAL,
+      buy_quantity INTEGER NOT NULL DEFAULT 0,
+      updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+      updated_by TEXT NOT NULL DEFAULT '',
+      PRIMARY KEY (station_id, item_id)
+    )
+  `);
+  db.run("CREATE INDEX IF NOT EXISTS idx_mp_item ON market_prices(item_id)");
+  db.run("CREATE INDEX IF NOT EXISTS idx_mp_system ON market_prices(system_id)");
+  db.run("CREATE INDEX IF NOT EXISTS idx_mp_sell ON market_prices(item_id, sell_price) WHERE sell_price IS NOT NULL AND sell_quantity > 0");
+  db.run("CREATE INDEX IF NOT EXISTS idx_mp_buy ON market_prices(item_id, buy_price) WHERE buy_price IS NOT NULL AND buy_quantity > 0");
+}
+
+function migrateV6(db: Database): void {
+  // ── Faction storage item snapshots (per POI, per item) ──
+  db.run(`
+    CREATE TABLE IF NOT EXISTS faction_storage_items (
+      poi_id TEXT NOT NULL,
+      system_id TEXT NOT NULL DEFAULT '',
+      system_name TEXT NOT NULL DEFAULT '',
+      poi_name TEXT NOT NULL DEFAULT '',
+      item_id TEXT NOT NULL,
+      item_name TEXT NOT NULL DEFAULT '',
+      quantity INTEGER NOT NULL DEFAULT 0,
+      updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+      PRIMARY KEY (poi_id, item_id)
+    )
+  `);
+  db.run("CREATE INDEX IF NOT EXISTS idx_fsi_poi ON faction_storage_items(poi_id)");
+  db.run("CREATE INDEX IF NOT EXISTS idx_fsi_item ON faction_storage_items(item_id)");
+
+  // ── Known faction building locations ──
+  db.run(`
+    CREATE TABLE IF NOT EXISTS faction_buildings (
+      facility_id TEXT PRIMARY KEY,
+      faction_id TEXT NOT NULL DEFAULT '',
+      faction_name TEXT NOT NULL DEFAULT '',
+      poi_id TEXT NOT NULL DEFAULT '',
+      poi_name TEXT NOT NULL DEFAULT '',
+      system_id TEXT NOT NULL DEFAULT '',
+      system_name TEXT NOT NULL DEFAULT '',
+      facility_type TEXT NOT NULL DEFAULT '',
+      facility_name TEXT NOT NULL DEFAULT '',
+      faction_service TEXT NOT NULL DEFAULT '',
+      active INTEGER NOT NULL DEFAULT 1,
+      level INTEGER NOT NULL DEFAULT 1,
+      updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+    )
+  `);
+  db.run("CREATE INDEX IF NOT EXISTS idx_fb_system ON faction_buildings(system_id)");
+  db.run("CREATE INDEX IF NOT EXISTS idx_fb_faction ON faction_buildings(faction_id)");
 }
 
 // ── CacheHelper ──

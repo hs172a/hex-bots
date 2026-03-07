@@ -1,79 +1,36 @@
 ﻿<template>
   <div class="flex flex-col h-full overflow-hidden">
-    <!-- Header -->
-    <div class="flex flex-col px-3 py-2 border-b border-space-border bg-space-card gap-1.5">
-      <!-- Row 1: navigation + identity + state controls -->
-      <div class="flex items-center gap-3">
-        <button @click="$emit('close')" class="text-space-text-dim hover:text-space-text-bright transition-colors text-sm shrink-0">← Back</button>
-        <span v-if="currentBot.empire" :title="empireName(currentBot.empire)" class="text-base shrink-0 leading-none">{{ empireIcon(currentBot.empire) }}</span>
-        <h2 class="text-base font-semibold text-space-text-bright">{{ currentBot.username }}</h2>
-        <!-- Ship name with tooltip -->
-        <span v-if="headerShipClassId"
-          @mouseenter="onShipNameHover($event)"
-          @mouseleave="shipTooltipVisible = false"
-          class="flex items-center gap-1 cursor-help group shrink-0 text-xs"
-        >
-          <span class="text-space-text-dim">🚀</span>
-          <span class="text-space-text group-hover:text-space-accent underline decoration-dotted decoration-space-text-dim/50 transition-colors font-medium">
-            {{ currentBot.shipName || headerShipClassId }}
-          </span>
-          <span class="text-[11px] text-space-text-dim">({{ headerShipClassId }})</span>
+    <!-- Minimal control bar (character info is in the global CharacterSelectorPanel) -->
+    <div class="flex items-center gap-2 px-2 py-1.5 border-b border-space-border bg-space-card shrink-0">
+      <!-- <button @click="$emit('close')" class="text-space-text-dim hover:text-space-text-bright transition-colors text-xs shrink-0 px-1">← Back</button> -->
+      <div class="w-px h-4 bg-space-border"></div>
+      <!-- Ship tooltip trigger -->
+      <span v-if="headerShipClassId"
+        @mouseenter="onShipNameHover($event)"
+        @mouseleave="shipTooltipVisible = false"
+        class="flex items-center gap-1 cursor-help group text-xs shrink-0"
+      >
+        <span class="text-space-text-dim">🚀</span>
+        <span class="text-space-text group-hover:text-space-accent underline decoration-dotted decoration-space-text-dim/50 transition-colors">
+          {{ currentBot.shipName || headerShipClassId }}
         </span>
-        <span v-else class="text-space-text-dim shrink-0">🚀 {{ currentBot.shipName || 'Unknown Ship' }}</span>
-        <div class="flex-1"></div>
-        <span class="badge" :class="{ 'badge-green': currentBot.state === 'running', 'badge-yellow': currentBot.state === 'idle' || currentBot.state === 'stopped', 'badge-red': currentBot.state === 'error' }">{{ currentBot.state }}</span>
-        <div class="flex gap-1.5 shrink-0">
-          <button v-if="currentBot.state === 'running'" @click="$emit('stop')" class="btn-danger text-xs px-3 py-1">Stop Bot</button>
-          <button v-if="currentBot.state === 'idle' || currentBot.state === 'stopped'" @click="$emit('start')" class="btn btn-primary text-xs py-1 px-2">Start Bot</button>
-        </div>
-      </div>
-      <!-- Row 2: ship, location, status pills -->
-      <div class="flex items-center gap-2 flex-wrap text-xs">
-        <!-- System / POI -->
-        <span v-if="currentBot.system" class="flex items-center gap-1 text-[11px] text-space-text-dim shrink-0">
-          <span class="opacity-75">|</span>
-          <span>📍</span>
-          <span class="text-space-text">{{ headerSystemName }}</span>
-          <span v-if="headerPoiName" class="opacity-60">/ {{ headerPoiName }}</span>
-        </span>
-        <span class="opacity-75">·</span>
-        <!-- Docked status -->
-        <span class="text-[11px] px-1.5 py-0.5 rounded font-medium shrink-0"
-          :class="currentBot.docked ? 'bg-green-900/30 text-space-green' : 'bg-[#21262d] text-space-text-dim'">
-          {{ currentBot.docked ? '🔒 Docked' : '🚀 In Space' }}
-        </span>
-        <span class="opacity-75">·</span>
-        <!-- Routine -->
-        <span class="text-[11px] px-1.5 py-0.5 rounded bg-[#21262d] text-space-text-dim shrink-0">
-          ⚙️ {{ currentBot.routine ? currentBot.routine : 'stopped' }}
-        </span>
-        <span class="opacity-75">·</span>
-        <!-- Faction -->
-        <span v-if="currentBot.factionId" class="text-[11px] px-1.5 py-0.5 rounded bg-purple-900/20 text-purple-300 shrink-0">
-          🛡️ {{ currentBot.factionId }}
-        </span>
-        <!-- Row 3: lifetime statistics (compact pills) -->
-        <span v-if="currentBot.playerStats">
-          <span class="opacity-75">|</span>
-          <span class="text-[11px] px-1.5 py-0.5"><span class="text-green-400">💰</span><span class="px-1">₡{{ formatNumber(currentBot.playerStats.creditsEarned ?? 0) }}</span><span class="px-1 opacity-60">earned</span></span>
-          <span class="opacity-75">·</span>
-          <span class="text-[11px] px-1.5 py-0.5"><span class="text-amber-400">⛏️</span><span class="px-1">{{ formatNumber(currentBot.playerStats.oreMined ?? 0) }}</span><span class="px-1 opacity-60">mined</span></span>
-          <span class="opacity-75">·</span>
-          <span class="text-[11px] px-1.5 py-0.5"><span class="text-blue-400">🔄</span><span class="px-1">{{ currentBot.playerStats.tradesCompleted ?? 0 }}</span><span class="px-1 opacity-60">trades</span></span>
-          <span class="opacity-75">·</span>
-          <span class="text-[11px] px-1.5 py-0.5"><span class="text-purple-400">🗺️</span><span class="px-1">{{ currentBot.playerStats.systemsExplored ?? 0 }}</span><span class="px-1 opacity-60">explored</span></span>
-          <span class="opacity-75">·</span>
-          <span class="text-[11px] px-1.5 py-0.5"><span class="text-cyan-400">🏴‍☠️</span><span class="px-1">{{ currentBot.playerStats.piratesDestroyed ?? 0 }}</span><span class="px-1 opacity-60">pirates</span></span>
-          <span class="opacity-75">·</span>
-          <span class="text-[11px] px-1.5 py-0.5"><span class="text-red-400">💥</span><span class="px-1">{{ currentBot.playerStats.shipsDestroyed ?? 0 }}</span><span class="px-1 opacity-60">kills</span></span>
-          <span class="opacity-75">·</span>
-          <span class="text-[11px] px-1.5 py-0.5"><span class="text-gray-400">💀</span><span class="px-1">{{ currentBot.playerStats.shipsLost ?? 0 }}</span><span class="px-1 opacity-60">deaths</span></span>
-        </span>
-        <!-- Credits/hour -->
-        <span v-if="headerCreditsPerHour !== 0" class="text-[11px] px-1.5 py-0.5 rounded ml-auto shrink-0"
-          :class="headerCreditsPerHour > 0 ? 'bg-green-900/20 text-space-green' : 'bg-red-900/20 text-space-red'">
-          {{ headerCreditsPerHour > 0 ? '↗' : '↘' }} {{ Math.abs(headerCreditsPerHour).toLocaleString() }} cr/h
-        </span>
+      </span>
+      <span v-else class="text-xs text-space-text-dim shrink-0">🚀 {{ currentBot.shipName || '—' }}</span>
+      <span class="text-[11px] px-1.5 py-0.5 rounded font-medium shrink-0"
+        :class="currentBot.docked ? 'bg-green-900/30 text-space-green' : 'bg-[#21262d] text-space-text-dim'">
+        {{ currentBot.docked ? '⚓ Docked' : '🚀 In Space' }}
+      </span>
+      <span v-if="currentBot.system" class="text-[11px] text-space-text-dim shrink-0">📍 {{ headerSystemName }}<span v-if="headerPoiName" class="opacity-60"> / {{ headerPoiName }}</span></span>
+      <span v-if="ldTraveling" class="text-[11px] px-1.5 py-0.5 rounded bg-cyan-900/30 text-cyan-300 shrink-0 animate-pulse">🚀 Traveling</span>
+      <div class="flex-1"></div>
+      <span v-if="headerCreditsPerHour !== 0" class="text-[11px] shrink-0"
+        :class="headerCreditsPerHour > 0 ? 'text-space-green' : 'text-space-red'">
+        {{ headerCreditsPerHour > 0 ? '↗' : '↘' }} {{ Math.abs(headerCreditsPerHour).toLocaleString() }} cr/h
+      </span>
+      <span class="badge shrink-0" :class="{ 'badge-green': currentBot.state === 'running', 'badge-cyan': ldTraveling, 'badge-yellow': !ldTraveling && (currentBot.state === 'idle' || currentBot.state === 'stopped'), 'badge-red': currentBot.state === 'error' }">{{ ldTraveling ? 'traveling' : currentBot.state }}</span>
+      <div class="flex gap-1 shrink-0">
+        <button v-if="currentBot.state === 'running'" @click="$emit('stop')" class="btn-danger text-xs px-2 py-0.5">Stop</button>
+        <button v-if="currentBot.state === 'idle' || currentBot.state === 'stopped'" @click="$emit('start')" class="btn btn-primary text-xs py-0.5 px-2">Start</button>
       </div>
     </div>
     <!-- Body -->
@@ -81,7 +38,7 @@
       <!-- Sidebar col 1 -->
       <div class="w-72 space-y-3 overflow-hidden">
         <!-- Status -->
-        <div class="card py-2 px-2">
+        <div class="card py-2 px-2 !mb-2">
           <div class="py-1 px-0 border-b border-space-border bg-space-card">
             <h3 class="text-xs font-semibold text-space-text-dim uppercase">📊 Status</h3>
           </div>
@@ -130,14 +87,10 @@
               <div class="flex items-center gap-1"><span class="w-4 text-center">📍</span><span class="text-space-text-dim">Location</span></div>
               <span class="text-space-cyan text-xs text-right">{{ formatLocation(currentBot) }}</span>
             </div>
-            <div class="flex justify-between">
-              <div class="flex items-center gap-1"><span class="w-4 text-center">🏠</span><span class="text-space-text-dim">Docked</span></div>
-              <span :class="currentBot.docked ? 'text-space-green' : 'text-space-red'">{{ currentBot.docked ? 'Yes' : 'No' }}</span>
-            </div>
           </div>
         </div>
         <!-- Cargo Hold -->
-        <div class="card py-2 px-2 !mt-2 !mb-2">
+        <div class="card py-2 px-2 !mb-2">
           <div class="py-1 px-0 border-b border-space-border bg-space-card">
             <h3 class="text-xs font-semibold text-space-text-dim uppercase">📦 Cargo Hold</h3>
           </div>
@@ -168,7 +121,7 @@
           </div>
         </div>
         <!-- Faction Storage -->
-        <div v-if="currentBot.factionId" class="card py-2 px-2 !mt-2 border-space-accent/30">
+        <div v-if="currentBot.factionId" :key="currentBot.username + ':faction-storage'" class="card py-2 px-2 !mt-2 border-space-accent/30">
           <div class="py-1 px-0 border-b border-space-border bg-space-card">
             <h3 class="text-xs font-semibold text-space-accent uppercase">🛡️ Faction Storage</h3>
           </div>
@@ -184,50 +137,13 @@
           </div>
         </div>
       </div>
-      <!-- Sidebar col 2 -->
-      <div class="w-72 space-y-3 overflow-hidden">
-        <!-- Skills -->
-        <div class="card py-2 px-2">
-          <div class="py-1 px-0 border-b border-space-border bg-space-card">
-            <h3 class="text-xs font-semibold text-space-text-dim uppercase">🎯 Skills</h3>
-          </div>
-          <div class="py-1 px-0">
-            <div v-if="displaySkills.length === 0" class="text-xs text-space-text-dim text-center py-2">
-              No skills data
-              <button @click="fetchSkills" class="ml-2 text-space-accent hover:underline text-[11px]">🔄 Refresh</button>
-            </div>
-            <div v-else class="space-y-2">
-              <template v-for="[category, catSkills] in groupedSkills" :key="category">
-                <div class="flex items-center gap-1.5 mt-1.5 first:mt-0">
-                  <span :class="CATEGORY_COLOR[category] || 'text-gray-400'" class="text-xs">{{ CATEGORY_ICON[category] || '📚' }}</span>
-                  <span class="text-[11px] uppercase font-semibold tracking-wide" :class="CATEGORY_COLOR[category] || 'text-gray-400'">{{ category }}</span>
-                  <div class="flex-1 h-px bg-space-border"></div>
-                </div>
-                <div class="space-y-1 pl-2 !mt-0.5 !mb-2">
-                  <div v-for="skill in catSkills" :key="skill.skill_id" class="text-xs">
-                    <div class="flex justify-between items-baseline">
-                      <span class="text-gray-300 text-[11px]">{{ formatSkillName(skill.skill_id) }}</span>
-                      <span class="text-space-text-dim flex items-center gap-1.5">
-                        <span v-if="skill.xp !== undefined && skillXpNext(skill) > 0" class="text-[11px]">{{ skill.xp }}/{{ skillXpNext(skill) }}</span>
-                        <span class="text-space-green font-medium">Lv{{ skill.level || 0 }}</span>
-                      </span>
-                    </div>
-                    <div v-if="skill.xp !== undefined && skillXpNext(skill) > 0" class="h-1 bg-[#21262d] rounded-full mt-0.5 overflow-hidden">
-                      <div class="h-full rounded-full transition-all" :class="CATEGORY_BAR_COLOR[category] || 'bg-space-accent'" :style="{ width: skillPct(skill) + '%' }"></div>
-                    </div>
-                  </div>
-                </div>
-              </template>
-            </div>
-          </div>
-        </div>
-      </div>
       <!-- Main Content -->
       <div class="flex-1 flex flex-col overflow-hidden">
         <!-- Tab navigation -->
         <div class="flex gap-0 border-b border-space-border bg-space-card px-2 shrink-0 overflow-x-auto scrollbar-dark">
           <button @click="activeMainTab = 'control'" class="px-3 py-2 text-xs font-medium border-b-2 transition-all whitespace-nowrap" :class="activeMainTab === 'control' ? 'text-space-text-bright border-space-accent' : 'text-space-text-dim border-transparent hover:text-space-text'">🛠️ Control</button>
           <button @click="currentBot.docked && (activeMainTab = 'ship')" class="px-3 py-2 text-xs font-medium border-b-2 transition-all whitespace-nowrap" :class="[activeMainTab === 'ship' ? 'text-space-text-bright border-space-accent' : 'text-space-text-dim border-transparent', currentBot.docked ? 'hover:text-space-text cursor-pointer' : 'opacity-40 cursor-not-allowed']" :title="!currentBot.docked ? 'Dock to manage ship' : ''">🛸 Ship</button>
+          <button @click="activeMainTab = 'skills'" class="px-3 py-2 text-xs font-medium border-b-2 transition-all whitespace-nowrap" :class="activeMainTab === 'skills' ? 'text-space-text-bright border-space-accent' : 'text-space-text-dim border-transparent hover:text-space-text'">🎯 Skills</button>
           <button @click="currentBot.docked && loadFacilityTab()" class="px-3 py-2 text-xs font-medium border-b-2 transition-all whitespace-nowrap" :class="[activeMainTab === 'facility' ? 'text-space-text-bright border-space-accent' : 'text-space-text-dim border-transparent', currentBot.docked ? 'hover:text-space-text cursor-pointer' : 'opacity-40 cursor-not-allowed']" :title="!currentBot.docked ? 'Dock to manage facilities' : ''">⚙️ Facility</button>
           <button @click="activeMainTab = 'insurance'" class="px-3 py-2 text-xs font-medium border-b-2 transition-all whitespace-nowrap" :class="activeMainTab === 'insurance' ? 'text-space-text-bright border-space-accent' : 'text-space-text-dim border-transparent hover:text-space-text'">🔰 Insurance</button>
           <button @click="activeMainTab = 'combat'" class="px-3 py-2 text-xs font-medium border-b-2 transition-all whitespace-nowrap" :class="activeMainTab === 'combat' ? 'text-space-text-bright border-space-accent' : 'text-space-text-dim border-transparent hover:text-space-text'">⚔️ Combat</button>
@@ -240,6 +156,7 @@
         <!-- Panel components -->
         <BotControlPanel ref="controlPanel" v-show="activeMainTab === 'control'" :bot="bot" @notif="onChildNotif" />
         <BotShipPanel v-show="activeMainTab === 'ship'" :bot="bot" @notif="onChildNotif" />
+        <SkillsTab v-if="activeMainTab === 'skills'" :skills="displaySkills" @refresh="fetchSkills" />
         <BotStationPanel v-show="activeMainTab === 'facility'" ref="facilityPanel" :bot="bot" mode="facility" @notif="onChildNotif" />
         <InsurancePanel v-if="activeMainTab === 'insurance'" :bot="bot" @notif="onChildNotif" />
         <CombatPanel v-if="activeMainTab === 'combat'" :bot="bot" @notif="onChildNotif" />
@@ -323,6 +240,7 @@ import CombatPanel from './CombatPanel.vue';
 import InsurancePanel from './InsurancePanel.vue';
 import NotesPanel from './NotesPanel.vue';
 import SocialPanel from './SocialPanel.vue';
+import SkillsTab from './SkillsTab.vue';
 
 interface Props { bot: any; }
 const props = defineProps<Props>();
@@ -424,7 +342,7 @@ const headerCreditsPerHour = computed(() =>
 );
 
 function headerShipImageUrl(classId: string): string {
-  return `https://www.spacemolt.com/_next/image?url=%2Fimages%2Fships%2Fcatalog%2F${encodeURIComponent(classId)}.webp&w=640&q=75`;
+  return `/ships/${classId}.webp`;
 }
 
 function onShipNameHover(e: MouseEvent) {
@@ -437,9 +355,11 @@ function onShipNameHover(e: MouseEvent) {
 }
 // ─────────────────────────────────────────────────────────────────────────────
 
-const activeMainTab = ref<'control' | 'ship' | 'station' | 'log' | 'profile' | 'combat' | 'insurance' | 'notes' | 'facility' | 'social'>('control');
+const activeMainTab = ref<'control' | 'ship' | 'skills' | 'station' | 'log' | 'profile' | 'combat' | 'insurance' | 'notes' | 'facility' | 'social'>('control');
 const controlPanel = ref<InstanceType<typeof BotControlPanel> | null>(null);
 const facilityPanel = ref<InstanceType<typeof BotStationPanel> | null>(null);
+/** True while Long Distance Travel is actively jumping — exposed by BotControlPanel. */
+const ldTraveling = computed(() => !!(controlPanel.value as any)?.ldRelocating?.value);
 watch(activeMainTab, (tab) => {
   if (tab === 'control') nextTick(() => controlPanel.value?.scrollToBottom());
 });
@@ -449,6 +369,11 @@ function loadFacilityTab() {
 }
 const skills = ref<any[]>([]);
 const shipInfo = ref<any>(null);
+
+watch(() => props.bot.username, () => {
+  skills.value = [];
+  shipInfo.value = null;
+});
 const moduleNotif = ref<{ text: string; type: 'success' | 'warn' | 'error' } | null>(null);
 let moduleNotifTimer: ReturnType<typeof setTimeout> | null = null;
 const stationPanel = ref<InstanceType<typeof BotStationPanel> | null>(null);
@@ -543,8 +468,12 @@ function processExecResult(command: string, data: any) {
 }
 function fetchSkills() { execCommand('get_skills'); }
 
+const isDocked = computed(() => !!currentBot.value?.docked);
+
 onMounted(() => {
   execCommand('get_status');
-  fetchSkills();
+  if (isDocked.value) {
+    fetchSkills();
+  }
 });
 </script>

@@ -2,6 +2,8 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from "fs";
 import { join } from "path";
 import { cachedFetch } from "./httpcache.js";
 import type { Database } from "bun:sqlite";
+import { FactionStorageDb } from "./data/faction-storage-db.js";
+import type { FactionStorageEntry, FactionBuildingEntry } from "./data/faction-storage-db.js";
 
 // ── Data model ──────────────────────────────────────────────
 
@@ -129,6 +131,7 @@ export class MapStore {
   private dirtySystemIds = new Set<string>();
   private saveTimer: ReturnType<typeof setTimeout> | null = null;
   private _db: Database | null = null;
+  private _factionStorageDb: FactionStorageDb | null = null;
   /** Memoized BFS routes. Cleared when map topology changes. */
   private routeCache = new Map<string, string[] | null>();
 
@@ -1204,6 +1207,21 @@ export class MapStore {
   private factionStorageCache = new Map<string, { available: boolean; checkedAt: number }>();
   private static readonly FACTION_STORAGE_TTL_MS = 15 * 60 * 1000; // 15 minutes
 
+  /** Connect the faction storage DB (called once after database is ready). */
+  connectToFactionStorageDb(db: FactionStorageDb): void {
+    this._factionStorageDb = db;
+  }
+
+  /**
+   * Optional live provider: called when DB is empty to return in-memory bot faction storage.
+   * Wired by botmanager so the All Storages tab shows data immediately even before DB is populated.
+   */
+  private _liveFactionStorageProvider?: () => FactionStorageEntry[];
+
+  setLiveFactionStorageProvider(fn: () => FactionStorageEntry[]): void {
+    this._liveFactionStorageProvider = fn;
+  }
+
   /** Record whether a station has faction storage. Call after any faction_deposit_items attempt. */
   setFactionStorage(stationId: string, available: boolean): void {
     this.factionStorageCache.set(stationId, { available, checkedAt: Date.now() });
@@ -1218,6 +1236,64 @@ export class MapStore {
     if (!rec) return null;
     if (Date.now() - rec.checkedAt > MapStore.FACTION_STORAGE_TTL_MS) return null;
     return rec.available;
+  }
+
+  // ── Faction storage DB delegates ─────────────────────────────
+
+  /** Full replace of faction storage items at a POI (from view_faction_storage success). */
+  updateFactionStorageItems(
+    poiId: string,
+    systemId: string,
+    systemName: string,
+    poiName: string,
+    items: Array<{ item_id: string; name?: string; item_name?: string; quantity: number }>,
+  ): void {
+    this.setFactionStorage(poiId, true);
+    this._factionStorageDb?.updateItems(poiId, systemId, systemName, poiName, items);
+  }
+
+  /** Optimistic ±delta for one item after a deposit/withdraw. */
+  adjustFactionStorageItem(poiId: string, itemId: string, delta: number): void {
+    this._factionStorageDb?.adjustQuantity(poiId, itemId, delta);
+  }
+
+  /** Clear all items at a POI when view_faction_storage returns "no facility" error. */
+  clearFactionStorageItems(poiId: string): void {
+    this.setFactionStorage(poiId, false);
+    this._factionStorageDb?.clearItems(poiId);
+  }
+
+  /** Return all faction storage items across all POIs (for UI / gatherer use). */
+  getAllFactionStorageItems(): FactionStorageEntry[] {
+    const dbItems = this._factionStorageDb?.getAllItems() ?? [];
+    if (dbItems.length > 0) return dbItems;
+    // Fallback: synthesize from in-memory bot faction storage (before DB is populated on first run)
+    return this._liveFactionStorageProvider?.() ?? [];
+  }
+
+  /** Return faction storage items at a specific POI. */
+  getFactionStorageItemsForPoi(poiId: string): FactionStorageEntry[] {
+    return this._factionStorageDb?.getItemsForPoi(poiId) ?? [];
+  }
+
+  /** Return total quantity of an item across all faction storages. */
+  getFactionStorageTotalFor(itemId: string): number {
+    return this._factionStorageDb?.getTotalQuantity(itemId) ?? 0;
+  }
+
+  /** Upsert faction building records (from facility { action:'list' } response). */
+  updateFactionBuildings(buildings: Parameters<FactionStorageDb['updateBuildings']>[0]): void {
+    this._factionStorageDb?.updateBuildings(buildings);
+  }
+
+  /** Return all known faction buildings. */
+  getAllFactionBuildings(): FactionBuildingEntry[] {
+    return this._factionStorageDb?.getAllBuildings() ?? [];
+  }
+
+  /** Return faction buildings in a specific system. */
+  getFactionBuildingsInSystem(systemId: string): FactionBuildingEntry[] {
+    return this._factionStorageDb?.getBuildingsInSystem(systemId) ?? [];
   }
 
   applyFastPatches(patches: FastPatch[]): void {

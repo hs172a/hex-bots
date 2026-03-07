@@ -1,5 +1,19 @@
 <template>
-  <div class="flex-1 flex gap-2 p-2 overflow-hidden">
+  <div class="flex-1 flex flex-col overflow-hidden">
+    <!-- Tab bar -->
+    <div class="flex border-b border-space-border bg-space-card px-3 shrink-0">
+      <button v-for="t in ['galaxy', 'explorer']" :key="t" @click="mapTab = t"
+        class="px-4 py-2 text-xs font-medium border-b-2 transition-all capitalize"
+        :class="mapTab === t ? 'text-space-text-bright border-space-accent' : 'text-space-text-dim border-transparent hover:text-space-text'">
+        {{ t === 'galaxy' ? '🗺️ Galaxy Map' : '📋 Explorer Data' }}
+      </button>
+    </div>
+
+    <!-- Galaxy canvas tab -->
+    <GalaxyMapCanvas v-if="mapTab === 'galaxy'" class="flex-1" />
+
+    <!-- Explorer Data tab -->
+    <div v-else class="flex-1 flex gap-2 p-2 overflow-hidden">
     <!-- Filters Sidebar -->
     <div class="w-56 bg-space-card border border-space-border rounded-lg flex flex-col overflow-hidden flex-shrink-0">
       <div class="px-3 py-2 border-b border-space-border">
@@ -109,12 +123,16 @@
         </div>
       </div>
     </div>
+    </div>
   </div>
 </template>
 
 <script setup lang="ts">
 import { ref, computed } from 'vue';
 import { useBotStore } from '../stores/botStore';
+import GalaxyMapCanvas from '../components/GalaxyMapCanvas.vue';
+
+const mapTab = ref('galaxy');
 
 const botStore = useBotStore();
 const searchQuery = ref('');

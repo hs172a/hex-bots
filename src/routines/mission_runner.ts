@@ -1071,6 +1071,9 @@ export const missionRunnerRoutine: Routine = async function* (ctx: RoutineContex
         sessFailed++;
       } else {
         sessCompleted++;
+        bot.stats.totalMissions = (bot.stats.totalMissions ?? 0) + 1;
+        bot.stats.totalMissionRewards = (bot.stats.totalMissionRewards ?? 0) + mission.reward_credits;
+        bot.stats.totalEarned = (bot.stats.totalEarned ?? 0) + mission.reward_credits;
         ctx.log("info", `✓ Done: "${mission.title}" (+${mission.reward_credits}cr) — session: ${sessCompleted} done, ${sessFailed} failed`);
         logAgentEvent(ctx, "missions", "info",
           `Mission complete: "${mission.title}" (+${mission.reward_credits}cr)`,

@@ -1,11 +1,13 @@
 import { readFileSync, writeFileSync, existsSync, mkdirSync, readdirSync } from "fs";
 import { join, basename } from "path";
 import type { BotStatus } from "../bot.js";
+import type { Database } from "bun:sqlite";
 import { mapStore } from "../mapstore.js";
 import { catalogStore } from "../catalogstore.js";
 import { publicCatalog } from "../publicCatalog.js";
 import type { ServerWebSocket } from "bun";
 import type { ProxyHub, HubSession } from "../proxyhub.js";
+import { getMarketPricesStore } from "../data/market-prices-store.js";
 
 // ── Types ──────────────────────────────────────────────────
 
@@ -69,7 +71,27 @@ interface DayStats {
   trades: number;
   profit: number;
   systems: number;
+  // Extended stats (v7)
+  earned: number;
+  spent: number;
+  donated: number;
+  ore_units: number;
+  kills: number;
+  deaths: number;
+  loot_value: number;
+  craft_units: number;
+  jumps: number;
+  missions: number;
+  mission_rewards: number;
+  markets_scanned: number;
 }
+
+const ZERO_DAY: DayStats = {
+  mined: 0, crafted: 0, trades: 0, profit: 0, systems: 0,
+  earned: 0, spent: 0, donated: 0, ore_units: 0,
+  kills: 0, deaths: 0, loot_value: 0, craft_units: 0,
+  jumps: 0, missions: 0, mission_rewards: 0, markets_scanned: 0,
+};
 
 interface StatsFile {
   daily: Record<string, Record<string, DayStats>>;   // bot -> date -> stats
@@ -85,6 +107,31 @@ function loadStats(): StatsFile {
     }
   }
   return { daily: {}, lastSeen: {} };
+}
+
+/** One-time import of stats.json into bot_stats SQLite table. */
+function importStatsToDb(db: Database, stats: StatsFile): void {
+  const stmt = db.prepare(`
+    INSERT OR IGNORE INTO bot_stats
+      (username, date, mined, crafted, trades, profit, systems,
+       earned, spent, donated, ore_units, kills, deaths, loot_value,
+       craft_units, jumps, missions, mission_rewards, markets_scanned)
+    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+  `);
+  const tx = db.transaction(() => {
+    for (const [username, days] of Object.entries(stats.daily)) {
+      for (const [date, d] of Object.entries(days)) {
+        stmt.run(
+          username, date,
+          d.mined, d.crafted, d.trades, d.profit, d.systems,
+          d.earned ?? 0, d.spent ?? 0, d.donated ?? 0, d.ore_units ?? 0,
+          d.kills ?? 0, d.deaths ?? 0, d.loot_value ?? 0, d.craft_units ?? 0,
+          d.jumps ?? 0, d.missions ?? 0, d.mission_rewards ?? 0, d.markets_scanned ?? 0
+        );
+      }
+    }
+  });
+  tx();
 }
 
 function saveStats(s: StatsFile): void {
@@ -218,10 +265,19 @@ export class WebServer {
   // Available routines — set by botmanager
   routines: Array<{ id: string; name: string }> = [];
 
+  /** SQLite database — injected by botmanager after construction. */
+  private db: Database | null = null;
+
   constructor(port: number = 3000) {
     this.port = port;
     this.settings = loadSettings();
     this.statsData = loadStats();
+  }
+
+  /** Wire up the database and import any existing stats.json data. */
+  setDatabase(db: Database): void {
+    this.db = db;
+    importStatsToDb(db, this.statsData);
   }
 
   getSettings(routine: string): Record<string, unknown> {
@@ -346,6 +402,48 @@ export class WebServer {
           }
           return Response.json({ pools, currentPool });
         }
+        // ── Bot stats from SQLite (full history, all metrics) ──
+        if (url.pathname === "/api/bot-stats") {
+          if (!this.db) return Response.json({ error: "DB not initialized" }, { status: 503 });
+          const bot = url.searchParams.get("bot");
+          const days = Math.min(365, Number(url.searchParams.get("days") || "30"));
+          const cutoff = new Date(Date.now() - days * 86400_000).toISOString().slice(0, 10);
+          const rows = bot
+            ? this.db.query("SELECT * FROM bot_stats WHERE username=? AND date>=? ORDER BY date DESC").all(bot, cutoff)
+            : this.db.query("SELECT * FROM bot_stats WHERE date>=? ORDER BY username, date DESC").all(cutoff);
+          return Response.json(rows);
+        }
+
+        // ── Structured market prices ──
+        if (url.pathname === "/api/market-prices") {
+          const mps = getMarketPricesStore();
+          if (!mps) return Response.json({ error: "Market prices store not ready" }, { status: 503 });
+          const itemId    = url.searchParams.get("item");
+          const stationId = url.searchParams.get("station");
+          const action    = url.searchParams.get("action") || "summary";
+          if (action === "routes") {
+            const minMargin = Number(url.searchParams.get("min_margin") || "100");
+            const systemId  = url.searchParams.get("system");
+            const routes = systemId
+              ? mps.getBestRoutesFromSystem(systemId, minMargin, 20)
+              : mps.getBestTradeRoutes(minMargin, 20);
+            return Response.json(routes);
+          }
+          if (action === "sources" && itemId) {
+            return Response.json(mps.getCheapestSources(itemId, 20));
+          }
+          if (action === "buyers" && itemId) {
+            return Response.json(mps.getBestBuyers(itemId, 20));
+          }
+          if (action === "station" && stationId) {
+            return Response.json(mps.getStationInventory(stationId));
+          }
+          if (action === "history" && stationId && itemId) {
+            return Response.json(mps.getPriceHistory(stationId, itemId));
+          }
+          return Response.json(mps.getSummary());
+        }
+
         if (url.pathname === "/api/debug/stats") {
           // Diagnostic endpoint — returns the full stats pipeline state.
           // Open in browser: http://localhost:3210/api/debug/stats
@@ -425,6 +523,13 @@ export class WebServer {
           }
           if (this.onGetGoals) return Response.json(this.onGetGoals());
           return Response.json([]);
+        }
+
+        if (url.pathname === "/api/faction-storage") {
+          return Response.json(mapStore.getAllFactionStorageItems());
+        }
+        if (url.pathname === "/api/faction-buildings") {
+          return Response.json(mapStore.getAllFactionBuildings());
         }
 
         // Player profile proxy
@@ -778,15 +883,27 @@ export class WebServer {
       const name = bot.username;
 
       const current: DayStats = {
-        mined: bot.stats.totalMined,
+        mined:   bot.stats.totalMined,
         crafted: bot.stats.totalCrafted,
-        trades: bot.stats.totalTrades,
-        profit: bot.stats.totalProfit,
+        trades:  bot.stats.totalTrades,
+        profit:  bot.stats.totalProfit,
         systems: bot.stats.totalSystems,
+        earned:          bot.stats.totalEarned         ?? 0,
+        spent:           bot.stats.totalSpent          ?? 0,
+        donated:         bot.stats.totalDonated        ?? 0,
+        ore_units:       bot.stats.totalOreUnits       ?? 0,
+        kills:           bot.stats.totalKills          ?? 0,
+        deaths:          bot.stats.totalDeaths         ?? 0,
+        loot_value:      bot.stats.totalLootValue      ?? 0,
+        craft_units:     bot.stats.totalCraftUnits     ?? 0,
+        jumps:           bot.stats.totalJumps          ?? 0,
+        missions:        bot.stats.totalMissions       ?? 0,
+        mission_rewards: bot.stats.totalMissionRewards ?? 0,
+        markets_scanned: bot.stats.totalMarketsScanned ?? 0,
       };
 
       // Get last seen snapshot (default zeros)
-      const last = this.statsData.lastSeen[name] || { mined: 0, crafted: 0, trades: 0, profit: 0, systems: 0 };
+      const last = this.statsData.lastSeen[name] || { ...ZERO_DAY };
 
       // If bot restarted (stats went back to zero/lower), reset lastSeen
       const botRestarted =
@@ -796,7 +913,7 @@ export class WebServer {
         current.profit < last.profit ||
         current.systems < last.systems;
 
-      const base = botRestarted ? { mined: 0, crafted: 0, trades: 0, profit: 0, systems: 0 } : last;
+      const base: DayStats = botRestarted ? { ...ZERO_DAY } : last;
 
       // Compute deltas
       const dm = current.mined - base.mined;
@@ -808,17 +925,73 @@ export class WebServer {
       // Always update lastSeen so restart detection works next cycle
       this.statsData.lastSeen[name] = { ...current };
 
-      if (dm === 0 && dc === 0 && dt === 0 && dp === 0 && ds === 0) continue;
+      const dEarned   = Math.max(0, (current.earned         ?? 0) - ((base as any).earned         ?? 0));
+      const dSpent    = Math.max(0, (current.spent          ?? 0) - ((base as any).spent          ?? 0));
+      const dDonated  = Math.max(0, (current.donated        ?? 0) - ((base as any).donated        ?? 0));
+      const dOreUnits = Math.max(0, (current.ore_units      ?? 0) - ((base as any).ore_units      ?? 0));
+      const dKills    = Math.max(0, (current.kills          ?? 0) - ((base as any).kills          ?? 0));
+      const dDeaths   = Math.max(0, (current.deaths         ?? 0) - ((base as any).deaths         ?? 0));
+      const dLoot     = Math.max(0, (current.loot_value     ?? 0) - ((base as any).loot_value     ?? 0));
+      const dCraftU   = Math.max(0, (current.craft_units    ?? 0) - ((base as any).craft_units    ?? 0));
+      const dJumps    = Math.max(0, (current.jumps          ?? 0) - ((base as any).jumps          ?? 0));
+      const dMissions = Math.max(0, (current.missions       ?? 0) - ((base as any).missions       ?? 0));
+      const dMRew     = Math.max(0, (current.mission_rewards?? 0) - ((base as any).mission_rewards?? 0));
+      const dMarkets  = Math.max(0, (current.markets_scanned?? 0) - ((base as any).markets_scanned?? 0));
+
+      if (dm === 0 && dc === 0 && dt === 0 && dp === 0 && ds === 0 &&
+          dEarned === 0 && dSpent === 0 && dDonated === 0 && dOreUnits === 0 &&
+          dKills === 0 && dDeaths === 0 && dLoot === 0 && dCraftU === 0 &&
+          dJumps === 0 && dMissions === 0 && dMRew === 0 && dMarkets === 0) continue;
 
       // Accumulate into daily
       if (!this.statsData.daily[name]) this.statsData.daily[name] = {};
-      const day = this.statsData.daily[name][today] || { mined: 0, crafted: 0, trades: 0, profit: 0, systems: 0 };
-      day.mined += dm;
+      const day: DayStats = this.statsData.daily[name][today] || { ...ZERO_DAY };
+      day.mined   += dm;
       day.crafted += dc;
-      day.trades += dt;
-      day.profit += dp;
+      day.trades  += dt;
+      day.profit  += dp;
       day.systems += ds;
+      day.earned        = (day.earned        ?? 0) + dEarned;
+      day.spent         = (day.spent         ?? 0) + dSpent;
+      day.donated       = (day.donated       ?? 0) + dDonated;
+      day.ore_units     = (day.ore_units     ?? 0) + dOreUnits;
+      day.kills         = (day.kills         ?? 0) + dKills;
+      day.deaths        = (day.deaths        ?? 0) + dDeaths;
+      day.loot_value    = (day.loot_value    ?? 0) + dLoot;
+      day.craft_units   = (day.craft_units   ?? 0) + dCraftU;
+      day.jumps         = (day.jumps         ?? 0) + dJumps;
+      day.missions      = (day.missions      ?? 0) + dMissions;
+      day.mission_rewards = (day.mission_rewards ?? 0) + dMRew;
+      day.markets_scanned = (day.markets_scanned ?? 0) + dMarkets;
       this.statsData.daily[name][today] = day;
+
+      // Persist to SQLite
+      if (this.db) {
+        this.db.run(
+          `INSERT INTO bot_stats
+            (username, date, mined, crafted, trades, profit, systems,
+             earned, spent, donated, ore_units, kills, deaths, loot_value,
+             craft_units, jumps, missions, mission_rewards, markets_scanned)
+          VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+          ON CONFLICT(username, date) DO UPDATE SET
+            mined=mined+excluded.mined, crafted=crafted+excluded.crafted,
+            trades=trades+excluded.trades, profit=profit+excluded.profit,
+            systems=MAX(systems,excluded.systems),
+            earned=earned+excluded.earned, spent=spent+excluded.spent,
+            donated=donated+excluded.donated, ore_units=ore_units+excluded.ore_units,
+            kills=kills+excluded.kills, deaths=deaths+excluded.deaths,
+            loot_value=loot_value+excluded.loot_value, craft_units=craft_units+excluded.craft_units,
+            jumps=jumps+excluded.jumps, missions=missions+excluded.missions,
+            mission_rewards=mission_rewards+excluded.mission_rewards,
+            markets_scanned=markets_scanned+excluded.markets_scanned`,
+          [name, today,
+          dm, dc, dt, dp, ds,
+          dEarned, dSpent, dDonated, dOreUnits,
+          dKills, dDeaths, dLoot, dCraftU,
+          dJumps, dMissions, dMRew, dMarkets]
+        );
+      }
+
       changed = true;
     }
 

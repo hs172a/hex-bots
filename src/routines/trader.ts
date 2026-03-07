@@ -1135,6 +1135,7 @@ export const traderRoutine: Routine = async function* (ctx: RoutineContext) {
       const actualInCargo = bot.inventory.find(i => i.itemId === candidate.itemId)?.quantity ?? 0;
       const actualReceived = Math.max(0, actualInCargo - alreadyHave);
       const actualSpent = Math.max(0, creditsBefore - bot.credits);
+      if (actualSpent > 0) bot.stats.totalSpent = (bot.stats.totalSpent ?? 0) + actualSpent;
 
       if (actualReceived < qty && qty > 0) {
         ctx.log("trade", `Partial fill: received ${actualReceived}/${qty} items (cargo: ${actualInCargo} total)`);
@@ -1361,7 +1362,9 @@ export const traderRoutine: Routine = async function* (ctx: RoutineContext) {
         const afterSell = bot.inventory.find(i => i.itemId === route.itemId)?.quantity ?? 0;
         const sold = remaining - afterSell;
         totalSold += sold;
-        sellRevenue += earned > 0 ? earned : sold * route.sellPrice;
+        const revenue = earned > 0 ? earned : sold * route.sellPrice;
+        sellRevenue += revenue;
+        if (revenue > 0) bot.stats.totalEarned = (bot.stats.totalEarned ?? 0) + revenue;
         remaining = afterSell;
         if (remaining > 0) {
           ctx.log("trade", `Sold ${sold}x but ${remaining}x ${route.itemName} still unsold — buyer demand exhausted`);

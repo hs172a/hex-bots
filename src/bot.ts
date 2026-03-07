@@ -19,19 +19,74 @@ export interface ShipModule {
   id: string;
   type_id: string;
   name?: string;
+  type?: string;
   slot_type?: string;
+  size?: number;
+  cpu_usage?: number;
+  power_usage?: number;
   cpu_cost?: number;
   power_cost?: number;
   wear?: number;
   wear_status?: string;
+  quality?: number;
+  quality_grade?: string;
+  // Combat
+  damage?: number;
+  damage_type?: string;
+  ammo_type?: string;
+  current_ammo?: number;
+  loaded_ammo_id?: string;
+  magazine_size?: number;
+  range?: number;
+  // Defense / hull
+  armor_bonus?: number;
+  hull_bonus?: number;
+  shield_bonus?: number;
+  speed_bonus?: number;
+  cargo_bonus?: number;
+  // Industrial
+  mining_power?: number;
+  mining_range?: number;
+  harvest_power?: number;
+  harvest_range?: number;
+  scanner_power?: number;
+  fuel_efficiency?: number;
+  cloak_strength?: number;
 }
 
 export interface BotStats {
-  totalMined: number;
-  totalCrafted: number;
-  totalTrades: number;
-  totalProfit: number;
-  totalSystems: number;
+  // ── Existing ──
+  totalMined: number;       // mining sessions
+  totalCrafted: number;     // craft sessions
+  totalTrades: number;      // trade runs completed
+  totalProfit: number;      // net trade profit (cr)
+  totalSystems: number;     // unique systems visited
+
+  // ── Economic ──
+  totalEarned: number;      // gross credits earned (trades + missions + loot)
+  totalSpent: number;       // credits spent (purchases)
+  totalDonated: number;     // credits donated to faction
+
+  // ── Mining ──
+  totalOreUnits: number;    // total ore/gas/ice units extracted
+
+  // ── Combat ──
+  totalKills: number;       // enemies destroyed
+  totalDeaths: number;      // times ship destroyed
+  totalLootValue: number;   // estimated value of combat loot
+
+  // ── Production ──
+  totalCraftUnits: number;  // total units produced (across craft sessions)
+
+  // ── Navigation ──
+  totalJumps: number;       // travel/jump actions taken
+
+  // ── Missions ──
+  totalMissions: number;    // missions completed
+  totalMissionRewards: number; // credits from mission rewards
+
+  // ── Market intel ──
+  totalMarketsScanned: number; // number of view_market calls recorded
 }
 
 export interface PlayerStats {
@@ -247,7 +302,16 @@ export class Bot extends EventEmitter {
   installedMods: string[] = [];
 
   /** Accumulated session stats for this bot (runtime tracking). */
-  stats: BotStats = { totalMined: 0, totalCrafted: 0, totalTrades: 0, totalProfit: 0, totalSystems: 0 };
+  stats: BotStats = {
+    totalMined: 0, totalCrafted: 0, totalTrades: 0, totalProfit: 0, totalSystems: 0,
+    totalEarned: 0, totalSpent: 0, totalDonated: 0,
+    totalOreUnits: 0,
+    totalKills: 0, totalDeaths: 0, totalLootValue: 0,
+    totalCraftUnits: 0,
+    totalJumps: 0,
+    totalMissions: 0, totalMissionRewards: 0,
+    totalMarketsScanned: 0,
+  };
 
   /** Server-side player stats from last get_status. */
   playerStats: PlayerStats = {
@@ -340,6 +404,15 @@ export class Bot extends EventEmitter {
     }
 
     let resp = await this.api.execute(command, payload);
+
+    // ── Post-flight abort check ──────────────────────────────────────────────
+    // The API call above may take 10-30 seconds (jump, undock, etc.). If the bot
+    // was force-stopped while it was in-flight, the routine must NOT continue to
+    // process the result — return "stopped" so every subsequent exec() fast-fails
+    // and the routine unwinds through normal error handling.
+    if ((this._state as BotState) === "stopping") {
+      return { error: { code: "stopped", message: "Bot is stopping" } } as ApiResponse;
+    }
 
     // Populate shared market cache on success; invalidate on buy/sell mutations.
     if (command === "view_market" && this.poi && !resp.error) {
@@ -447,7 +520,10 @@ export class Bot extends EventEmitter {
         (command === "faction_deposit_items" && code === "no_faction_storage") ||
         (command === "faction_deposit_credits" && code === "no_faction_storage") ||
         (command === "withdraw_items" && code === "cargo_full") ||
-        (command === "faction_withdraw_items" && code === "cargo_full");
+        (command === "faction_withdraw_items" && code === "cargo_full") ||
+        (command === "faction_submit_trade_intel" && code === "no_trade_ledger") ||
+        (command === "faction_submit_intel" && code === "no_trade_ledger") ||
+        (command === "cloak" && code === "no_cloak");
       if (!quiet) {
         this.log("error", `${command}: ${resp.error.message}`);
       }
@@ -475,6 +551,25 @@ export class Bot extends EventEmitter {
     }
 
     this.api.setCredentials(creds.username, creds.password);
+
+    // Wire up session persistence: save to disk after every new session creation
+    this.api.setSessionSavedCallback((s) => this.session.saveSession(s));
+
+    // ── Attempt to resume a previously saved session (avoids full login on restart) ──
+    const saved = this.session.loadSession();
+    if (saved) {
+      this.api.setSession(saved);
+      this.log("system", `Resuming session ${saved.id.slice(0, 8)}...`);
+      const resumeResp = await this.refreshStatus();
+      if (!resumeResp.error) {
+        this.log("system", "Session resumed — no login required");
+        return true;
+      }
+      // Session rejected by server (expired/invalidated) — fall through to full login
+      this.log("system", `Session ${saved.id.slice(0, 8)} rejected (${resumeResp.error?.code ?? "unknown"}), logging in fresh...`);
+    }
+
+    // ── Full login: create new session + authenticate ──
     // Clear any stale session so ensureSession() creates a fresh one and
     // re-authenticates internally via doRequest("login") with stored credentials.
     // This avoids a double-login: one inside ensureSession() + one from exec("login").
@@ -594,18 +689,53 @@ export class Bot extends EventEmitter {
         }
       }
 
-      // Full module details (id, type_id, name, slot_type, cpu_cost, power_cost)
+      // Full module details — captures all stat fields now correctly populated by the API
       if (Array.isArray(r.modules)) {
         this.shipModules = (r.modules as Array<Record<string, unknown>>).map(m => ({
           id: (m.id as string) || "",
           type_id: (m.type_id as string) || "",
           name: m.name as string | undefined,
           slot_type: m.slot_type as string | undefined,
+          type: (m.type as string) || (m.slot_type as string) || "",
+          cpu_usage: m.cpu_usage as number | undefined,
+          power_usage: m.power_usage as number | undefined,
           cpu_cost: m.cpu_cost as number | undefined,
           power_cost: m.power_cost as number | undefined,
           wear: m.wear as number | undefined,
           wear_status: m.wear_status as string | undefined,
+          quality: m.quality as number | undefined,
+          quality_grade: m.quality_grade as string | undefined,
+          // Combat
+          damage: m.damage as number | undefined,
+          damage_type: m.damage_type as string | undefined,
+          ammo_type: m.ammo_type as string | undefined,
+          current_ammo: m.current_ammo as number | undefined,
+          loaded_ammo_id: m.loaded_ammo_id as string | undefined,
+          magazine_size: m.magazine_size as number | undefined,
+          range: m.range as number | undefined,
+          // Defense / hull (now correctly populated)
+          armor_bonus: m.armor_bonus as number | undefined,
+          hull_bonus: m.hull_bonus as number | undefined,
+          shield_bonus: m.shield_bonus as number | undefined,
+          speed_bonus: m.speed_bonus as number | undefined,
+          cargo_bonus: m.cargo_bonus as number | undefined,
+          // Industrial
+          mining_power: m.mining_power as number | undefined,
+          mining_range: m.mining_range as number | undefined,
+          harvest_power: m.harvest_power as number | undefined,
+          harvest_range: m.harvest_range as number | undefined,
+          scanner_power: m.scanner_power as number | undefined,
+          fuel_efficiency: m.fuel_efficiency as number | undefined,
+          cloak_strength: m.cloak_strength as number | undefined,
         }));
+
+        // Compute loaded ammo from weapon modules (ship object has no ammo field)
+        const weaponModsWithAmmo = this.shipModules.filter(m => m.ammo_type);
+        if (weaponModsWithAmmo.length > 0) {
+          this.ammo = weaponModsWithAmmo.reduce((sum, m) => sum + (m.current_ammo ?? 0), 0);
+        } else if (this.shipModules.length > 0) {
+          this.ammo = -1; // no ammo-using weapons fitted — skip ammo checks
+        }
       }
 
       // Cloak detection
@@ -695,6 +825,12 @@ export class Bot extends EventEmitter {
     return resp.result as Record<string, unknown>;
   }
 
+  /**
+   * Called after a successful view_faction_storage response.
+   * Set by botmanager to persist the snapshot to the faction storage DB.
+   */
+  onFactionStorageViewed?: (rawItems: unknown[], poiId: string, systemId: string) => void;
+
   /** Fetch faction storage contents and cache them. Silently returns empty on error. */
   async refreshFactionStorage(): Promise<void> {
     const resp = await this.exec("view_faction_storage");
@@ -703,6 +839,13 @@ export class Bot extends EventEmitter {
       return;
     }
     this.factionStorage = this.parseItemList(resp.result);
+    // Notify DB hook so routine-triggered refreshes also persist the snapshot
+    if (this.onFactionStorageViewed && this.poi) {
+      const raw: unknown[] = Array.isArray(resp.result)
+        ? (resp.result as unknown[])
+        : ((resp.result as any)?.items ?? (resp.result as any)?.storage ?? []);
+      this.onFactionStorageViewed(raw, this.poi, this.system ?? "");
+    }
   }
 
   /** Start running a routine. */

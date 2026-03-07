@@ -613,7 +613,7 @@ async function placeMarketOrders(
     const resp = await bot.exec("create_buy_order", {
       item_id: itemId,
       quantity: qty,
-      price: localSellPrice,
+      price_each: localSellPrice,
     });
 
     if (!resp.error) {

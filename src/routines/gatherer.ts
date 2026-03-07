@@ -1,27 +1,31 @@
 /**
- * Gatherer routine — acquires build materials for a facility goal and
- * deposits them at the target station.
+ * Gatherer routine — multi-goal courier that acquires build/craft materials
+ * for ANY bot's goals and delivers them to the correct target stations.
  *
- * Algorithm:
- *  1. Dock at current station, dump all cargo, refuel/repair.
- *  2. For each material: find cheapest market source (buy) or mine.
- *  3. Execute acquisition trips (multi-trip if cargo limit reached).
- *  4. After each full cargo load, return to target station and deposit.
- *  5. After all materials are gathered, final deposit + done.
+ * Algorithm (courier pattern):
+ *  1. Scan ALL bots' goals from settings (not just this bot's).
+ *  2. Resolve target stations: use stored target_system/target_poi or look up
+ *     the target_bot's current docked station via getFleetStatus().
+ *  3. Build a delivery plan: for each unclaimed material across all goals,
+ *     find the best buy source. Claim items to prevent duplicate work.
+ *  4. Cargo optimization: group items by buy source → fewer acquisition trips.
+ *     Pack cargo across multiple goals in one load.
+ *  5. Acquisition run: buy/mine items from best sources.
+ *  6. Multi-drop delivery: visit each target station and deposit the correct items.
+ *  7. Repeat until all claimed work is done, then release claims.
  *
- * Settings (data/settings.json → "gatherer" key):
- *   goal: GatherGoal — set from the UI when the user clicks "📦 Gather".
- *   refuelThreshold: number (default 30) — fuel % below which we refuel.
- *   repairThreshold: number (default 40) — hull % below which we repair.
+ * Settings (data/settings.json):
+ *   Per-bot: goals: GatherGoal[] — array of goals; or legacy goal: GatherGoal.
+ *   Global gatherer key: refuelThreshold, repairThreshold.
  */
 import type { Routine, RoutineContext } from "../bot.js";
 import type { MapStore } from "../mapstore.js";
+import { getMarketPricesStore } from "../data/market-prices-store.js";
 import {
   ensureDocked,
   ensureUndocked,
   tryRefuel,
   repairShip,
-  ensureFueled,
   navigateToSystem,
   collectFromStorage,
   recordMarketData,
@@ -34,7 +38,8 @@ import {
 } from "./common.js";
 import {
   broadcastMaterialNeed, clearMaterialNeed, clearAllMaterialNeeds,
-  claimGatherComponent, releaseGatherClaim, releaseAllGatherClaims, isGatherClaimedByOther,
+  claimGatherComponent, releaseGatherClaim, releaseAllGatherClaims,
+  getClaimedQuantityByOthers,
 } from "../swarmcoord.js";
 
 // ── Types ─────────────────────────────────────────────────────
@@ -54,6 +59,23 @@ interface GatherGoal {
   /** System ID of the target station. */
   target_system: string;
   materials: GatherMaterial[];
+  /**
+   * 'build' (default) — deposit to faction/personal storage at target station.
+   * 'craft' — deliver materials to crafter_bot's station so they can craft.
+   */
+  goal_type?: 'build' | 'craft';
+  /** Give materials as a gift to this character (send_gift) instead of depositing to storage. */
+  gift_target?: string;
+  /** For craft goals: bot username that will perform the crafting. */
+  crafter_bot?: string;
+  /** For craft goals: recipe ID to craft after delivery. */
+  recipe_id?: string;
+  /**
+   * Username of the bot that OWNS this goal. If omitted, `owner_bot` (from settings key)
+   * is used. When target_system/target_poi are empty the routine looks up this bot's
+   * current docked station via getFleetStatus().
+   */
+  target_bot?: string;
 }
 
 interface MarketSource {
@@ -64,32 +86,145 @@ interface MarketSource {
   stock: number;
 }
 
-// ── Settings ──────────────────────────────────────────────────
+/** A goal with a confirmed delivery destination. */
+interface ResolvedGoal extends GatherGoal {
+  target_system: string;
+  target_poi: string;
+  /** Bot whose settings contain this goal. */
+  owner_bot: string;
+}
 
-function getSettings(username?: string): {
-  refuelThreshold: number;
-  repairThreshold: number;
-  /** All goals for this bot. Supports legacy single-goal format (goal) and new array format (goals). */
-  goals: GatherGoal[];
-} {
+/**
+ * One atomic delivery task: acquire `quantity` units of `item_id` and deposit
+ * them to the goal's target station.
+ */
+interface DeliveryTask {
+  goalId: string;
+  owner_bot: string;
+  target_name: string;
+  target_poi: string;
+  target_system: string;
+  gift_target?: string;
+  item_id: string;
+  item_name: string;
+  /** How many units this courier is responsible for. */
+  quantity: number;
+  /**
+   * 'buy'    — market purchase.
+   * 'mine'   — mining run.
+   * 'search' — no known source yet; probe markets then mines at acquisition time.
+   */
+  source: 'buy' | 'mine' | 'search';
+  buySource?: MarketSource;
+  minePoi?: { system_id: string; poi_id: string; poi_name: string };
+  /** How many have been acquired so far this run. */
+  acquired: number;
+  /** True when the task was abandoned because no source could be found. */
+  skipped?: boolean;
+}
+
+// ── Settings ──────────────────────────────────────────────
+
+function getThresholds(): { refuelThreshold: number; repairThreshold: number } {
   const all = readSettings();
   const g = (all.gatherer || {}) as Record<string, unknown>;
-  const bot = username ? ((all[username] || {}) as Record<string, unknown>) : {};
-  // Support both legacy `goal` (single) and new `goals` (array)
-  const arr = (bot.goals as GatherGoal[] | undefined) || [];
-  const legacy = (bot.goal || g.goal || null) as GatherGoal | null;
-  const goals: GatherGoal[] = arr.length > 0 ? arr : (legacy ? [legacy] : []);
   return {
     refuelThreshold: (g.refuelThreshold as number) || 30,
     repairThreshold: (g.repairThreshold as number) || 40,
-    goals,
   };
+}
+
+/**
+ * Scan ALL bots' settings and return every active gather goal with its owner bot.
+ * Skips goals with no materials.
+ */
+function getAllGoalsAcrossFleet(): Array<{ goal: GatherGoal; owner_bot: string }> {
+  const allSettings = readSettings();
+  const result: Array<{ goal: GatherGoal; owner_bot: string }> = [];
+  for (const [username, botSettings] of Object.entries(allSettings)) {
+    if (username === 'gatherer' || typeof botSettings !== 'object' || !botSettings) continue;
+    const bs = botSettings as Record<string, unknown>;
+    const arr = (bs.goals as GatherGoal[] | undefined) || [];
+    const legacy = (bs.goal || null) as GatherGoal | null;
+    const goals: GatherGoal[] = arr.length > 0 ? arr : (legacy ? [legacy] : []);
+    for (const goal of goals) {
+      if (goal?.materials?.length) result.push({ goal, owner_bot: username });
+    }
+  }
+  return result;
+}
+
+/**
+ * Resolve a goal's delivery station. Priority:
+ *  1. Stored target_system + target_poi in the goal settings.
+ *  2. Target bot's current location if it's at a station POI.
+ *  3. Target bot's homePoI / homeSystem (permanent base).
+ *  4. Any station POI in the target bot's current system.
+ * Returns null only when none of the above can be determined.
+ */
+function resolveTargetStation(
+  goal: GatherGoal,
+  owner_bot: string,
+  ctx: RoutineContext,
+): { system: string; poi: string } | null {
+  // 1. Explicitly stored destination — always preferred
+  if (goal.target_system && goal.target_poi) {
+    return { system: goal.target_system, poi: goal.target_poi };
+  }
+
+  const fleet = ctx.getFleetStatus?.();
+  const targetBotName = goal.target_bot || (goal.crafter_bot ?? owner_bot);
+  const targetBot = fleet?.find(b => b.username === targetBotName);
+
+  /** Check if a poi_id is a station (has_base) using mapStore. */
+  const isStation = (sysId: string, poiId: string): boolean => {
+    const sys = ctx.mapStore.getSystem(sysId);
+    const poi = sys?.pois?.find((p: any) => p.id === poiId);
+    return !!poi?.has_base;
+  };
+
+  // 2. Bot's current location if it's at a station POI (doesn't need to be docked)
+  if (targetBot?.system && targetBot?.poi && isStation(targetBot.system, targetBot.poi)) {
+    return { system: targetBot.system, poi: targetBot.poi };
+  }
+
+  // 3. Bot's home POI (permanent base, even if bot is traveling)
+  if (targetBot?.homeSystem && targetBot?.homePoI) {
+    return { system: targetBot.homeSystem, poi: targetBot.homePoI };
+  }
+
+  // 4. If target bot is in a known system but at a non-station POI, find the nearest station
+  if (targetBot?.system) {
+    const sys = ctx.mapStore.getSystem(targetBot.system);
+    const stationPoi = sys?.pois?.find((p: any) => p.has_base);
+    if (stationPoi) return { system: targetBot.system, poi: stationPoi.id };
+  }
+
+  return null;
 }
 
 // ── Market helpers ────────────────────────────────────────────
 
-/** Find the cheapest market source (where we can BUY an item from NPCs). */
+/** Find the cheapest market source (where we can BUY an item from NPCs).
+ *  First queries the structured market_prices DB (all known stations),
+ *  then falls back to MapStore in-memory data. */
 function findCheapestBuySource(itemId: string, ms: MapStore): MarketSource | null {
+  // Primary: query market_prices SQLite (structured, fast, all known stations)
+  const mps = getMarketPricesStore();
+  if (mps) {
+    const cheapest = mps.findCheapestSource(itemId);
+    if (cheapest) {
+      return {
+        system_id: cheapest.system_id,
+        poi_id: cheapest.station_id,
+        poi_name: cheapest.station_name || cheapest.station_id,
+        price: cheapest.price,
+        stock: cheapest.quantity,
+      };
+    }
+  }
+
+  // Fallback: scan in-memory MapStore (covers stations not yet in DB)
   let best: MarketSource | null = null;
   for (const sysId of ms.getAllSystemIds()) {
     const sys = ms.getSystem(sysId);
@@ -163,11 +298,13 @@ function countInCargo(bot: RoutineContext["bot"], itemId: string): number {
   return entry ? (entry.quantity || 0) : 0;
 }
 
-/** Count how many of an item are in station storage right now. */
+/** Count how many of an item exist in personal + faction storage at the current station. */
 function countInStorage(bot: RoutineContext["bot"], itemId: string): number {
-  const entry = bot.storage.find((i: any) => (i.itemId || i.item_id) === itemId);
-  return entry ? (entry.quantity || 0) : 0;
+  const find = (arr: any[] | undefined) =>
+    (arr ?? []).find((i: any) => (i.itemId || i.item_id) === itemId)?.quantity ?? 0;
+  return find(bot.storage) + find(bot.factionStorage);
 }
+
 
 // ── Navigation helpers ────────────────────────────────────────
 
@@ -219,51 +356,6 @@ async function goToStation(
   return true;
 }
 
-// ── Target station deposit ────────────────────────────────────
-
-/**
- * Return to the target station and deposit all goal materials from cargo.
- * Also refuels and repairs while there. Returns true on success.
- */
-async function returnAndDeposit(
-  ctx: RoutineContext,
-  goal: GatherGoal,
-  goalItemIds: Set<string>,
-  fuelThreshold: number,
-  repairThreshold: number,
-): Promise<boolean> {
-  const { bot } = ctx;
-
-  ctx.log("trade", `Returning to ${goal.target_name} to deposit...`);
-
-  const ok = await goToStation(ctx, goal.target_system, goal.target_poi, goal.target_name, fuelThreshold, repairThreshold);
-  if (!ok) return false;
-
-  await tryRefuel(ctx);
-  await repairShip(ctx);
-  await recordMarketData(ctx);
-
-  // Deposit only goal materials (leave fuel cells etc.)
-  await bot.refreshCargo();
-  let deposited = 0;
-  for (const item of bot.inventory) {
-    const id = item.itemId || (item as any).item_id;
-    if (!goalItemIds.has(id)) continue;
-    if (item.quantity <= 0) continue;
-
-    const resp = await bot.exec("deposit_items", { item_id: id, quantity: item.quantity });
-    if (!resp.error) {
-      ctx.log("trade", `Deposited ${item.quantity}x ${item.name} → ${goal.target_name}`);
-      deposited += item.quantity;
-    } else {
-      ctx.log("error", `Deposit failed for ${item.name}: ${resp.error.message}`);
-    }
-  }
-
-  if (deposited > 0) await bot.refreshCargo();
-  return true;
-}
-
 // ── Buy at market ─────────────────────────────────────────────
 
 /**
@@ -277,8 +369,7 @@ async function buyItem(
   wantQty: number,
 ): Promise<number> {
   const { bot } = ctx;
-  await bot.refreshStatus();
-
+  // Status is already fresh from the outer navigation + refuel cycle — no redundant refreshStatus here.
   const canFit = maxItemsForCargo(getFreeWeight(bot), itemId);
   const toBuy = Math.min(wantQty, canFit);
   if (toBuy <= 0) return 0;
@@ -311,7 +402,11 @@ async function findLocalMinePOI(ctx: RoutineContext): Promise<{ id: string; name
   return mineable ? { id: mineable.id, name: mineable.name } : null;
 }
 
-/** Mine at current POI until `wantQty` is reached or cargo is full. Returns qty mined. */
+/**
+ * Mine at current POI until `wantQty` is reached or cargo is full.
+ * Returns qty mined of the requested item, or -1 if the POI yields a
+ * DIFFERENT resource (item cannot be mined here — e.g. craft-only items).
+ */
 async function mineItem(
   ctx: RoutineContext,
   itemId: string,
@@ -326,7 +421,7 @@ async function mineItem(
   ctx.log("mine", `Mining ${itemName} — need ${wantQty}`);
 
   while (bot.state === "running" && mined < wantQty) {
-    await bot.refreshStatus();
+    await bot.refreshCargo(); // lightweight: only cargo, no full status
     if (cargoFullPct(bot) >= 90) {
       ctx.log("mine", "Cargo full — stopping mine pass");
       break;
@@ -350,6 +445,15 @@ async function mineItem(
 
     failures = 0;
     const r = resp.result as Record<string, unknown> | null;
+
+    // Verify the mine returned the expected resource (craft-only items like heat_sink
+    // are not minable — the API returns whatever the POI yields instead).
+    const returnedId = r?.resource_id as string | undefined;
+    if (returnedId && returnedId !== itemId) {
+      ctx.log("mine", `POI yielded '${returnedId}' instead of '${itemId}' — ${itemName} cannot be mined here`);
+      return -1; // caller must handle: mark task skipped
+    }
+
     const qty = (r?.quantity as number) || (r?.amount as number) || 1;
     mined += qty;
 
@@ -361,138 +465,294 @@ async function mineItem(
   return mined;
 }
 
-// ── Main routine ──────────────────────────────────────────────
+// ── Multi-goal delivery logic ──────────────────────────────────
 
 /**
- * Execute a single GatherGoal: navigate, acquire all materials (respecting
- * component claims to avoid overlap with other gatherer bots), deposit at target.
- *
- * Returns true when goal is fully deposited, false if aborted.
+ * Scan ALL bots' goals, resolve target stations, and build a list of
+ * DeliveryTasks that this courier will handle (claims each item).
  */
-async function executeGoal(
+async function buildDeliveryPlan(
   ctx: RoutineContext,
-  goal: GatherGoal,
-  FUEL_THR: number,
-  HULL_THR: number,
-): Promise<boolean> {
+  _FUEL_THR: number,
+  _HULL_THR: number,
+): Promise<DeliveryTask[]> {
   const { bot } = ctx;
-  const goalItemIds = new Set<string>(goal.materials.map((m: GatherMaterial) => m.item_id));
+  const allGoals = getAllGoalsAcrossFleet();
 
-  ctx.log("system", `Goal: '${goal.target_name}' (${goal.target_id})`);
-  ctx.log("system", `Destination: ${goal.target_poi} in ${goal.target_system}`);
-  ctx.log("system", `Materials: ${goal.materials.map((m: GatherMaterial) => `${m.quantity_needed}x ${m.item_name}`).join(" | ")}`);
+  if (allGoals.length === 0) return [];
+  ctx.log("system", `Scanning ${allGoals.length} goal(s) across fleet...`);
 
-  // ── PHASE 2: Check target storage and build acquisition plan ────────
+  // Refresh storage once at the current station so we can subtract items
+  // already present in faction/personal storage at any goal whose target
+  // station happens to be this bot's current station.
+  await bot.refreshStorage();
+  const storageCheckedPois = new Set<string>([bot.poi]);
 
-  ctx.log("system", "Checking existing materials at target...");
+  const tasks: DeliveryTask[] = [];
 
-  const atTarget = await goToStation(ctx, goal.target_system, goal.target_poi, goal.target_name, FUEL_THR, HULL_THR);
-  if (!atTarget) {
-    ctx.log("error", "Cannot reach target station — aborting goal");
-    return false;
+  for (const { goal, owner_bot } of allGoals) {
+    // Skip goals where THIS bot is the crafter — crafter handles its own delivery
+    if (goal.crafter_bot === bot.username) continue;
+
+    const station = resolveTargetStation(goal, owner_bot, ctx);
+    if (!station) {
+      const targetBotName = goal.target_bot || goal.crafter_bot || owner_bot;
+      ctx.log("warn", `Goal '${goal.target_name}' (owner: ${owner_bot}): cannot resolve delivery station — skipping`);
+      ctx.log("warn", `  → Tried bot '${targetBotName}' — not in fleet status or no station POI found in their system`);
+      ctx.log("warn", `  → Fix: set target_system/target_poi on the goal, or ensure '${targetBotName}' is reachable via fleet status`);
+      continue;
+    }
+
+    for (const mat of goal.materials) {
+      // Subtract items already present:
+      // 1. Bot's own storage at current station (only valid if bot is there)
+      let alreadyPresent = 0;
+      if (storageCheckedPois.has(station.poi)) {
+        alreadyPresent = countInStorage(bot, mat.item_id);
+        if (alreadyPresent > 0) {
+          ctx.log("system", `  📦 ${alreadyPresent}x ${mat.item_name} already in storage at ${goal.target_name}`);
+        }
+      }
+      // 2. Faction storage DB cache for the target POI (any bot may have seen it previously)
+      const facDbItems = ctx.mapStore.getFactionStorageItemsForPoi(station.poi);
+      const facDbQty = facDbItems.find((i: any) => i.item_id === mat.item_id)?.quantity ?? 0;
+      if (facDbQty > 0 && facDbQty > alreadyPresent) {
+        ctx.log("system", `  🗄️  ${facDbQty}x ${mat.item_name} in faction storage DB at ${goal.target_name} — reducing demand`);
+        alreadyPresent = facDbQty;
+      }
+
+      // Subtract already-claimed quantity by other bots for this goal+item
+      const claimedByOthers = getClaimedQuantityByOthers(bot.username, mat.item_id, goal.id);
+      const toAcquire = Math.max(0, mat.quantity_needed - alreadyPresent - claimedByOthers);
+      if (toAcquire === 0) {
+        ctx.log("system", `⏭ ${mat.item_name} [${goal.target_name}]: fully claimed or already present in storage`);
+        continue;
+      }
+
+      const claimed = claimGatherComponent(bot.username, mat.item_id, goal.id, toAcquire);
+      if (claimed === 0) {
+        ctx.log("system", `⏭ ${mat.item_name} [${goal.target_name}]: just taken by another courier`);
+        continue;
+      }
+
+      const buySource = findCheapestBuySource(mat.item_id, ctx.mapStore) ?? undefined;
+      const minePoi = !buySource ? (findMineSource(mat.item_id, ctx.mapStore) ?? undefined) : undefined;
+
+      if (buySource) {
+        ctx.log("system", `  ✓ ${toAcquire}x ${mat.item_name} → buy @ ${buySource.poi_name} (${buySource.price} cr) → ${goal.target_name}`);
+      } else if (minePoi) {
+        ctx.log("system", `  ✓ ${toAcquire}x ${mat.item_name} → mine @ ${minePoi.poi_name} → ${goal.target_name}`);
+      } else {
+        ctx.log("warn", `  ? ${toAcquire}x ${mat.item_name} → no known source yet → ${goal.target_name}`);
+      }
+
+      tasks.push({
+        goalId: goal.id,
+        owner_bot,
+        target_name: goal.target_name,
+        target_poi: station.poi,
+        target_system: station.system,
+        gift_target: goal.gift_target,
+        item_id: mat.item_id,
+        item_name: mat.item_name,
+        quantity: toAcquire,
+        source: buySource ? 'buy' : (minePoi ? 'mine' : 'search'),
+        buySource,
+        minePoi,
+        acquired: 0,
+      });
+    }
   }
 
-  await bot.refreshStorage();
+  // Sort: group tasks by buy source → fewer market visits
+  tasks.sort((a, b) => {
+    const ka = a.buySource ? `${a.buySource.system_id}:${a.buySource.poi_id}` : 'zzz';
+    const kb = b.buySource ? `${b.buySource.system_id}:${b.buySource.poi_id}` : 'zzz';
+    return ka.localeCompare(kb);
+  });
+
+  return tasks;
+}
+
+/**
+ * Deposit all relevant cargo items to their target stations (multi-drop).
+ * Groups by target POI to minimise travel legs.
+ */
+async function depositAllToTargets(
+  ctx: RoutineContext,
+  tasks: DeliveryTask[],
+  FUEL_THR: number,
+  HULL_THR: number,
+): Promise<number> {
+  const { bot } = ctx;
+  await bot.refreshCargo();
+
+  // Group by destination
+  const byDest = new Map<string, DeliveryTask[]>();
+  for (const task of tasks) {
+    const key = `${task.target_system}:${task.target_poi}`;
+    if (!byDest.has(key)) byDest.set(key, []);
+    byDest.get(key)!.push(task);
+  }
+
+  let totalDeposited = 0;
+
+  for (const [, stationTasks] of byDest) {
+    const first = stationTasks[0];
+    const itemIds = new Set(stationTasks.map(t => t.item_id));
+    const hasCargo = bot.inventory.some((i: any) => itemIds.has(i.itemId || i.item_id) && (i.quantity || 0) > 0);
+    if (!hasCargo) continue;
+
+    ctx.log("trade", `Delivering to ${first.target_name}...`);
+    const ok = await goToStation(ctx, first.target_system, first.target_poi, first.target_name, FUEL_THR, HULL_THR);
+    if (!ok) { ctx.log("error", `Cannot reach ${first.target_name} — skipping`); continue; }
+
+    await tryRefuel(ctx);
+    await repairShip(ctx);
+    await recordMarketData(ctx);
+    await bot.refreshCargo();
+
+    for (const task of stationTasks) {
+      const inv = bot.inventory.find((i: any) => (i.itemId || i.item_id) === task.item_id);
+      if (!inv || (inv.quantity || 0) <= 0) continue;
+
+      if (task.gift_target) {
+        const r = await bot.exec("send_gift", { recipient: task.gift_target, item_id: task.item_id, quantity: inv.quantity });
+        if (!r.error) {
+          ctx.log("trade", `Gifted ${inv.quantity}x ${task.item_name} → ${task.gift_target}`);
+          totalDeposited += inv.quantity;
+          releaseGatherClaim(bot.username, task.item_id, task.goalId);
+        } else ctx.log("error", `Gift failed for ${task.item_name}: ${r.error.message}`);
+      } else {
+        const r = await bot.exec("deposit_items", { item_id: task.item_id, quantity: inv.quantity });
+        if (!r.error) {
+          ctx.log("trade", `Deposited ${inv.quantity}x ${task.item_name} → ${task.target_name}`);
+          totalDeposited += inv.quantity;
+          releaseGatherClaim(bot.username, task.item_id, task.goalId);
+          clearMaterialNeed(bot.username, task.item_id);
+        } else ctx.log("error", `Deposit failed for ${task.item_name}: ${r.error.message}`);
+      }
+    }
+    await bot.refreshCargo();
+  }
+
+  return totalDeposited;
+}
+
+export const gathererRoutine: Routine = async function* (ctx: RoutineContext) {
+  const { bot } = ctx;
+  ctx.log("system", "=== Gatherer (courier) started ===");
+
+  const { refuelThreshold: FUEL_THR, repairThreshold: HULL_THR } = getThresholds();
+
+  // ── PHASE 1: Initial dock and prepare ───────────────────────────────
+
+  ctx.log("system", "Phase 1: Docking and clearing cargo...");
+  const startDocked = await ensureDocked(ctx);
+  if (!startDocked) {
+    ctx.log("error", "Cannot dock at starting station — aborting");
+    return;
+  }
+  await dumpAllCargo(ctx);
   await tryRefuel(ctx);
   await repairShip(ctx);
   await recordMarketData(ctx);
 
-  interface AcqTask {
-    mat: GatherMaterial;
-    remaining: number;
-    source: "buy" | "mine" | "skip";
-    buySource?: MarketSource | undefined;
-    minePoi?: { system_id: string; poi_id: string; poi_name: string } | undefined;
-  }
+  // ── Outer pass loop — re-scans goals after every delivery pass ────────
 
-  const tasks: AcqTask[] = [];
+  let passCount = 0;
+  const MAX_PASSES = 20;
+  let noProgressPasses = 0;
 
-  for (const mat of goal.materials) {
-    const inStorage = countInStorage(bot, mat.item_id);
-    const remaining = Math.max(0, mat.quantity_needed - inStorage);
+  while (bot.state === "running" && passCount < MAX_PASSES) {
+    passCount++;
+    yield `scan_pass_${passCount}`;
 
-    if (remaining === 0) {
-      ctx.log("system", `✓ ${mat.item_name}: already have ${inStorage}/${mat.quantity_needed} in storage`);
-      tasks.push({ mat, remaining: 0, source: "skip" });
+    // ── PHASE 2: Build multi-goal delivery plan ────────────────────────
+
+    const tasks = await buildDeliveryPlan(ctx, FUEL_THR, HULL_THR);
+
+    if (tasks.length === 0) {
+      const allGoals = getAllGoalsAcrossFleet().filter(({ goal }) => goal.crafter_bot !== bot.username);
+      if (allGoals.length === 0) {
+        ctx.log("system", "No goals configured across fleet — stopping gatherer.");
+        break;
+      }
+      noProgressPasses++;
+      if (noProgressPasses >= 3) {
+        ctx.log("system", `No actionable tasks after ${noProgressPasses} pass(es) — stopping.`);
+        ctx.log("system", "  Ensure target bots are docked, or set target_system/target_poi on goals.");
+        break;
+      }
+      ctx.log("system", `No actionable tasks (pass ${noProgressPasses}/3) — waiting 2 min for target bots to dock...`);
+      await sleep(120_000);
       continue;
     }
+    noProgressPasses = 0;
 
-    // Non-overlap: skip materials claimed by another gatherer bot
-    if (isGatherClaimedByOther(bot.username, mat.item_id)) {
-      ctx.log("system", `⏭ ${mat.item_name}: claimed by another gatherer — skipping (they will deliver it)`);
-      tasks.push({ mat, remaining: 0, source: "skip" });
-      continue;
+    // Broadcast material needs
+    for (const task of tasks) {
+      broadcastMaterialNeed(bot.username, task.item_id, task.quantity, {
+        stationPoiId: task.target_poi,
+        stationSystem: task.target_system,
+        useGift: !!task.gift_target,
+      });
     }
 
-    ctx.log("system", `${mat.item_name}: need ${remaining} more (${inStorage} already stored)`);
+    const goalNames = [...new Set(tasks.map(t => t.target_name))];
+    ctx.log("system", `=== Delivery plan (pass ${passCount}): ${tasks.length} task(s) for ${goalNames.length} goal(s): ${goalNames.join(', ')} ===`);
 
-    const buySource = findCheapestBuySource(mat.item_id, ctx.mapStore);
-    if (buySource) {
-      ctx.log("system", `  → Buy @ ${buySource.poi_name}: ${buySource.price} cr/unit (stock: ${buySource.stock})`);
-      tasks.push({ mat, remaining, source: "buy", buySource });
-      continue;
-    }
+    // ── PHASE 3: Acquisition + delivery rounds ─────────────────────────
 
-    const mineSource = findMineSource(mat.item_id, ctx.mapStore);
-    if (mineSource) {
-      ctx.log("system", `  → Mine @ ${mineSource.poi_name} (${mineSource.system_id})`);
-      tasks.push({ mat, remaining, source: "mine", minePoi: mineSource });
-      continue;
-    }
+    yield "acquiring";
+    const MAX_ROUNDS = 40;
+    let round = 0;
 
-    ctx.log("warn", `  → No known source for ${mat.item_name} — will scan markets while traveling`);
-    tasks.push({ mat, remaining, source: "buy" });
-  }
+    while (bot.state === "running" && round < MAX_ROUNDS) {
+      round++;
 
-  // ── PHASE 3: Acquire each material ────────────────────────────────────
+      const pending = tasks.filter(t => !t.skipped && t.acquired < t.quantity);
+      if (pending.length === 0) break;
 
-  // Broadcast demand + claim all items we intend to acquire
-  for (const task of tasks) {
-    if (task.remaining <= 0 || task.source === "skip") continue;
-    // Claim this item — if another bot just grabbed it, fall back gracefully
-    const claimed = claimGatherComponent(bot.username, task.mat.item_id, goal.id);
-    if (!claimed) {
-      ctx.log("system", `⏭ ${task.mat.item_name}: claimed by another gatherer just now — skipping`);
-      task.remaining = 0;
-      task.source = "skip";
-      continue;
-    }
-    const hasFaction = ctx.mapStore.hasFactionStorage(goal.target_poi);
-    broadcastMaterialNeed(bot.username, task.mat.item_id, task.remaining, {
-      stationPoiId: goal.target_poi,
-      stationSystem: goal.target_system,
-      useGift: hasFaction === false,
-    });
-  }
+      ctx.log("system", `Round ${round}: ${pending.length} task(s) pending`);
 
-  for (const task of tasks) {
-    if (bot.state !== "running") break;
-    if (task.remaining <= 0 || task.source === "skip") continue;
+      await ensureUndocked(ctx);
+      const safe = await safetyCheck(ctx, { fuelThresholdPct: FUEL_THR, hullThresholdPct: HULL_THR });
+      if (!safe) {
+        ctx.log("error", "Safety check failed — aborting");
+        break;
+      }
 
-    ctx.log("system", `--- Acquiring ${task.remaining}x ${task.mat.item_name} (${task.source}) ---`);
+      const task = pending[0];
+      const stillNeed = task.quantity - task.acquired;
 
-    await ensureUndocked(ctx);
-    const safe = await safetyCheck(ctx, { fuelThresholdPct: FUEL_THR, hullThresholdPct: HULL_THR });
-    if (!safe) {
-      ctx.log("error", "Safety check failed — aborting");
-      releaseAllGatherClaims(bot.username);
-      return false;
-    }
+      // ── 'search': probe market first, then mine, then skip ────────────
+      if (task.source === 'search') {
+        const found = findCheapestBuySource(task.item_id, ctx.mapStore);
+        if (found) {
+          ctx.log("system", `Found market source for ${task.item_name}: ${found.poi_name} (${found.price} cr) — switching to buy`);
+          task.source = 'buy';
+          task.buySource = found;
+        } else {
+          const local = await findLocalMinePOI(ctx);
+          if (local) {
+            ctx.log("system", `Found mine for ${task.item_name}: ${local.name} — switching to mine`);
+            task.source = 'mine';
+            task.minePoi = { system_id: bot.system, poi_id: local.id, poi_name: local.name };
+          } else {
+            ctx.log("error", `No source for ${task.item_name} — skipping (will retry next pass)`);
+            task.skipped = true;
+          }
+        }
+        continue; // re-enter round loop with updated source
+      }
 
-    let acquired = 0;
-    let tripCount = 0;
-    const MAX_TRIPS = 20;
-
-    while (bot.state === "running" && acquired < task.remaining && tripCount < MAX_TRIPS) {
-      tripCount++;
-      ctx.log("system", `Trip ${tripCount}: ${acquired}/${task.remaining} ${task.mat.item_name} acquired so far`);
-
+      // ── 'buy' ──────────────────────────────────────────────────────────
       if (task.source === "buy") {
-        let src = task.buySource;
-        if (!src) src = findCheapestBuySource(task.mat.item_id, ctx.mapStore) ?? undefined;
+        let src = task.buySource ?? findCheapestBuySource(task.item_id, ctx.mapStore) ?? undefined;
 
         if (!src) {
-          ctx.log("warn", `No market source for ${task.mat.item_name} — checking nearby stations...`);
+          ctx.log("warn", `No market source for ${task.item_name} — scanning ${15} nearby systems...`);
           const sysIds = ctx.mapStore.getAllSystemIds().slice(0, 15);
           for (const sysId of sysIds) {
             if (bot.state !== "running") break;
@@ -504,166 +764,132 @@ async function executeGoal(
             if (!ok) continue;
             await bot.exec("travel", { target_poi: stationPoi.id });
             bot.poi = stationPoi.id;
-            await bot.exec("dock");
-            bot.docked = true;
+            await bot.exec("dock"); bot.docked = true;
             await collectFromStorage(ctx);
             await recordMarketData(ctx);
             await ensureUndocked(ctx);
-            src = findCheapestBuySource(task.mat.item_id, ctx.mapStore) ?? undefined;
-            if (src) { ctx.log("trade", `Found ${task.mat.item_name} at ${src.poi_name} (${src.price} cr)`); break; }
+            src = findCheapestBuySource(task.item_id, ctx.mapStore) ?? undefined;
+            if (src) { task.buySource = src; break; }
           }
         }
 
         if (!src) {
-          ctx.log("error", `Cannot find market source for ${task.mat.item_name} — skipping`);
-          break;
+          ctx.log("error", `Cannot find market source for ${task.item_name} — skipping task`);
+          task.skipped = true;
+          continue;
         }
 
         const atSrc = await goToStation(ctx, src.system_id, src.poi_id, src.poi_name, FUEL_THR, HULL_THR);
-        if (!atSrc) { ctx.log("error", `Cannot reach ${src.poi_name} — aborting this task`); break; }
+        if (!atSrc) { ctx.log("error", `Cannot reach ${src.poi_name}`); continue; }
 
         await tryRefuel(ctx);
         await recordMarketData(ctx);
         await ensureUndocked(ctx);
+        await bot.exec("dock"); bot.docked = true;
 
-        const wantThisTrip = task.remaining - acquired;
-        await bot.exec("dock");
-        bot.docked = true;
-
-        const bought = await buyItem(ctx, task.mat.item_id, task.mat.item_name, wantThisTrip);
-        if (bought <= 0) {
-          ctx.log("warn", `Could not buy ${task.mat.item_name} — market may be out`);
-          task.buySource = undefined;
-          await ensureUndocked(ctx);
-          break;
+        // Batch buy: pick up ALL pending buy tasks at this source in one dock
+        const sameSrc = tasks.filter(t =>
+          !t.skipped &&
+          t.acquired < t.quantity &&
+          t.source === 'buy' &&
+          t.buySource?.system_id === src!.system_id &&
+          t.buySource?.poi_id === src!.poi_id,
+        );
+        for (const buyTask of sameSrc) {
+          if (bot.state !== "running") break;
+          if (cargoFullPct(bot) >= 90) break;
+          const want = buyTask.quantity - buyTask.acquired;
+          const bought = await buyItem(ctx, buyTask.item_id, buyTask.item_name, want);
+          buyTask.acquired += bought;
+          if (bought > 0) {
+            ctx.log("trade", `Loaded ${bought}x ${buyTask.item_name} for '${buyTask.target_name}' (${buyTask.acquired}/${buyTask.quantity})`);
+          }
         }
-
-        acquired += bought;
-        ctx.log("trade", `Acquired ${acquired}/${task.remaining} ${task.mat.item_name}`);
-        if (acquired >= task.remaining) { clearMaterialNeed(bot.username, task.mat.item_id); }
         await ensureUndocked(ctx);
 
+      // ── 'mine' ─────────────────────────────────────────────────────────
       } else if (task.source === "mine") {
         let mineTarget = task.minePoi;
         if (!mineTarget) {
           const local = await findLocalMinePOI(ctx);
-          if (local) mineTarget = { system_id: bot.system, poi_id: local.id, poi_name: local.name };
-          else { ctx.log("warn", `No known mine location for ${task.mat.item_name}`); break; }
+          if (local) {
+            mineTarget = { system_id: bot.system, poi_id: local.id, poi_name: local.name };
+          } else {
+            ctx.log("error", `No mine location for ${task.item_name} — skipping task`);
+            task.skipped = true;
+            continue;
+          }
         }
-
         if (bot.system !== mineTarget.system_id) {
           await ensureUndocked(ctx);
           const arrived = await navigateToSystem(ctx, mineTarget.system_id, { fuelThresholdPct: FUEL_THR, hullThresholdPct: HULL_THR });
-          if (!arrived) { ctx.log("error", `Cannot reach mine system ${mineTarget.system_id}`); break; }
+          if (!arrived) { ctx.log("error", `Cannot reach mine system ${mineTarget.system_id}`); continue; }
         }
-
         await ensureUndocked(ctx);
         if (bot.poi !== mineTarget.poi_id) {
-          ctx.log("travel", `Traveling to ${mineTarget.poi_name}...`);
-          const tResp = await bot.exec("travel", { target_poi: mineTarget.poi_id });
-          if (tResp.error) { ctx.log("error", `Travel to mine failed: ${tResp.error.message}`); break; }
+          await bot.exec("travel", { target_poi: mineTarget.poi_id });
           bot.poi = mineTarget.poi_id;
         }
-
-        const wantThisTrip = task.remaining - acquired;
-        const mined = await mineItem(ctx, task.mat.item_id, task.mat.item_name, wantThisTrip);
-        if (mined === 0) {
-          ctx.log("warn", `No ${task.mat.item_name} mined — location depleted`);
+        const mined = await mineItem(ctx, task.item_id, task.item_name, stillNeed);
+        if (mined === -1) {
+          // POI yielded a different resource — this item cannot be mined (likely craft-only)
+          ctx.log("error", `${task.item_name} is not obtainable by mining — skipping task (check if it requires crafting)`);
+          task.skipped = true;
+        } else if (mined === 0) {
+          ctx.log("warn", `Mine depleted for ${task.item_name} — reverting to search`);
           task.minePoi = undefined;
-          break;
+          task.source = 'search'; // re-probe next round
+        } else {
+          task.acquired += mined;
         }
-
-        acquired += mined;
-        ctx.log("mine", `Acquired ${acquired}/${task.remaining} ${task.mat.item_name}`);
-        if (acquired >= task.remaining) { clearMaterialNeed(bot.username, task.mat.item_id); }
       }
 
+      // ── Delivery trigger: when cargo full or all tasks fulfilled ────────
       await bot.refreshStatus();
-      const doneSoFar = acquired >= task.remaining;
-      if (doneSoFar || cargoFullPct(bot) >= 80) {
-        const deposited = await returnAndDeposit(ctx, goal, goalItemIds, FUEL_THR, HULL_THR);
-        if (!deposited) { ctx.log("error", "Failed to deposit at target — aborting"); releaseAllGatherClaims(bot.username); return false; }
-        if (!doneSoFar) await ensureUndocked(ctx);
+      const allDone = tasks.every(t => t.skipped || t.acquired >= t.quantity);
+      const cargoFull = cargoFullPct(bot) >= 80;
+
+      if (allDone || cargoFull) {
+        yield "delivering";
+        const withCargo = tasks.filter(t => countInCargo(bot, t.item_id) > 0);
+        if (withCargo.length > 0) {
+          const deposited = await depositAllToTargets(ctx, withCargo, FUEL_THR, HULL_THR);
+          const stations = new Set(withCargo.map(t => t.target_poi)).size;
+          ctx.log("system", `Deposited ${deposited} units across ${stations} station(s)`);
+        }
+        if (allDone) break;
       }
     }
 
-    if (tripCount >= MAX_TRIPS) ctx.log("warn", `Reached max trips (${MAX_TRIPS}) for ${task.mat.item_name} — moving on`);
+    // ── PHASE 4: Final deposit (anything left in cargo) ──────────────────
 
-    // Release this specific item claim now that we're done with it
-    releaseGatherClaim(bot.username, task.mat.item_id);
+    await bot.refreshCargo();
+    const leftover = tasks.filter(t => countInCargo(bot, t.item_id) > 0);
+    if (leftover.length > 0) {
+      ctx.log("system", "Final deposit of remaining cargo...");
+      await depositAllToTargets(ctx, leftover, FUEL_THR, HULL_THR);
+    }
+
+    releaseAllGatherClaims(bot.username);
+    clearAllMaterialNeeds(bot.username);
+
+    const delivered = tasks.filter(t => !t.skipped && t.acquired >= t.quantity).length;
+    const partial = tasks.filter(t => !t.skipped && t.acquired > 0 && t.acquired < t.quantity).length;
+    const skippedCount = tasks.filter(t => t.skipped).length;
+    const parts: string[] = [`${delivered}/${tasks.length - skippedCount} delivered`];
+    if (partial > 0) parts.push(`${partial} partial`);
+    if (skippedCount > 0) parts.push(`${skippedCount} skipped (no source)`);
+    ctx.log("system", `=== Pass ${passCount} complete: ${parts.join(', ')} ===`);
+
+    // Re-dock and prepare for next pass
+    const docked = await ensureDocked(ctx);
+    if (docked) {
+      await dumpAllCargo(ctx);
+      await tryRefuel(ctx);
+      await repairShip(ctx);
+      await recordMarketData(ctx);
+    }
   }
 
-  // ── PHASE 4: Final deposit ─────────────────────────────────────────────
-
-  await bot.refreshCargo();
-  const hasMaterialsInCargo = bot.inventory.some((i: any) => goalItemIds.has(i.itemId || i.item_id));
-  if (hasMaterialsInCargo) {
-    await returnAndDeposit(ctx, goal, goalItemIds, FUEL_THR, HULL_THR);
-  } else {
-    const ok = await goToStation(ctx, goal.target_system, goal.target_poi, goal.target_name, FUEL_THR, HULL_THR);
-    if (ok) { await tryRefuel(ctx); await repairShip(ctx); }
-  }
-
-  await bot.refreshStorage();
-  const summary = goal.materials.map((m: GatherMaterial) => {
-    const have = countInStorage(bot, m.item_id);
-    return `${m.item_name}: ${have >= m.quantity_needed ? "✓" : `${have}/${m.quantity_needed}`}`;
-  }).join(" | ");
-  clearAllMaterialNeeds(bot.username);
-  ctx.log("system", `=== Goal complete: ${goal.target_name} === ${summary}`);
-  bot.emit("systemLog", `[Gatherer] ${bot.username} completed goal for ${goal.target_name}: ${summary}`);
-  return true;
-}
-
-export const gathererRoutine: Routine = async function* (ctx: RoutineContext) {
-  const { bot } = ctx;
-  ctx.log("system", "=== Gatherer started ===");
-
-  const settings = getSettings(bot.username);
-  const goals = settings.goals;
-
-  if (!goals.length) {
-    ctx.log("error", "No gather goals configured. Assign goals from the Commander → Goals tab.");
-    return;
-  }
-
-  const FUEL_THR = settings.refuelThreshold;
-  const HULL_THR = settings.repairThreshold;
-
-  ctx.log("system", `${goals.length} goal(s) queued.`);
-
-  // ── PHASE 1: Dock at current station, clear cargo, refuel/repair ──────
-
-  ctx.log("system", "Phase 1: Docking and clearing cargo...");
-
-  const startDocked = await ensureDocked(ctx);
-  if (!startDocked) {
-    ctx.log("error", "Cannot dock at starting station — aborting");
-    return;
-  }
-
-  await dumpAllCargo(ctx);
-  await tryRefuel(ctx);
-  await repairShip(ctx);
-  await recordMarketData(ctx);
-
-  // ── Process each goal sequentially ───────────────────────────────────
-
-  let completed = 0;
-  let failed = 0;
-
-  for (let i = 0; i < goals.length; i++) {
-    if (bot.state !== "running") break;
-    const goal = goals[i];
-    ctx.log("system", `--- Goal ${i + 1}/${goals.length}: ${goal.target_name} ---`);
-    yield `goal_${i}`;
-
-    const ok = await executeGoal(ctx, goal, FUEL_THR, HULL_THR);
-    if (ok) completed++;
-    else failed++;
-  }
-
-  releaseAllGatherClaims(bot.username);
-  clearAllMaterialNeeds(bot.username);
-  ctx.log("system", `=== Gatherer complete: ${completed}/${goals.length} goals done${failed > 0 ? `, ${failed} failed` : ""} ===`);
+  ctx.log("system", "=== Gatherer routine finished ===");
 };

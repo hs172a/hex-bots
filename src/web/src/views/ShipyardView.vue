@@ -6,27 +6,9 @@
         <h3 class="text-xs font-semibold text-space-text-dim uppercase tracking-wider">Shipyard</h3>
       </div>
       <div class="flex-1 overflow-auto p-2 scrollbar-dark">
-        <!-- Bot selector -->
-        <div 
-          v-for="bot in botStore.bots" 
-          :key="bot.username"
-          @click="selectBot(bot.username)"
-          class="w-full px-2 py-2 text-sm rounded-md cursor-pointer mb-0.5 border transition-colors"
-          :class="selectedBot === bot.username 
-            ? 'bg-[rgba(88,166,255,0.1)] border-space-accent text-space-accent' 
-            : 'border-transparent text-space-text hover:bg-space-row-hover'"
-        >
-          <div class="flex items-center gap-1.5 min-w-0">
-            <span v-if="(bot as any).empire" :title="empireName((bot as any).empire)" class="shrink-0 leading-none">{{ empireIcon((bot as any).empire) }}</span>
-            <span class="truncate">{{ bot.username }}</span>
-          </div>
-        </div>
-        <div v-if="botStore.bots.length === 0" class="text-xs text-space-text-dim italic p-2">
-          No bots available
-        </div>
-
+        <div v-if="!selectedBot" class="text-[11px] text-space-text-dim italic p-2 text-center">Select a character</div>
         <!-- Panel navigation -->
-        <div v-if="selectedBot" class="mt-3 pt-3 border-t border-[#21262d]">
+        <div v-if="selectedBot">
           <div 
             v-for="p in panels" :key="p.id"
             @click="activePanel = p.id"
@@ -42,7 +24,7 @@
     </div>
 
     <!-- Main Content -->
-    <div class="flex-1 bg-space-card border border-space-border rounded-lg overflow-auto p-4 scrollbar-dark">
+    <div class="flex-1 bg-space-card border border-space-border rounded-lg overflow-auto p-2 scrollbar-dark">
       <div v-if="!selectedBot" class="text-space-text-dim italic text-sm py-8 text-center">
         Select a bot to manage ships.
       </div>
@@ -385,8 +367,8 @@
           <div v-else class="text-xs text-space-text-dim italic py-4">No ships available at this station.</div>
           <button @click="loadShowroom" :disabled="showroomLoading" class="btn text-xs px-3 py-1">🔄 Refresh</button>
         </div>
-        <div v-else class="space-y-2">
-          <div v-for="s in showroom" :key="s.class_id" class="bg-space-bg border border-[#21262d] rounded-md text-xs overflow-hidden">
+        <div v-else class="grid grid-cols-3 gap-2">
+          <div v-for="s in showroom" :key="s.class_id" class="flex flex-col !mb-2 bg-space-bg border border-[#21262d] rounded-md text-xs overflow-hidden">
             <div class="relative h-24 bg-[#0d1117] overflow-hidden">
               <img :src="shipImageUrl(s.class_id)" :alt="s.name"
                 class="w-full h-full object-cover opacity-65"
@@ -526,12 +508,14 @@
               </div>
               <!-- Gather goal panel -->
               <div v-if="selectedShipCatalog.build_materials?.length" class="pt-2 border-t border-[#21262d]">
-                <div v-if="currentGatherGoal?.target_id === commissionShipClass"
+                <div v-if="currentGatherGoals.some(g => g.target_id === commissionShipClass)"
                   class="flex items-center justify-between bg-[#0d2233] border border-[#1a3a5a] rounded-md p-2 text-xs">
                   <span class="text-space-cyan">⚙️ Gathering materials for build...</span>
-                  <button @click="clearGatherGoal()" class="text-space-red hover:text-red-400 text-[11px]">✕ Cancel</button>
+                  <button @click="clearGatherGoal()" class="text-space-red hover:text-red-400 text-[11px]">✕ Cancel all</button>
                 </div>
-                <button v-else @click="gatherShipMaterials()" class="btn text-[11px] px-3 py-1 w-full">🔩 Gather Materials for Build</button>
+                <button @click="gatherShipMaterials()" class="btn text-[11px] px-3 py-1 w-full mt-1">
+                  {{ currentGatherGoals.some(g => g.target_id === commissionShipClass) ? '🔩 +Add goal' : '🔩 Gather Materials for Build' }}
+                </button>
               </div>
             </div>
 
@@ -650,7 +634,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, watch } from 'vue';
+import { ref, computed, watch, onMounted } from 'vue';
 import { useBotStore } from '../stores/botStore';
 import { empireIcon, empireName } from '../utils/empires';
 
@@ -887,6 +871,14 @@ const currentStationCatalog = computed(() => {
   ) || null;
 });
 
+// ── Auto-sync: pre-select bot from profile navigation
+onMounted(() => {
+  if (botStore.selectedBot && !selectedBot.value) selectBot(botStore.selectedBot);
+});
+watch(() => botStore.selectedBot, (username) => {
+  if (username && username !== selectedBot.value) selectBot(username);
+});
+
 // Bot selection
 function selectBot(username: string) {
   selectedBot.value = username;
@@ -1001,7 +993,7 @@ function sellShip(shipId: string) {
 }
 
 function shipImageUrl(classId: string): string {
-  return `https://www.spacemolt.com/_next/image?url=%2Fimages%2Fships%2Fcatalog%2F${encodeURIComponent(classId)}.webp&w=3840&q=75&dpl=dpl_3xKCE9uBFEai3pTovv3CN2veMfu9`;
+  return `/ships/${classId}.webp`;
 }
 
 function getCommissionQuote() {
@@ -1075,30 +1067,45 @@ function loadCommissionStatus() {
 
 // ── Gather Goal ───────────────────────────────────────────
 
-const currentGatherGoal = computed(() => (botStore.settings?.gatherer?.goal as any) || null);
+function getBotGoals(username: string): any[] {
+  const s = (botStore.settings as any)?.[username] || {};
+  if (s.goals?.length) return s.goals;
+  if (s.goal) return [s.goal];
+  return [];
+}
+
+const currentGatherGoals = computed(() =>
+  selectedBot.value ? getBotGoals(selectedBot.value) : []
+);
 
 function gatherShipMaterials() {
-  if (!selectedShipCatalog.value?.build_materials?.length) return;
+  if (!selectedShipCatalog.value?.build_materials?.length || !selectedBot.value) return;
   const bot = botStore.bots.find((b: any) => b.username === selectedBot.value) as any;
-  botStore.saveSettings('gatherer', {
-    goal: {
-      id: `ship_${commissionShipClass.value}_${Date.now()}`,
-      target_id: commissionShipClass.value,
-      target_name: selectedShipCatalog.value.name,
-      target_poi: bot?.poi || '',
-      target_system: bot?.system || bot?.location || '',
-      materials: selectedShipCatalog.value.build_materials.map((m: any) => ({
-        item_id: m.item_id,
-        item_name: m.item_name || m.name,
-        quantity_needed: m.quantity,
-      })),
-    },
-  });
-  setStatus('📦 Gather goal created!', true);
+  if (!bot?.poi || !bot?.system) {
+    setStatus('⚠ Bot must be docked at target station to create a Gather goal', false);
+    return;
+  }
+  const newGoal = {
+    id: `ship_${commissionShipClass.value}_${Date.now()}`,
+    target_id: commissionShipClass.value,
+    target_name: selectedShipCatalog.value.name,
+    goal_type: 'build',
+    target_poi: bot.poi,
+    target_system: bot.system,
+    materials: selectedShipCatalog.value.build_materials.map((m: any) => ({
+      item_id: m.item_id,
+      item_name: m.item_name || m.name,
+      quantity_needed: m.quantity,
+    })),
+  };
+  const existing = getBotGoals(selectedBot.value);
+  botStore.saveSettings(selectedBot.value, { goals: [...existing, newGoal], goal: null });
+  setStatus('📦 Gather goal added!', true);
 }
 
 function clearGatherGoal() {
-  botStore.saveSettings('gatherer', { goal: null });
+  if (!selectedBot.value) return;
+  botStore.saveSettings(selectedBot.value, { goals: [], goal: null });
   setStatus('Gather goal cleared', false);
 }
 

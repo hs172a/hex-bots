@@ -107,6 +107,26 @@ export const useBotStore = defineStore('bots', () => {
   // This VM's own pool name, returned by /api/stats/all-pools since v1.8.1
   const myPoolName = ref('');
 
+  // ── Faction storage DB (global across all stations) ──
+  const factionStorageItems = ref<Array<{ poi_id: string; system_id: string; system_name: string; poi_name: string; item_id: string; item_name: string; quantity: number; updated_at: string }>>([]); 
+  const factionBuildings = ref<Array<{ facility_id: string; faction_id: string; faction_name: string; poi_id: string; poi_name: string; system_id: string; system_name: string; facility_type: string; facility_name: string; faction_service: string; active: boolean; level: number; updated_at: string }>>([]); 
+  const factionStorageLoading = ref(false);
+
+  // ── Per-bot dock results (story, station_condition, unread_chat) ──
+  const stationDockInfo = ref<Record<string, any>>({});
+
+  async function fetchFactionStorage() {
+    if (factionStorageLoading.value) return;
+    factionStorageLoading.value = true;
+    try {
+      const [r1, r2] = await Promise.all([fetch('/api/faction-storage'), fetch('/api/faction-buildings')]);
+      if (r1.ok) factionStorageItems.value = await r1.json();
+      if (r2.ok) factionBuildings.value = await r2.json();
+    } catch { /* ignore */ } finally {
+      factionStorageLoading.value = false;
+    }
+  }
+
   async function fetchAllPoolsStats() {
     if (allPoolsLoading.value) return;
     allPoolsLoading.value = true;
@@ -389,6 +409,10 @@ export const useBotStore = defineStore('bots', () => {
 
   // ── Exec result handler (callback + bot data updates) ──
   function handleExecResult(msg: any) {
+    // Capture dock results so Station tab can show story/condition/unread_chat
+    if (msg.command === 'dock' && msg.ok && msg.bot && msg.data) {
+      stationDockInfo.value = { ...stationDockInfo.value, [msg.bot]: msg.data };
+    }
     // Match callback by _seq (like old UI's handleExecResult)
     if (msg._seq && execCallbacks[msg._seq]) {
       clearTimeout(execTimers[msg._seq]);
@@ -542,5 +566,12 @@ export const useBotStore = defineStore('bots', () => {
     catalogName,
     // Game stats (pushed from server every tick)
     gameStats,
+    // Faction storage DB
+    factionStorageItems,
+    factionBuildings,
+    factionStorageLoading,
+    fetchFactionStorage,
+    // Dock results (story, condition, unread_chat)
+    stationDockInfo,
   };
 });

@@ -126,13 +126,20 @@
     </header>
 
     <!-- Main content -->
-    <main class="flex-1 flex flex-col overflow-hidden">
-      <BotProfile 
-        v-if="showProfile" 
-        :bot="profileBot!" 
-        @close="closeProfile" 
-      />
-      <component v-else :is="currentTabComponent" @open-profile="openProfile" />
+    <main class="flex-1 flex overflow-hidden">
+      <!-- Character selector sidebar (all non-dashboard pages) -->
+      <CharacterSelectorPanel v-if="showCharSelector" />
+      <!-- Page content -->
+      <div class="flex-1 flex flex-col overflow-hidden">
+        <BotProfile 
+          v-if="showProfile" 
+          :bot="profileBot!" 
+          @close="closeProfile"
+          @start="startProfileBot"
+          @stop="stopProfileBot"
+        />
+        <component v-else :is="currentTabComponent" @open-profile="openProfile" />
+      </div>
     </main>
   </div>
 </template>
@@ -142,6 +149,7 @@ import { ref, computed, onMounted, onUnmounted, provide, reactive } from 'vue';
 import { useBotStore } from './stores/botStore';
 import Dashboard from './views/DashboardView.vue';
 import BotProfile from './components/BotProfile.vue';
+import CharacterSelectorPanel from './components/CharacterSelectorPanel.vue';
 import SettingsView from './views/SettingsView.vue';
 import MarketView from './views/MarketView.vue';
 import FactionView from './views/FactionView.vue';
@@ -163,8 +171,8 @@ const tabs = [
 const activeTab = ref('dashboard');
 const wsConnected = ref(false);
 const showProfile = ref(false);
-const profileBot = ref<any>(null);
 const botStore = useBotStore();
+const profileBot = computed(() => botStore.bots.find(b => b.username === botStore.selectedBot) ?? null);
 let reconnectDelay = 1000;
 
 // ── DataSync state ──
@@ -256,15 +264,29 @@ function switchTab(id: string) {
   activeTab.value = id;
 }
 
+const showCharSelector = computed(() => showProfile.value || activeTab.value !== 'dashboard');
+
 function openProfile(username: string) {
   botStore.selectedBot = username;
-  profileBot.value = botStore.bots.find(b => b.username === username);
   showProfile.value = true;
 }
 
 function closeProfile() {
   showProfile.value = false;
-  botStore.selectedBot = null;
+}
+
+function startProfileBot() {
+  const username = profileBot.value?.username;
+  if (!username) return;
+  const routine = (botStore.settings[username] as any)?.routine
+    || botStore.bots.find(b => b.username === username)?.routine || '';
+  if (routine) botStore.startBot(username, routine);
+}
+
+function stopProfileBot() {
+  const username = profileBot.value?.username;
+  if (!username) return;
+  botStore.stopBot(username);
 }
 
 // Provide openProfile to child components

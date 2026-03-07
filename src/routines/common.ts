@@ -8,6 +8,7 @@ import type { RoutineContext } from "../bot.js";
 import { catalogStore } from "../catalogstore.js";
 import type { MapStore } from "../mapstore.js";
 import { getAllMaterialDemands, clearMaterialNeed } from "../swarmcoord.js";
+import { getMarketPricesStore } from "../data/market-prices-store.js";
 
 // ── Types ────────────────────────────────────────────────────
 
@@ -372,7 +373,7 @@ export async function ensureUndocked(ctx: RoutineContext): Promise<void> {
 
 // ── Market data recording ────────────────────────────────────
 
-/** Record market prices at the current station to the galaxy map. */
+/** Record market prices at the current station to the galaxy map and market_prices DB. */
 export async function recordMarketData(ctx: RoutineContext): Promise<void> {
   const { bot } = ctx;
   if (!bot.docked || !bot.poi || !bot.system) return;
@@ -380,6 +381,37 @@ export async function recordMarketData(ctx: RoutineContext): Promise<void> {
   const marketResp = await bot.exec("view_market");
   if (marketResp.result && typeof marketResp.result === "object") {
     ctx.mapStore.updateMarket(bot.system, bot.poi, marketResp.result as Record<string, unknown>);
+
+    // Persist structured market data to SQLite for trade-route analysis
+    const mps = getMarketPricesStore();
+    if (mps) {
+      const raw = marketResp.result as Record<string, unknown>;
+      const items = (
+        Array.isArray(raw) ? raw :
+        Array.isArray(raw.items) ? raw.items :
+        Array.isArray(raw.market) ? raw.market :
+        []
+      ) as Array<Record<string, unknown>>;
+
+      const sys = ctx.mapStore.getSystem(bot.system);
+      const poi = sys?.pois?.find((p: any) => p.id === bot.poi);
+      const stationName = poi?.name || bot.poi;
+      const systemName  = sys?.name  || bot.system;
+
+      const normalized = items.map((i) => ({
+        item_id:       (i.item_id  as string) || (i.id as string) || "",
+        item_name:     (i.name as string) || (i.item_name as string) || "",
+        sell_price:    (i.sell_price as number) ?? (i.sell as number) ?? null,
+        sell_quantity: (i.sell_quantity as number) ?? (i.sell_volume as number) ?? 0,
+        buy_price:     (i.buy_price as number) ?? (i.buy as number) ?? null,
+        buy_quantity:  (i.buy_quantity as number) ?? (i.buy_volume as number) ?? 0,
+      })).filter(i => i.item_id);
+
+      if (normalized.length > 0) {
+        mps.updateStation(bot.poi, bot.system, stationName, systemName, normalized, bot.username);
+        bot.stats.totalMarketsScanned = (bot.stats.totalMarketsScanned ?? 0) + 1;
+      }
+    }
 
     // Submit trade intel to faction (fire-and-forget)
     if (bot.factionId) {
@@ -547,6 +579,10 @@ export async function transferStationToFaction(ctx: RoutineContext): Promise<num
     }
 
     await bot.refreshStatus();
+
+    // No faction storage at this station — items are back in personal storage.
+    // Breaking here avoids 20 pointless withdraw→deposit-back cycles.
+    if (noFacStorage) break;
   }
 
   if (totalTransferred > 0) {
@@ -1528,6 +1564,7 @@ export async function navigateToSystem(
       return false;
     }
 
+    bot.stats.totalJumps = (bot.stats.totalJumps ?? 0) + 1;
     await bot.refreshStatus();
 
     // Update map data for the new system
@@ -1669,6 +1706,8 @@ interface WreckItem {
 interface Wreck {
   wreck_id: string;
   name: string;
+  ship_class?: string;
+  salvage_value?: number;
   items: WreckItem[];
 }
 
@@ -1694,6 +1733,8 @@ function parseWrecks(result: unknown): Wreck[] {
     return {
       wreck_id: (w.wreck_id as string) || (w.id as string) || "",
       name: (w.name as string) || (w.type as string) || "wreck",
+      ship_class: w.ship_class as string | undefined,
+      salvage_value: w.salvage_value as number | undefined,
       items: rawItems.map(i => ({
         item_id: (i.item_id as string) || (i.id as string) || "",
         name: (i.name as string) || (i.item_id as string) || "",
@@ -1811,6 +1852,9 @@ export async function fullSalvageWrecks(
   const wrecksResp = await bot.exec("get_wrecks");
   const wrecks = parseWrecks(wrecksResp.result);
   if (wrecks.length === 0) return 0;
+
+  // Sort most valuable wrecks first (v0.185.1: salvage_value reflects full fitted ship value)
+  wrecks.sort((a, b) => (b.salvage_value ?? 0) - (a.salvage_value ?? 0));
 
   let totalExtracted = 0;
   const extractedItems: string[] = [];
@@ -1966,6 +2010,10 @@ export async function autoCloakIfDangerous(ctx: RoutineContext): Promise<boolean
   const { bot } = ctx;
   if (bot.isCloaked || bot.docked) return bot.isCloaked;
 
+  // Skip silently if no cloak module is installed
+  const hasCloak = bot.shipModules.some(m => (m.cloak_strength ?? 0) > 0);
+  if (!hasCloak) return false;
+
   const sys = ctx.mapStore.getSystem(bot.system);
   if (!sys || !isDangerousSystem(sys.security_level)) return false;
 
@@ -2044,6 +2092,7 @@ export async function detectAndRecoverFromDeath(ctx: RoutineContext): Promise<bo
   if (bot.hull > 0 && !bot.isDead) return true; // alive
 
   ctx.log("system", "DEATH DETECTED — hull at 0. Attempting insurance claim...");
+  bot.stats.totalDeaths = (bot.stats.totalDeaths ?? 0) + 1;
 
   // Claim insurance
   const claimResp = await bot.exec("claim_insurance");
@@ -2194,6 +2243,7 @@ export async function factionDonateProfit(ctx: RoutineContext, profit: number): 
   if (!resp.error) {
     ctx.log("trade", `Donated ${donation}cr to faction treasury (${pct}% of ${profit}cr profit)`);
     logFactionActivity(ctx, "donation", `Deposited ${donation}cr (${pct}% of ${profit}cr profit)`);
+    bot.stats.totalDonated = (bot.stats.totalDonated ?? 0) + donation;
   }
 }
 

@@ -159,26 +159,35 @@
       </div>
       <div class="p-3">
         <div v-if="!gathererGoals.length" class="text-xs text-space-text-dim italic">
-          No gather goals active. Set from Station → Build tab.
+          No gather goals active. Set from Station → Build tab, Faction → Buildings, or Shipyard → Commission.
         </div>
-        <div v-else class="space-y-3 grid grid-cols-4 gap-2.5 mb-2">
+        <div v-else class="grid grid-cols-4 gap-2.5 mb-2">
           <div v-for="entry in gathererGoals" :key="entry.username + ':' + entry.goal.id"
-            class="flex flex-col p-3 rounded-md border border-space-border bg-space-bg">
+            class="flex flex-col p-3 rounded-md border bg-space-bg"
+            :class="(!entry.goal.target_system || !entry.goal.target_poi) && !entry.goal.target_bot ? 'border-space-red/40' : 'border-space-border'">
             <!-- Header row -->
             <div class="flex items-center justify-between mb-1.5">
-              <div class="flex items-center gap-2 min-w-0">
+              <div class="flex items-center gap-1.5 min-w-0 flex-wrap">
                 <span class="text-[11px] px-1.5 py-0.5 rounded bg-[#21262d] text-space-accent font-mono shrink-0">{{ entry.username }}</span>
                 <span class="text-sm text-space-text-bright font-medium truncate">{{ entry.goal.target_name }}</span>
+                <span v-if="entry.goal.goal_type === 'crafter'" class="text-[10px] px-1 py-0.5 rounded bg-purple-500/20 text-purple-300 shrink-0">crafter</span>
+                <span v-else-if="entry.goal.goal_type === 'craft'" class="text-[10px] px-1 py-0.5 rounded bg-space-yellow/20 text-space-yellow shrink-0">craft</span>
+                <span v-else class="text-[10px] px-1 py-0.5 rounded bg-space-accent/10 text-space-text-dim shrink-0">build</span>
                 <span v-if="entry.state === 'running' && entry.routine === 'gatherer'" class="text-[10px] px-1.5 py-0.5 rounded bg-space-green/20 text-space-green shrink-0">running</span>
-                <span v-else-if="entry.state === 'idle'" class="text-[10px] px-1.5 py-0.5 rounded bg-space-yellow/20 text-space-yellow shrink-0">idle</span>
               </div>
               <div class="flex items-center gap-2 shrink-0">
                 <span class="text-xs font-bold" :class="entry.overallPct >= 100 ? 'text-space-green' : 'text-space-text-dim'">{{ entry.overallPct }}%</span>
                 <button @click="clearGathererGoal(entry.username, entry.goal.id)" class="btn btn-secondary text-xs px-2 py-0.5">✕</button>
               </div>
             </div>
-            <!-- Location -->
-            <div class="text-[11px] text-space-text-dim mb-2">{{ entry.goal.target_system || '—' }} · {{ entry.goal.target_poi || '—' }}</div>
+            <!-- Location / extra info -->
+            <div class="text-[11px] text-space-text-dim mb-1">
+              <span v-if="entry.goal.target_system && entry.goal.target_poi">{{ entry.goal.target_system }} · {{ entry.goal.target_poi }}</span>
+              <span v-else-if="entry.goal.target_bot" class="text-space-text-dim italic">📍 station resolved dynamically from {{ entry.goal.target_bot }}</span>
+              <span v-else class="text-space-red">⚠ target station not set — goal will fail</span>
+            </div>
+            <div v-if="entry.goal.gift_target" class="text-[11px] text-space-yellow mb-1">🎁 gift → {{ entry.goal.gift_target }}</div>
+            <div v-if="entry.goal.crafter_bot" class="text-[11px] text-space-cyan mb-1">🔧 crafter: {{ entry.goal.crafter_bot }}</div>
             <!-- Overall progress bar -->
             <div class="h-1.5 bg-space-border rounded-full mb-2.5">
               <div class="h-full rounded-full transition-all duration-500"
@@ -226,14 +235,53 @@
             <label class="text-[10px] text-space-text-dim">Quantity</label>
             <input v-model.number="craftPlan.quantity" type="number" min="1" class="input w-full mt-0.5 text-xs">
           </div>
-          <div class="flex-1 min-w-32">
-            <label class="text-[10px] text-space-text-dim">Check stock for bot</label>
+          <!-- For 'crafter' type the primary selection is Crafter bot; for build/craft it's Gatherer bot -->
+          <div v-if="craftPlan.goalType === 'crafter'" class="flex-1 min-w-32">
+            <label class="text-[10px] text-purple-300">Crafter bot</label>
+            <select v-model="craftPlan.crafterBot" class="input w-full mt-0.5 text-xs">
+              <option value="">— select crafter —</option>
+              <option v-for="b in botStore.bots" :key="b.username" :value="b.username">{{ b.username }}</option>
+            </select>
+          </div>
+          <div v-else class="flex-1 min-w-32">
+            <label class="text-[10px] text-space-text-dim">Gatherer bot</label>
             <select v-model="craftPlan.botName" class="input w-full mt-0.5 text-xs">
-              <option value="">— no bot (ignore stock) —</option>
+              <option value="">— select gatherer —</option>
               <option v-for="b in botStore.bots" :key="b.username" :value="b.username">{{ b.username }}</option>
             </select>
           </div>
           <button @click="analyzeCraftPlan" :disabled="!craftPlan.itemId" class="btn btn-primary px-3 py-1.5 text-xs self-end">Analyze</button>
+        </div>
+        <!-- Goal options row -->
+        <div class="flex gap-2 items-end mb-2 flex-wrap">
+          <div>
+            <label class="text-[10px] text-space-text-dim">Goal type</label>
+            <select v-model="craftPlan.goalType" class="input mt-0.5 text-xs">
+              <option value="build">build — gather → deposit to storage</option>
+              <option value="craft">craft — gather → deliver to crafter bot</option>
+              <option value="crafter">crafter — crafter crafts, gatherer delivers materials</option>
+            </select>
+          </div>
+          <!-- craft type: need separate crafter bot field -->
+          <div v-if="craftPlan.goalType === 'craft'" class="flex-1 min-w-32">
+            <label class="text-[10px] text-space-yellow">Crafter bot (materials delivered here)</label>
+            <select v-model="craftPlan.crafterBot" class="input w-full mt-0.5 text-xs">
+              <option value="">— select crafter —</option>
+              <option v-for="b in botStore.bots" :key="b.username" :value="b.username">{{ b.username }}</option>
+            </select>
+          </div>
+          <!-- crafter type: gatherer is optional (any gatherer will pick up) -->
+          <div v-if="craftPlan.goalType === 'crafter'" class="flex-1 min-w-32">
+            <label class="text-[10px] text-space-text-dim">Gatherer bot (optional — blank = any)</label>
+            <select v-model="craftPlan.botName" class="input w-full mt-0.5 text-xs">
+              <option value="">— any available gatherer —</option>
+              <option v-for="b in botStore.bots" :key="b.username" :value="b.username">{{ b.username }}</option>
+            </select>
+          </div>
+          <div class="flex-1 min-w-32">
+            <label class="text-[10px] text-space-text-dim">Gift target (optional)</label>
+            <input v-model="craftPlan.giftTarget" placeholder="username or leave blank" class="input w-full mt-0.5 text-xs">
+          </div>
         </div>
 
         <!-- Result -->
@@ -243,10 +291,10 @@
             <span v-if="craftPlanNeeds.length === 0" class="text-xs text-green-400">✓ All materials already available — ready to craft!</span>
             <span v-else class="text-xs text-space-text">{{ craftPlanNeeds.length }} material type(s) need gathering</span>
             <button
-              v-if="craftPlanNeeds.length > 0 && craftPlan.botName"
+              v-if="craftPlanNeeds.length > 0 && (craftPlan.goalType === 'crafter' ? craftPlan.crafterBot : craftPlan.botName)"
               @click="createCraftGatherGoal"
               class="btn btn-primary px-2 py-0.5 text-xs"
-            >📦 Create Gather Goal for {{ craftPlan.botName }}</button>
+            >📦 {{ craftPlan.goalType === 'crafter' ? `Create Crafter Goal → ${craftPlan.crafterBot}` : craftPlan.goalType === 'craft' ? `Create Craft Goal → ${craftPlan.botName}` : `Create Gather Goal → ${craftPlan.botName}` }}</button>
           </div>
 
           <!-- Gather needs summary -->
@@ -509,6 +557,11 @@ watch(agentBot, () => {
   agentInstruction.value = (s as any)?.bots?.[agentBot.value]?.instruction || (s as any)?.instruction || ''
 })
 
+// Auto-sync agentBot when a bot profile is opened from another page
+watch(() => botStore.selectedBot, (username) => {
+  if (username && username !== agentBot.value) agentBot.value = username
+})
+
 
 async function loadTodo() {
   todoLoading.value = true
@@ -638,7 +691,7 @@ async function refreshAll() {
 
 // ── Craft Planner ────────────────────────────────────────────
 
-const craftPlan = reactive({ itemId: '', quantity: 1, botName: '' })
+const craftPlan = reactive({ itemId: '', quantity: 1, botName: '', goalType: 'build' as 'build' | 'craft' | 'crafter', crafterBot: '', giftTarget: '' })
 const craftPlanResult = ref<RecipeNode | null>(null)
 const craftPlanNeeds = ref<GatherNeed[]>([])
 
@@ -657,35 +710,62 @@ function analyzeCraftPlan() {
   const recipeIndex = buildRecipeIndex((catalog.recipes || {}) as Record<string, Record<string, unknown>>)
   const rawItems = (catalog.items || {}) as Record<string, { name?: string }>
   const itemNames = new Map(Object.entries(rawItems).map(([id, item]) => [id, item.name || id]))
-  const bot = botStore.bots.find(b => b.username === craftPlan.botName)
+  // For crafter type check the crafter's materials; otherwise the gatherer's materials
+  const checkerName = craftPlan.goalType === 'crafter' ? craftPlan.crafterBot : craftPlan.botName
+  const bot = botStore.bots.find(b => b.username === checkerName)
   const available = bot ? buildAvailabilityMap(bot as any) : new Map<string, number>()
   craftPlanResult.value = buildNode(craftPlan.itemId, craftPlan.quantity, itemNames, recipeIndex, available)
   craftPlanNeeds.value = extractGatherNeeds(craftPlanResult.value)
 }
 
 function createCraftGatherGoal() {
-  if (!craftPlanNeeds.value.length || !craftPlan.botName) return
-  const bot = botStore.bots.find(b => b.username === craftPlan.botName)
-  if (!bot) return
+  if (!craftPlanNeeds.value.length) return
+  const isCrafterType = craftPlan.goalType === 'crafter'
+  // crafter type: goal saved to crafter's settings; craft/build: saved to gatherer's settings
+  const goalOwnerBot = isCrafterType ? craftPlan.crafterBot : craftPlan.botName
+  if (!goalOwnerBot) return
+  // Materials delivered to crafter's station for 'craft'/'crafter'; gatherer's station for 'build'
+  const targetBotName = craftPlan.goalType !== 'build' && craftPlan.crafterBot
+    ? craftPlan.crafterBot
+    : craftPlan.botName
+  const targetBot = botStore.bots.find(b => b.username === targetBotName) as any
   const rawItems = (botStore.catalog?.items || {}) as Record<string, { name?: string }>
   const targetName = rawItems[craftPlan.itemId]?.name || craftPlan.itemId
-  const newGoal = {
-    id: `craft_${craftPlan.itemId}_${Date.now()}`,
+  // Resolve station: prefer a station POI in current system, fallback homePoI/homeSystem
+  const mapSys = targetBot?.system ? (botStore.mapData[targetBot.system] as any) : null
+  const isStationPoi = (poiId: string) => !!(mapSys?.pois?.find((p: any) => p.id === poiId)?.has_base)
+  const resolvedPoi = (targetBot?.poi && isStationPoi(targetBot.poi))
+    ? targetBot.poi
+    : (targetBot?.homePoI || '')
+  const resolvedSystem = resolvedPoi
+    ? (targetBot?.system || targetBot?.homeSystem || '')
+    : (targetBot?.homeSystem || '')
+  const newGoal: any = {
+    id: `${craftPlan.goalType}_${craftPlan.itemId}_${Date.now()}`,
     target_id: craftPlan.itemId,
     target_name: targetName,
-    target_poi: (bot as any).poi || '',
-    target_system: (bot as any).system || '',
+    goal_type: craftPlan.goalType,
+    target_bot: targetBotName,
+    target_poi: resolvedPoi,
+    target_system: resolvedSystem,
     materials: craftPlanNeeds.value.map(n => ({
       item_id: n.item_id,
       item_name: n.item_name,
       quantity_needed: n.quantity_needed,
     })),
   }
-  const botSettings = (botStore.settings as any)?.[craftPlan.botName] || {}
+  if (craftPlan.goalType !== 'build' && craftPlan.crafterBot) newGoal.crafter_bot = craftPlan.crafterBot
+  if (craftPlan.giftTarget.trim()) newGoal.gift_target = craftPlan.giftTarget.trim()
+  // Warn only when both poi+system are empty AND no target_bot for dynamic resolution
+  if (!newGoal.target_poi && !newGoal.target_system) {
+    const ok = confirm(`⚠ Could not resolve station for '${targetBotName}' (not docked and no homePoI set).\nStation will be resolved dynamically at delivery time.\n\nCreate goal anyway?`)
+    if (!ok) return
+  }
+  const botSettings = (botStore.settings as any)?.[goalOwnerBot] || {}
   const existing: any[] = botSettings.goals?.length
     ? botSettings.goals
     : (botSettings.goal ? [botSettings.goal] : [])
-  botStore.saveSettings(craftPlan.botName, { goals: [...existing, newGoal], goal: null })
+  botStore.saveSettings(goalOwnerBot, { goals: [...existing, newGoal], goal: null })
 }
 
 function flattenTree(node: RecipeNode, depth = 0): Array<{ node: RecipeNode; depth: number }> {

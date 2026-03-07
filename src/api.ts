@@ -268,6 +268,7 @@ export class SpaceMoltAPI {
   /** Mutex: prevents concurrent ensureSession() calls from each creating a session. */
   private _sessionLock: Promise<void> | null = null;
   private _v2SessionLock: Promise<void> | null = null;
+  private _onSessionSaved: ((session: ApiSession) => void) | null = null;
   /** Per-session action throttler (30 actions/min server limit). */
   private _throttler = new RequestThrottler();
   /** Random jitter (0–300 s) so bots don't all renew sessions at the same second. */
@@ -283,6 +284,16 @@ export class SpaceMoltAPI {
 
   getSession(): ApiSession | null {
     return this.session;
+  }
+
+  /** Inject a previously saved session directly (skips /session POST). */
+  setSession(session: ApiSession): void {
+    this.session = session;
+  }
+
+  /** Register a callback that fires whenever a new session is created or renewed. */
+  setSessionSavedCallback(fn: (session: ApiSession) => void): void {
+    this._onSessionSaved = fn;
   }
 
   /** Clear both sessions — next execute() will create fresh ones and re-authenticate. */
@@ -487,6 +498,8 @@ export class SpaceMoltAPI {
             logApiSession(this.label, "SESSION_KEPT", `kept id=${this.session.id.slice(0, 8)}... (login did not return new session)`);
           }
         }
+        // Persist session so the next restart can resume without re-login
+        if (this.session) this._onSessionSaved?.(this.session);
         return;
       } catch (err) {
         lastError = err instanceof Error ? err : new Error(String(err));

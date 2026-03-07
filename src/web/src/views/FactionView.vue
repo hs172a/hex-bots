@@ -6,34 +6,9 @@
         <h3 class="text-xs font-semibold text-space-text-dim uppercase tracking-wider">Faction</h3>
       </div>
       <div class="flex-1 overflow-auto p-2 scrollbar-dark">
-        <!-- Bot selector -->
-        <div 
-          v-for="bot in botStore.bots" :key="bot.username"
-          @click="selectBot(bot.username)"
-          class="w-full px-2 py-2 text-sm rounded-md cursor-pointer mb-0.5 border transition-colors"
-          :class="selectedBot === bot.username 
-            ? 'bg-[rgba(88,166,255,0.1)] border-space-accent text-space-accent' 
-            : 'border-transparent text-space-text hover:bg-space-row-hover'"
-        >
-          <div class="flex items-center gap-1.5 min-w-0">
-            <span v-if="(bot as any).empire" :title="empireName((bot as any).empire)" class="shrink-0 leading-none">{{ empireIcon((bot as any).empire) }}</span>
-            <span class="truncate">{{ bot.username }}</span>
-          </div>
-        </div>
-        <div v-if="botStore.bots.length === 0" class="text-xs text-space-text-dim italic p-2">No bots available</div>
-
-        <!-- Section nav (only when in own faction) -->
-        <div v-if="selectedBot && factionData && isMember" class="mt-3 pt-3 border-t border-[#21262d]">
-          <div v-for="sec in sections" :key="sec.id" @click="switchSection(sec.id)"
-            class="w-full px-2 py-2 text-sm rounded-md cursor-pointer mb-0.5 border transition-colors"
-            :class="activeSection === sec.id 
-              ? 'bg-[rgba(88,166,255,0.1)] border-space-accent text-space-accent' 
-              : 'border-transparent text-space-text-dim hover:bg-space-row-hover hover:text-space-text'"
-          >{{ sec.label }}</div>
-        </div>
-
+        <div v-if="!selectedBot" class="text-[11px] text-space-text-dim italic p-2 text-center">Select a character</div>
         <!-- Quick actions -->
-        <div v-if="selectedBot" class="mt-3 pt-3 border-t border-[#21262d] space-y-1">
+        <div v-if="selectedBot" class="space-y-1">
           <button @click="refreshData" :disabled="loading" class="w-full text-left px-2 py-1.5 text-xs rounded-md text-space-text-dim hover:bg-space-row-hover hover:text-space-text transition-colors disabled:opacity-50">Refresh</button>
           <button v-if="!factionData" @click="showCreateModal = true" class="w-full text-left px-2 py-1.5 text-xs rounded-md text-space-green hover:bg-space-row-hover transition-colors">Create Faction</button>
           <button v-if="!factionData" @click="checkInvites" :disabled="loading" class="w-full text-left px-2 py-1.5 text-xs rounded-md text-space-cyan hover:bg-space-row-hover transition-colors disabled:opacity-50">Check Invites</button>
@@ -155,6 +130,16 @@
               {{ treasuryLoading ? '⏳' : '↓ Withdraw' }}
             </button>
           </div>
+        </div>
+
+        <!-- Horizontal section tabs -->
+        <div class="flex gap-1 flex-wrap border-b border-[#21262d] mb-4 -mx-2 px-2 pb-0">
+          <button v-for="sec in sections" :key="sec.id" @click="switchSection(sec.id)"
+            class="px-3 py-1.5 text-xs font-medium rounded-t border-b-2 transition-colors whitespace-nowrap"
+            :class="activeSection === sec.id
+              ? 'border-space-accent text-space-accent bg-[rgba(88,166,255,0.08)]'
+              : 'border-transparent text-space-text-dim hover:text-space-text hover:border-[#30363d]'"
+          >{{ sec.label }}</button>
         </div>
 
         <!-- Tab: Members -->
@@ -388,6 +373,52 @@
           </div>
         </div>
 
+        <!-- Tab: All Faction Storages (global DB view) -->
+        <div v-if="activeSection === 'allstorages'">
+          <div class="flex items-center justify-between mb-3">
+            <h3 class="text-sm font-semibold text-space-text-bright">All Faction Storages <span class="text-space-text-dim font-normal text-xs">({{ filteredAllStorageItems.length }} items)</span></h3>
+            <button @click="fetchAllStorages" :disabled="botStore.factionStorageLoading" class="btn text-xs px-3 py-1">{{ botStore.factionStorageLoading ? '⏳' : '🔄 Refresh' }}</button>
+          </div>
+
+          <!-- Filters -->
+          <div class="flex flex-wrap gap-2 mb-3">
+            <input v-model="allStorageNameFilter" type="text" placeholder="Filter by name..." class="input text-xs py-0.5 px-2 flex-1 min-w-[120px]" />
+            <select v-model="allStorageTypeFilter" class="input text-xs py-0.5 px-2">
+              <option value="">All types</option>
+              <option value="ore">Ores</option>
+              <option value="refined">Refined</option>
+              <option value="component">Components</option>
+              <option value="module">Modules</option>
+              <option value="other">Other</option>
+            </select>
+            <select v-model="allStorageSystemFilter" class="input text-xs py-0.5 px-2 flex-1 min-w-[120px]">
+              <option value="">All systems</option>
+              <option v-for="sys in allStorageSystems" :key="sys" :value="sys">{{ sys }}</option>
+            </select>
+          </div>
+
+          <div v-if="botStore.factionStorageItems.length === 0" class="text-xs text-space-text-dim italic py-4 text-center">No data yet — bots must view faction storage first.</div>
+          <div v-else-if="filteredAllStorageItems.length === 0" class="text-xs text-space-text-dim italic py-4 text-center">No items match current filters.</div>
+          <div v-else>
+            <!-- Grouped by system + poi -->
+            <div v-for="(group, key) in allStorageGrouped" :key="key" class="mb-4">
+              <div class="flex items-center gap-2 mb-1.5">
+                <span class="text-[11px] font-semibold text-space-accent">📍 {{ group.system_name }}</span>
+                <span class="text-[11px] text-space-text-dim">/</span>
+                <span class="text-[11px] text-space-text-dim">{{ group.poi_name }}</span>
+                <span class="text-[11px] text-space-text-dim/60 ml-auto">{{ timeAgoShort(group.updated_at) }}</span>
+              </div>
+              <div class="grid grid-cols-2 gap-1">
+                <div v-for="item in group.items" :key="item.item_id"
+                  class="flex items-center justify-between py-1 px-2 rounded bg-space-bg hover:bg-space-row-hover transition-colors">
+                  <span class="text-xs text-space-text truncate">{{ item.item_name || item.item_id }}</span>
+                  <span class="text-xs font-mono ml-2 shrink-0" :class="itemTypeColor(item.item_id)">{{ fmt(item.quantity) }}</span>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+
         <!-- Tab: Activity -->
         <div v-if="activeSection === 'activity'">
           <h3 class="text-sm font-semibold text-space-text-bright mb-3">Faction Activity</h3>
@@ -614,7 +645,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed } from 'vue';
+import { ref, computed, watch, onMounted } from 'vue';
 import { useBotStore } from '../stores/botStore';
 import { empireIcon, empireName } from '../utils/empires';
 
@@ -641,10 +672,16 @@ const factionActionLoading = ref<string | null>(null);
 const factionBuildErrors = ref<Record<string, string>>({});
 const factionUpgradeMap = ref<Record<string, any[]>>({}); // facility_id → upgrade options
 
-const currentGatherGoal = computed(() =>
-  (selectedBot.value ? (botStore.settings as any)?.[selectedBot.value]?.goal : null) ??
-  (botStore.settings as any)?.gatherer?.goal ?? null
+function getBotGoalsForUser(username: string): any[] {
+  const s = (botStore.settings as any)?.[username] || {};
+  if (s.goals?.length) return s.goals;
+  if (s.goal) return [s.goal];
+  return [];
+}
+const currentGatherGoals = computed(() =>
+  selectedBot.value ? getBotGoalsForUser(selectedBot.value) : []
 );
+const currentGatherGoal = computed(() => currentGatherGoals.value[0] ?? null);
 
 // Modals
 const showCreateModal = ref(false);
@@ -658,9 +695,93 @@ const inviteUsername = ref('');
 const treasuryAmount = ref(0);
 const treasuryLoading = ref(false);
 
+// ── All Faction Storages (global DB view) ─────────────────────
+const allStorageNameFilter = ref('');
+const allStorageTypeFilter = ref('');
+const allStorageSystemFilter = ref('');
+
+async function fetchAllStorages() {
+  await botStore.fetchFactionStorage();
+}
+
+// Auto-load when switching to the All Storages tab
+watch(activeSection, (sec) => {
+  if (sec === 'allstorages' && botStore.factionStorageItems.length === 0) {
+    fetchAllStorages();
+  }
+});
+
+// Pre-load on mount so data is ready if user opens the tab
+onMounted(() => {
+  botStore.fetchFactionStorage();
+  // Auto-sync: if a bot was selected via profile, pre-select it here
+  if (botStore.selectedBot && !selectedBot.value) selectBot(botStore.selectedBot);
+});
+// Keep in sync when user opens a profile while this tab is visible
+watch(() => botStore.selectedBot, (username) => {
+  if (username && username !== selectedBot.value) selectBot(username);
+});
+
+const allStorageSystems = computed(() => {
+  const names = new Set(botStore.factionStorageItems.map(i => i.system_name).filter(Boolean));
+  return [...names].sort();
+});
+
+function itemTypeClass(itemId: string): string {
+  if (itemId.startsWith('ore_')) return 'ore';
+  if (itemId.startsWith('refined_')) return 'refined';
+  if (itemId.startsWith('component_')) return 'component';
+  if (itemId.startsWith('module_') || itemId.startsWith('ship_')) return 'module';
+  return 'other';
+}
+
+function itemTypeColor(itemId: string): string {
+  const t = itemTypeClass(itemId);
+  if (t === 'ore') return 'text-space-yellow';
+  if (t === 'refined') return 'text-space-cyan';
+  if (t === 'component') return 'text-space-green';
+  if (t === 'module') return 'text-space-accent';
+  return 'text-space-text';
+}
+
+const filteredAllStorageItems = computed(() => {
+  let items = botStore.factionStorageItems;
+  const nameF = allStorageNameFilter.value.toLowerCase().trim();
+  const typeF = allStorageTypeFilter.value;
+  const sysF = allStorageSystemFilter.value;
+  if (nameF) items = items.filter(i => (i.item_name || i.item_id).toLowerCase().includes(nameF));
+  if (typeF) items = items.filter(i => itemTypeClass(i.item_id) === typeF);
+  if (sysF) items = items.filter(i => i.system_name === sysF);
+  return items;
+});
+
+const allStorageGrouped = computed(() => {
+  const groups: Record<string, { poi_id: string; poi_name: string; system_id: string; system_name: string; updated_at: string; items: typeof filteredAllStorageItems.value }> = {};
+  for (const item of filteredAllStorageItems.value) {
+    const key = item.poi_id;
+    if (!groups[key]) {
+      groups[key] = { poi_id: item.poi_id, poi_name: item.poi_name, system_id: item.system_id, system_name: item.system_name, updated_at: item.updated_at, items: [] };
+    }
+    groups[key].items.push(item);
+    if (item.updated_at > groups[key].updated_at) groups[key].updated_at = item.updated_at;
+  }
+  return groups;
+});
+
+function timeAgoShort(iso: string): string {
+  const diffMs = Date.now() - new Date(iso).getTime();
+  const mins = Math.floor(diffMs / 60_000);
+  if (mins < 1) return 'just now';
+  if (mins < 60) return `${mins}m ago`;
+  const hrs = Math.floor(mins / 60);
+  if (hrs < 24) return `${hrs}h ago`;
+  return `${Math.floor(hrs / 24)}d ago`;
+}
+
 const sections = [
   { id: 'members', label: ' Members' },
   { id: 'storage', label: ' Storage' },
+  { id: 'allstorages', label: '🗄️ All Storages' },
   { id: 'buildings', label: '🏠 Buildings' },
   { id: 'diplomacy', label: 'Diplomacy' },
   { id: 'missions', label: '📋 Missions' },
@@ -1076,27 +1197,37 @@ function gatherFacilityMaterials(bt: any) {
 
 function doSaveGatherGoal(typeId: string, typeName: string, mats: any[]) {
   if (!selectedBot.value) return;
-  const botStatus = botStore.bots.find(b => b.username === selectedBot.value);
-  botStore.saveSettings(selectedBot.value, {
-    goal: {
-      id: `faction_${typeId}_${Date.now()}`,
-      target_id: typeId,
-      target_name: typeName,
-      target_poi: botStatus?.poi || '',
-      target_system: botStatus?.system || '',
-      materials: mats.map((m: any) => ({
-        item_id: m.item_id,
-        item_name: m.name || m.item_name,
-        quantity_needed: m.quantity,
-      })),
-    },
-  });
-  setStatus(`📦 Gather goal created: ${typeName}${botStatus?.poi ? ` @ ${botStatus.poi}` : ''}`);
+  const botStatus = botStore.bots.find(b => b.username === selectedBot.value) as any;
+  if (!botStatus?.poi || !botStatus?.system) {
+    setStatus('⚠ Bot must be docked at the target station to set a Build goal');
+    return;
+  }
+  const newGoal = {
+    id: `faction_${typeId}_${Date.now()}`,
+    target_id: typeId,
+    target_name: typeName,
+    goal_type: 'build',
+    target_poi: botStatus.poi,
+    target_system: botStatus.system,
+    materials: mats.map((m: any) => ({
+      item_id: m.item_id,
+      item_name: m.name || m.item_name,
+      quantity_needed: m.quantity,
+    })),
+  };
+  const existing = getBotGoalsForUser(selectedBot.value);
+  botStore.saveSettings(selectedBot.value, { goals: [...existing, newGoal], goal: null });
+  setStatus(`📦 Gather goal added: ${typeName} @ ${botStatus.poi}`);
 }
 
-function clearGatherGoal() {
+function clearGatherGoal(goalId?: string) {
   if (!selectedBot.value) return;
-  botStore.saveSettings(selectedBot.value, { goal: null });
+  if (goalId) {
+    const filtered = getBotGoalsForUser(selectedBot.value).filter((g: any) => g.id !== goalId);
+    botStore.saveSettings(selectedBot.value, { goals: filtered, goal: null });
+  } else {
+    botStore.saveSettings(selectedBot.value, { goals: [], goal: null });
+  }
 }
 
 async function buildFacility(facilityTypeId: string, facilityName?: string): Promise<void> {

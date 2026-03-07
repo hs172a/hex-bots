@@ -135,6 +135,27 @@
         </div>
         <div v-if="!currentBot.docked" class="text-[11px] text-space-text-dim mt-1.5 italic">Dock at a station to set home base.</div>
       </div>
+      <!-- Empire Reputation (v0.183+) -->
+      <div v-if="empireReputations.length" class="card py-2 px-3">
+        <h3 class="text-xs font-semibold text-space-text-dim uppercase mb-2">⚜️ Empire Reputation</h3>
+        <div class="space-y-2">
+          <div v-for="rep in empireReputations" :key="rep.empire" class="bg-[#21262d] rounded-md p-2 text-xs">
+            <div class="flex items-center justify-between mb-1">
+              <span class="font-semibold text-space-text-bright">{{ rep.empire_name }}</span>
+              <div class="flex gap-1 flex-wrap justify-end">
+                <span v-if="rep.criminal > 0" class="px-1.5 py-0.5 rounded text-[10px] bg-red-900/40 text-red-300">🚔 Criminal {{ rep.criminal }}</span>
+              </div>
+            </div>
+            <div class="grid grid-cols-3 gap-x-3 gap-y-0.5 text-[11px]">
+              <span v-if="rep.fame !== undefined" class="text-space-text-dim">⭐ Fame <span class="text-space-text">{{ rep.fame }}</span></span>
+              <span v-if="rep.need !== undefined" class="text-space-text-dim">📦 Need <span class="text-space-text">{{ rep.need }}</span></span>
+              <span v-if="rep.love !== undefined" class="text-space-text-dim">💚 Love <span class="text-space-text">{{ rep.love }}</span></span>
+              <span v-if="rep.hate !== undefined" class="text-space-text-dim">💢 Hate <span class="text-space-red">{{ rep.hate }}</span></span>
+              <span v-if="rep.fear !== undefined" class="text-space-text-dim">😱 Fear <span class="text-space-red">{{ rep.fear }}</span></span>
+            </div>
+          </div>
+        </div>
+      </div>
     </template>
   </div>
 </template>
@@ -150,6 +171,29 @@ const emit = defineEmits<{ (e: 'notif', text: string, type: 'success' | 'warn' |
 const botStore = useBotStore();
 const loading = ref(false);
 const loaded = ref(false);
+
+const reputationRaw = ref<any>(null);
+
+const empireReputations = computed(() => {
+  const src = reputationRaw.value
+    || (currentBot.value as any)?.playerStats?.empire_reputations
+    || (currentBot.value as any)?.empire_reputations
+    || null;
+  if (!src || typeof src !== 'object') return [];
+  const EMPIRE_NAMES: Record<string, string> = {
+    nebula: 'Nebula Collective', crimson: 'Crimson Pact', solarian: 'Solarian Union', outer_rim: 'Outer Rim'
+  };
+  return Object.entries(src).map(([k, v]: [string, any]) => ({
+    empire: k,
+    empire_name: EMPIRE_NAMES[k] || k.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase()),
+    fame:    v?.fame    ?? v?.Fame,
+    need:    v?.need    ?? v?.Need,
+    love:    v?.love    ?? v?.Love,
+    hate:    v?.hate    ?? v?.Hate,
+    fear:    v?.fear    ?? v?.Fear,
+    criminal: v?.criminal ?? v?.Criminal ?? 0,
+  }));
+});
 
 const form = ref({
   status: '',
@@ -200,6 +244,7 @@ async function loadProfile() {
     form.value.anonymous = !!(player.anonymous || player.is_anonymous);
     form.value.primary_color = player.primary_color || player.color || '#4a9eff';
     form.value.secondary_color = player.secondary_color || '#ffffff';
+    reputationRaw.value = d.empire_reputations || d.reputations || player.empire_reputations || player.reputations || null;
     loaded.value = true;
   } else {
     emit('notif', r.error || 'Failed to load profile', 'error');

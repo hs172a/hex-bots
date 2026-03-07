@@ -365,6 +365,45 @@ export class DataSyncServer {
           return json({ claims: getAllMiningClaims() });
         }
 
+        // ── GET /sync/faction-storage ─────────────────────────────────────
+        // Returns all faction storage items on the master (so clients can see master's data too)
+        if (req.method === "GET" && url.pathname === "/sync/faction-storage") {
+          return json({ items: map.getAllFactionStorageItems() });
+        }
+
+        // ── POST /sync/faction-storage ────────────────────────────────────
+        // Clients push their local faction storage snapshots; master merges by POI
+        if (req.method === "POST" && url.pathname === "/sync/faction-storage") {
+          try {
+            const body = await req.json() as {
+              items?: Array<{
+                poi_id: string; system_id: string; system_name: string; poi_name: string;
+                item_id: string; item_name: string; quantity: number; updated_at: string;
+              }>;
+            };
+            const items = body.items ?? [];
+            // Group by POI and merge using updateFactionStorageItems (full replace per POI)
+            const byPoi = new Map<string, typeof items>();
+            for (const it of items) {
+              if (!it.poi_id || !it.item_id || it.quantity <= 0) continue;
+              if (!byPoi.has(it.poi_id)) byPoi.set(it.poi_id, []);
+              byPoi.get(it.poi_id)!.push(it);
+            }
+            let merged = 0;
+            for (const [poiId, poiItems] of byPoi) {
+              const first = poiItems[0];
+              map.updateFactionStorageItems(
+                poiId, first.system_id, first.system_name, first.poi_name,
+                poiItems.map(i => ({ item_id: i.item_id, item_name: i.item_name, quantity: i.quantity })),
+              );
+              merged += poiItems.length;
+            }
+            return json({ ok: true, merged });
+          } catch {
+            return json({ error: "Invalid JSON" }, 400);
+          }
+        }
+
         // ── POST /sync/mining-claims ──────────────────────────────────────
         // Clients push their local mining claims; server merges them
         if (req.method === "POST" && url.pathname === "/sync/mining-claims") {
@@ -453,15 +492,19 @@ export class DataSyncClient {
         console.warn("[DataSync] Fast pull error:", e instanceof Error ? e.message : e));
       await this.pullTopologySince(this.lastSlowPullAt).catch(e =>
         console.warn("[DataSync] Slow pull error:", e instanceof Error ? e.message : e));
+      await this.pullFactionStorage().catch(e =>
+        console.warn("[DataSync] Faction storage pull error:", e instanceof Error ? e.message : e));
     }, pullMs);
 
-    // Fast push: market prices + pirate sightings + mining claims (high-freq)
+    // Fast push: market prices + pirate sightings + mining claims + faction storage (high-freq)
     const fastPushMs = (push_interval_sec || 60) * 1000;
     this.fastPushTimer = setInterval(() => {
       this.pushFast().catch(e =>
         console.warn("[DataSync] Fast push error:", e instanceof Error ? e.message : e));
       this.pushMiningClaims().catch(e =>
         console.warn("[DataSync] Mining claims push error:", e instanceof Error ? e.message : e));
+      this.pushFactionStorage().catch(e =>
+        console.warn("[DataSync] Faction storage push error:", e instanceof Error ? e.message : e));
     }, fastPushMs);
 
     // Pull mining claims from master at same cadence as pull timer
@@ -869,6 +912,49 @@ export class DataSyncClient {
       this.recordFailure();
       console.warn(`[DataSync] POST /sync/map/systems → ${resp.status}`);
     }
+  }
+
+  private async pushFactionStorage(): Promise<void> {
+    const items = this.map.getAllFactionStorageItems();
+    if (items.length === 0) return;
+    const resp = await fetch(`${this.cfg.master_url}/sync/faction-storage`, {
+      method: "POST",
+      headers: this.headers(),
+      body: JSON.stringify({ items }),
+      signal: AbortSignal.timeout(15_000),
+    });
+    if (resp.ok) {
+      this.recordSuccess();
+    } else {
+      this.recordFailure();
+      console.warn(`[DataSync] POST /sync/faction-storage → ${resp.status}`);
+    }
+  }
+
+  private async pullFactionStorage(): Promise<void> {
+    const resp = await fetch(`${this.cfg.master_url}/sync/faction-storage`, {
+      headers: this.headers(),
+      signal: AbortSignal.timeout(15_000),
+    });
+    if (!resp.ok) { this.recordFailure(); return; }
+    const body = await resp.json() as { items?: unknown[] };
+    const items = body.items ?? [];
+    const byPoi = new Map<string, Array<{ item_id: string; item_name?: string; name?: string; quantity: number; poi_id: string; system_id: string; system_name: string; poi_name: string }> >();
+    for (const raw of items) {
+      const it = raw as Record<string, unknown>;
+      if (!it.poi_id || !it.item_id || (it.quantity as number) <= 0) continue;
+      const poiId = it.poi_id as string;
+      if (!byPoi.has(poiId)) byPoi.set(poiId, []);
+      byPoi.get(poiId)!.push(it as any);
+    }
+    for (const [poiId, poiItems] of byPoi) {
+      const first = poiItems[0];
+      this.map.updateFactionStorageItems(
+        poiId, first.system_id, first.system_name, first.poi_name,
+        poiItems.map(i => ({ item_id: i.item_id, item_name: i.item_name ?? i.name ?? i.item_id, quantity: i.quantity })),
+      );
+    }
+    if (byPoi.size > 0) this.recordSuccess();
   }
 }
 

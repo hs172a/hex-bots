@@ -74,7 +74,8 @@ export interface MaterialDemand {
 
 /**
  * Gather component claim — prevents two gatherer bots from acquiring the same
- * material at the same time. Keyed by itemId; only one bot can hold the claim.
+ * material for the same goal. Keyed by `${goalId}:${itemId}`; supports
+ * partial-quantity claims so multiple bots can split work on one item.
  */
 export interface GatherComponentClaim {
   /** Bot holding this claim. */
@@ -83,6 +84,8 @@ export interface GatherComponentClaim {
   itemId: string;
   /** Goal ID this acquisition is for. */
   goalId: string;
+  /** Quantity this bot is responsible for acquiring. */
+  quantity: number;
   registeredAt: number;
   expiresAt: number;
 }
@@ -98,7 +101,7 @@ const tradeRouteClaims = new Map<string, TradeRouteClaim>();
 /** Active material demands, keyed by `${bot}:${itemId}`. */
 const materialDemands = new Map<string, MaterialDemand>();
 
-/** Active gather component claims, keyed by itemId. One bot per item at a time. */
+/** Active gather component claims, keyed by `${goalId}:${itemId}`. */
 const gatherClaims = new Map<string, GatherComponentClaim>();
 
 // ── Cleanup helpers ───────────────────────────────────────────
@@ -356,42 +359,73 @@ export function getMostNeededItem(): { itemId: string; totalQuantity: number } |
 // ── Gather component claims ─────────────────────────────
 
 /**
- * Claim an item for gathering. Returns true if the claim was acquired
- * (either item was unclaimed, or this bot already holds the claim).
- * Returns false if another bot has an active claim on this item.
+ * Claim a quantity of an item for a specific goal.
+ * - If no claim exists for this goalId+itemId: create it (returns claimed qty).
+ * - If this bot already holds it: refresh TTL (returns claimed qty).
+ * - If another bot already claimed the full needed qty: returns 0.
+ * Multiple bots can split the same item across different goals.
  */
 export function claimGatherComponent(
   botName: string,
   itemId: string,
   goalId: string,
+  quantity: number = 1,
   ttlMs: number = GATHER_CLAIM_TTL_MS,
-): boolean {
+): number {
   pruneExpired();
-  const existing = gatherClaims.get(itemId);
-  if (existing && existing.bot !== botName) return false; // another bot owns it
+  const key = `${goalId}:${itemId}`;
+  const existing = gatherClaims.get(key);
+  if (existing && existing.bot !== botName) return 0; // another bot owns this goal+item
   const now = Date.now();
-  gatherClaims.set(itemId, { bot: botName, itemId, goalId, registeredAt: now, expiresAt: now + ttlMs });
-  return true;
+  gatherClaims.set(key, { bot: botName, itemId, goalId, quantity, registeredAt: now, expiresAt: now + ttlMs });
+  return quantity;
 }
 
-/** Release this bot's claim on an item. */
-export function releaseGatherClaim(botName: string, itemId: string): void {
-  const existing = gatherClaims.get(itemId);
-  if (existing?.bot === botName) gatherClaims.delete(itemId);
+/** Release this bot's claim on an item for a specific goal. */
+export function releaseGatherClaim(botName: string, itemId: string, goalId?: string): void {
+  if (goalId) {
+    const key = `${goalId}:${itemId}`;
+    const existing = gatherClaims.get(key);
+    if (existing?.bot === botName) gatherClaims.delete(key);
+  } else {
+    // Legacy: release any claim by this bot on this item across all goals
+    for (const [key, claim] of gatherClaims) {
+      if (claim.bot === botName && claim.itemId === itemId) gatherClaims.delete(key);
+    }
+  }
 }
 
 /** Release all gather claims held by a bot. */
 export function releaseAllGatherClaims(botName: string): void {
-  for (const [itemId, claim] of gatherClaims) {
-    if (claim.bot === botName) gatherClaims.delete(itemId);
+  for (const [key, claim] of gatherClaims) {
+    if (claim.bot === botName) gatherClaims.delete(key);
   }
 }
 
-/** True if another bot (not this one) holds a live claim on the given item. */
-export function isGatherClaimedByOther(botName: string, itemId: string): boolean {
+/** True if another bot (not this one) holds a live claim on the given item for the given goal. */
+export function isGatherClaimedByOther(botName: string, itemId: string, goalId?: string): boolean {
   pruneExpired();
-  const claim = gatherClaims.get(itemId);
-  return !!claim && claim.bot !== botName;
+  if (goalId) {
+    const claim = gatherClaims.get(`${goalId}:${itemId}`);
+    return !!claim && claim.bot !== botName;
+  }
+  // Legacy: check any goal
+  for (const claim of gatherClaims.values()) {
+    if (claim.itemId === itemId && claim.bot !== botName) return true;
+  }
+  return false;
+}
+
+/**
+ * Get total quantity already claimed by OTHER bots for a given item+goal.
+ * The caller subtracts this from quantity_needed to avoid over-acquiring.
+ */
+export function getClaimedQuantityByOthers(botName: string, itemId: string, goalId: string): number {
+  pruneExpired();
+  const key = `${goalId}:${itemId}`;
+  const claim = gatherClaims.get(key);
+  if (!claim || claim.bot === botName) return 0;
+  return claim.quantity;
 }
 
 /** All active gather component claims. */

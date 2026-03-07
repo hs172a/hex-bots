@@ -6,6 +6,30 @@
     </div>
 
     <template v-else>
+      <!-- Dock story + station condition (from latest dock result) -->
+      <div v-if="dockData && props.mode !== 'facility'" class="card py-2 px-2 space-y-2">
+        <!-- Condition banner -->
+        <div class="flex items-center gap-2 flex-wrap">
+          <span class="text-[11px] font-semibold px-2 py-0.5 rounded" :class="conditionClass">{{ conditionLabel }}</span>
+          <span class="text-[11px] text-space-text-dim">{{ dockData.station_condition?.satisfied_count ?? 0 }}/{{ dockData.station_condition?.total_service_infra ?? 0 }} services</span>
+          <div class="flex-1 min-w-16 h-1.5 bg-space-border rounded-full overflow-hidden">
+            <div class="h-full rounded-full transition-all" :class="conditionBarClass" :style="{ width: (dockData.station_condition?.satisfaction_pct ?? 0) + '%' }"></div>
+          </div>
+          <span class="text-[11px] text-space-text-dim shrink-0">{{ dockData.station_condition?.satisfaction_pct ?? 0 }}%</span>
+        </div>
+        <div v-if="dockData.station_condition?.condition_text && dockData.station_condition?.condition !== 'operational'" class="text-[11px] text-yellow-400">⚠️ {{ dockData.station_condition.condition_text }}</div>
+        <!-- Storage summary from dock result -->
+        <div v-if="dockData.storage_items != null || dockData.storage_credits != null" class="flex gap-3 text-[11px] text-space-text-dim">
+          <span v-if="dockData.storage_items != null">📦 {{ dockData.storage_items }} item stacks stored</span>
+          <span v-if="dockData.storage_credits != null">💰 {{ dockData.storage_credits.toLocaleString() }} cr storage credits</span>
+        </div>
+        <!-- Story (collapsible) -->
+        <details v-if="dockData.story" class="text-xs">
+          <summary class="cursor-pointer text-space-text-dim hover:text-space-text select-none">📖 Station story</summary>
+          <div class="mt-1.5 whitespace-pre-wrap text-[11px] text-space-text-dim leading-relaxed border-t border-space-border pt-1.5">{{ dockData.story }}</div>
+        </details>
+      </div>
+
       <!-- Station header from catalog -->
       <div v-if="stationInfo && props.mode !== 'facility'" class="card py-2 px-2">
         <div class="flex items-start justify-between gap-2 mb-1.5">
@@ -47,6 +71,12 @@
               class="px-2 py-0.5 text-xs rounded transition-colors"
               :class="tab === 'build' ? 'bg-space-accent text-white' : 'text-space-text-dim hover:text-space-text'">
               🔨 Build
+            </button>
+            <button @click="switchToChat"
+              class="px-2 py-0.5 text-xs rounded transition-colors flex items-center gap-1"
+              :class="tab === 'chat' ? 'bg-space-accent text-white' : 'text-space-text-dim hover:text-space-text'">
+              💬 Chat
+              <span v-if="totalUnread > 0" class="inline-flex items-center justify-center w-4 h-4 rounded-full text-[10px] font-bold bg-space-red text-white">{{ totalUnread > 99 ? '99+' : totalUnread }}</span>
             </button>
           </div>
           <button @click="reloadAll" :disabled="loading" class="btn btn-secondary text-xs py-0 px-2">{{ loading ? '⏳' : '🔄' }}</button>
@@ -196,35 +226,37 @@
               {{ typesLoading ? '...' : '↺' }}
             </button>
           </div>
-          <!-- Current gatherer goal banner with progress -->
-          <div v-if="currentGathererGoal" class="mb-2 p-2.5 rounded border border-space-accent/30 bg-space-accent/5">
-            <div class="flex items-center justify-between mb-1.5">
-              <div class="flex items-center gap-2 min-w-0">
-                <span class="text-[11px] font-semibold text-space-accent">📦 Gather goal</span>
-                <span class="text-xs text-space-text-bright font-medium truncate">{{ currentGathererGoal.target_name }}</span>
-              </div>
-              <div class="flex items-center gap-2 shrink-0">
-                <span class="text-xs font-bold" :class="goalOverallPct >= 100 ? 'text-space-green' : 'text-space-text-dim'">{{ goalOverallPct }}%</span>
-                <button @click="botStore.saveSettings(props.bot.username, { goal: null })" class="btn btn-secondary text-[11px] px-1.5 py-0.5">✕</button>
-              </div>
-            </div>
-            <!-- Overall bar -->
-            <div class="h-1 bg-space-border rounded-full mb-2">
-              <div class="h-full rounded-full transition-all duration-500"
-                :class="goalOverallPct >= 100 ? 'bg-space-green' : 'bg-space-accent'"
-                :style="{ width: Math.min(goalOverallPct, 100) + '%' }"></div>
-            </div>
-            <!-- Per-material rows -->
-            <div class="space-y-1.5">
-              <div v-for="m in goalMaterials" :key="m.item_id">
-                <div class="flex justify-between text-[11px] mb-0.5">
-                  <span class="text-space-text">{{ m.item_name }}</span>
-                  <span :class="m.pct >= 100 ? 'text-space-green' : 'text-space-text-dim'">{{ m.collected }}/{{ m.quantity_needed }}</span>
+          <!-- Current gatherer goals banner with progress (supports multiple goals) -->
+          <div v-if="currentGathererGoals.length" class="mb-2 space-y-2">
+            <div v-for="goal in currentGathererGoals" :key="goal.id"
+              class="p-2.5 rounded border border-space-accent/30 bg-space-accent/5">
+              <div class="flex items-center justify-between mb-1.5">
+                <div class="flex items-center gap-2 min-w-0">
+                  <span class="text-[11px] font-semibold text-space-accent">📦</span>
+                  <span class="text-xs text-space-text-bright font-medium truncate">{{ goal.target_name }}</span>
+                  <span v-if="goal.goal_type === 'craft'" class="text-[10px] px-1 py-0.5 rounded bg-space-yellow/20 text-space-yellow">craft</span>
                 </div>
-                <div class="h-0.5 bg-space-border rounded-full">
-                  <div class="h-full rounded-full transition-all duration-500"
-                    :class="m.pct >= 100 ? 'bg-space-green' : 'bg-space-accent/50'"
-                    :style="{ width: Math.min(m.pct, 100) + '%' }"></div>
+                <div class="flex items-center gap-2 shrink-0">
+                  <span class="text-xs font-bold" :class="goal.overallPct >= 100 ? 'text-space-green' : 'text-space-text-dim'">{{ goal.overallPct }}%</span>
+                  <button @click="clearGathererGoalById(goal.id)" class="btn btn-secondary text-[11px] px-1.5 py-0.5">✕</button>
+                </div>
+              </div>
+              <div class="h-1 bg-space-border rounded-full mb-2">
+                <div class="h-full rounded-full transition-all duration-500"
+                  :class="goal.overallPct >= 100 ? 'bg-space-green' : 'bg-space-accent'"
+                  :style="{ width: Math.min(goal.overallPct, 100) + '%' }"></div>
+              </div>
+              <div class="space-y-1.5">
+                <div v-for="m in goal.materials" :key="m.item_id">
+                  <div class="flex justify-between text-[11px] mb-0.5">
+                    <span class="text-space-text">{{ m.item_name }}</span>
+                    <span :class="m.pct >= 100 ? 'text-space-green' : 'text-space-text-dim'">{{ m.collected }}/{{ m.quantity_needed }}</span>
+                  </div>
+                  <div class="h-0.5 bg-space-border rounded-full">
+                    <div class="h-full rounded-full transition-all duration-500"
+                      :class="m.pct >= 100 ? 'bg-space-green' : 'bg-space-accent/50'"
+                      :style="{ width: Math.min(m.pct, 100) + '%' }"></div>
+                  </div>
                 </div>
               </div>
             </div>
@@ -243,7 +275,7 @@
               :class="[
                 isBuilt(t.id) ? 'border-green-900/40 bg-[#1a2120]' :
                 !t.buildable ? 'border-[#30363d] bg-[#161b22] opacity-60' :
-                currentGathererGoal?.target_id === t.id ? 'border-space-accent/40 bg-[#21262d]' :
+                currentGathererGoals.some(g => g.target_id === t.id) ? 'border-space-accent/40 bg-[#21262d]' :
                 'border-[#30363d] bg-[#21262d] hover:border-[#444d56]'
               ]">
               <!-- Card header -->
@@ -254,7 +286,7 @@
                     <span class="text-[10px] text-space-text-dim">Lv{{ t.level }}</span>
                     <span v-if="isBuilt(t.id)" class="text-[10px] px-1 py-0.5 rounded bg-green-900/30 text-space-green">✓ built</span>
                     <span v-else-if="!t.buildable" class="text-[10px] px-1 py-0.5 rounded bg-[#30363d] text-space-text-dim">🔒 locked</span>
-                    <span v-if="currentGathererGoal?.target_id === t.id" class="text-[10px] px-1 py-0.5 rounded bg-space-accent/20 text-space-accent">gathering</span>
+                    <span v-if="currentGathererGoals.some(g => g.target_id === t.id)" class="text-[10px] px-1 py-0.5 rounded bg-space-accent/20 text-space-accent">gathering</span>
                   </div>
                   <div v-if="t.description" class="text-[11px] text-space-text-dim leading-relaxed line-clamp-2">{{ t.description }}</div>
                   <!-- Bonuses & services -->
@@ -286,16 +318,53 @@
                       class="text-space-text-dim">{{ m.name || m.item_name || m.item_id }}<span class="text-space-text ml-0.5">×{{ m.quantity || m.quantity_needed }}</span></span>
                   </div>
                 </div>
-                <button v-if="!isBuilt(t.id) && currentGathererGoal?.target_id !== t.id"
+                <button v-if="!isBuilt(t.id)"
                   @click="setGathererGoal(t)"
                   class="btn btn-secondary text-[11px] px-2 py-0.5 shrink-0 whitespace-nowrap mt-1.5">
-                  📦 Gather
+                  {{ currentGathererGoals.some(g => g.target_id === t.id) ? '📦 +add' : '📦 Gather' }}
                 </button>
-                <span v-else-if="currentGathererGoal?.target_id === t.id"
-                  class="text-[11px] text-space-accent shrink-0 mt-1.5">⚙️ active</span>
               </div>
               <div v-else-if="!isBuilt(t.id) && !typeDetails[t.id]" class="px-2 pb-1.5 text-[11px] text-space-text-dim/30 italic">fetching materials…</div>
             </div>
+          </div>
+        </template>
+        <!-- ── Chat Tab ──────────────────────────────────── -->
+        <template v-else-if="tab === 'chat'">
+          <!-- Channel selector -->
+          <div class="flex gap-1 mb-2 flex-wrap">
+            <button v-for="ch in chatChannels" :key="ch.id"
+              @click="selectChatChannel(ch.id)"
+              class="px-2 py-0.5 text-[11px] rounded transition-colors flex items-center gap-1"
+              :class="chatChannel === ch.id ? 'bg-space-accent text-white' : 'bg-[#21262d] text-space-text-dim hover:text-space-text'">
+              {{ ch.label }}
+              <span v-if="(dockData?.unread_chat?.[ch.id] ?? 0) > 0"
+                class="inline-flex items-center justify-center px-1 rounded text-[9px] font-bold bg-space-red/80 text-white">
+                {{ dockData?.unread_chat?.[ch.id] }}
+              </span>
+            </button>
+          </div>
+          <!-- Load / refresh -->
+          <div class="flex items-center gap-2 mb-2">
+            <button @click="loadChat(true)" :disabled="chatLoading" class="btn btn-secondary text-xs py-0 px-2">{{ chatLoading ? '⏳' : '🔄 Refresh' }}</button>
+            <span v-if="chatTotal > 0" class="text-[11px] text-space-text-dim">{{ chatMessages.length }} / {{ chatTotal }} messages</span>
+            <span v-if="dockData?.unread_chat_note" class="text-[11px] text-yellow-400 truncate">{{ dockData.unread_chat_note }}</span>
+          </div>
+          <!-- Messages -->
+          <div v-if="chatLoading && !chatMessages.length" class="text-xs text-space-text-dim italic py-6 text-center">Loading messages…</div>
+          <div v-else-if="!chatMessages.length" class="text-xs text-space-text-dim italic py-6 text-center">No messages. Click Refresh to load.</div>
+          <div v-else class="space-y-1.5 max-h-96 overflow-auto scrollbar-dark pr-0.5">
+            <div v-for="msg in chatMessages" :key="msg.id || (msg.timestamp + msg.author)"
+              class="bg-[#21262d] rounded px-2 py-1.5 text-[11px]">
+              <div class="flex items-baseline gap-1.5 mb-0.5">
+                <span class="font-semibold text-space-accent">{{ msg.author || msg.sender || 'System' }}</span>
+                <span class="text-space-text-dim text-[10px]">{{ formatChatTime(msg.timestamp || msg.created_at) }}</span>
+              </div>
+              <div class="text-space-text leading-relaxed">{{ msg.text || msg.message || msg.content }}</div>
+            </div>
+          </div>
+          <!-- Load more -->
+          <div v-if="chatMessages.length < chatTotal" class="mt-2 text-center">
+            <button @click="loadChat(false)" :disabled="chatLoading" class="btn btn-secondary text-xs px-3">{{ chatLoading ? '...' : 'Load more' }}</button>
           </div>
         </template>
       </div>
@@ -315,7 +384,7 @@ const emit = defineEmits<{
 const botStore = useBotStore();
 
 // ── State ─────────────────────────────────────────────────────
-const tab = ref<'station' | 'personal' | 'build'>(props.mode === 'facility' ? 'personal' : 'station');
+const tab = ref<'station' | 'personal' | 'build' | 'chat'>(props.mode === 'facility' ? 'personal' : 'station');
 const loading = ref(false);
 const typesLoading = ref(false);
 const actionLoading = ref<string | null>(null);
@@ -334,38 +403,132 @@ const activeUpgrade = ref<string | null>(null);
 const buildErrors = ref<Record<string, string>>({});
 const typeDetails = ref<Record<string, any>>({}); // facility_type id → detailed type info (build_materials etc.)
 
-// ── Computed ──────────────────────────────────────────────────
+// ── Computed ─────────────────────────────────────────────
 const hasQuarters = computed(() =>
   myFacilities.value.some((f: any) => f.personal_service === 'quarters')
 );
 const currentBot = computed(() =>
   botStore.bots.find(b => b.username === props.bot.username) || props.bot
 );
-const currentGathererGoal = computed(() =>
-  (botStore.settings as any)?.[props.bot.username]?.goal ??
-  (botStore.settings as any)?.gatherer?.goal ?? null
-);
 
-const goalMaterials = computed(() => {
-  const goal = currentGathererGoal.value;
-  if (!goal) return [];
+// ── Dock data from botStore ─────────────────────────────────
+const dockData = computed(() => botStore.stationDockInfo?.[currentBot.value?.username] ?? null);
+
+const conditionLabel = computed(() => {
+  const c = dockData.value?.station_condition?.condition;
+  if (c === 'operational') return '✅ Operational';
+  if (c === 'degraded') return '⚠️ Degraded';
+  if (c === 'critical') return '🚨 Critical';
+  return c || 'Unknown';
+});
+
+const conditionClass = computed(() => {
+  const c = dockData.value?.station_condition?.condition;
+  if (c === 'operational') return 'bg-green-900/30 text-space-green';
+  if (c === 'degraded') return 'bg-yellow-900/30 text-yellow-400';
+  return 'bg-red-900/30 text-space-red';
+});
+
+const conditionBarClass = computed(() => {
+  const c = dockData.value?.station_condition?.condition;
+  if (c === 'operational') return 'bg-space-green';
+  if (c === 'degraded') return 'bg-yellow-400';
+  return 'bg-space-red';
+});
+
+const totalUnread = computed(() => {
+  const u = dockData.value?.unread_chat;
+  if (!u) return 0;
+  return Object.values(u).reduce((s: number, v: any) => s + (Number(v) || 0), 0);
+});
+
+// ── Chat ────────────────────────────────────────────
+const chatChannels = [
+  { id: 'system',  label: '📡 System'  },
+  { id: 'local',   label: '📍 Local'   },
+  { id: 'faction', label: '⚔️ Faction' },
+  { id: 'private', label: '🔒 Private' },
+];
+const chatChannel = ref<string>('system');
+const chatMessages = ref<any[]>([]);
+const chatLoading = ref(false);
+const chatTotal = ref(0);
+const chatPage = ref(1);
+
+function switchToChat(): void {
+  tab.value = 'chat';
+  if (!chatMessages.value.length) loadChat(true);
+}
+
+function selectChatChannel(ch: string): void {
+  chatChannel.value = ch;
+  chatMessages.value = [];
+  chatTotal.value = 0;
+  chatPage.value = 1;
+  loadChat(true);
+}
+
+async function loadChat(reset: boolean): Promise<void> {
+  if (chatLoading.value) return;
+  if (reset) { chatMessages.value = []; chatTotal.value = 0; chatPage.value = 1; }
+  chatLoading.value = true;
+  try {
+    const res = await execAsync('get_chat_history', { channel: chatChannel.value, page: chatPage.value, limit: 50 });
+    if (!res.ok) { notif(res.error || 'Failed to load chat', 'error'); return; }
+    const d = res.data || {};
+    const msgs: any[] = d.messages || d.chat || (Array.isArray(d) ? d : []);
+    chatTotal.value = d.total ?? d.total_count ?? msgs.length;
+    if (reset) {
+      chatMessages.value = msgs;
+    } else {
+      chatMessages.value = [...chatMessages.value, ...msgs];
+      chatPage.value++;
+    }
+  } finally {
+    chatLoading.value = false;
+  }
+}
+
+function formatChatTime(ts: string | number | undefined): string {
+  if (!ts) return '';
+  try {
+    const d = new Date(ts);
+    const now = new Date();
+    const diff = (now.getTime() - d.getTime()) / 1000;
+    if (diff < 60) return 'just now';
+    if (diff < 3600) return `${Math.floor(diff / 60)}m ago`;
+    if (diff < 86400) return `${Math.floor(diff / 3600)}h ago`;
+    return d.toLocaleDateString();
+  } catch { return String(ts); }
+}
+function getBotGoals(username: string): any[] {
+  const s = (botStore.settings as any)?.[username] || {};
+  if (s.goals?.length) return s.goals;
+  if (s.goal) return [s.goal];
+  return [];
+}
+
+const currentGathererGoals = computed(() => {
   const bot = currentBot.value as any;
-  return (goal.materials || []).map((m: any) => {
-    const inFaction = (bot.factionStorage || []).find((i: any) => i.itemId === m.item_id)?.quantity ?? 0;
-    const inCargo = (bot.inventory || []).find((i: any) => i.itemId === m.item_id)?.quantity ?? 0;
-    const collected = Math.min(inFaction + inCargo, m.quantity_needed);
-    const pct = m.quantity_needed > 0 ? Math.round(collected / m.quantity_needed * 100) : 0;
-    return { ...m, collected, pct };
+  return getBotGoals(props.bot.username).map((goal: any) => {
+    const materials = (goal.materials || []).map((m: any) => {
+      const inFaction = (bot.factionStorage || []).find((i: any) => i.itemId === m.item_id)?.quantity ?? 0;
+      const inCargo = (bot.inventory || []).find((i: any) => i.itemId === m.item_id)?.quantity ?? 0;
+      const collected = Math.min(inFaction + inCargo, m.quantity_needed);
+      const pct = m.quantity_needed > 0 ? Math.round(collected / m.quantity_needed * 100) : 0;
+      return { ...m, collected, pct };
+    });
+    const totalNeeded = materials.reduce((s: number, m: any) => s + m.quantity_needed, 0);
+    const totalCollected = materials.reduce((s: number, m: any) => s + m.collected, 0);
+    const overallPct = totalNeeded > 0 ? Math.round(totalCollected / totalNeeded * 100) : 0;
+    return { ...goal, materials, overallPct };
   });
 });
 
-const goalOverallPct = computed(() => {
-  const mats = goalMaterials.value;
-  if (!mats.length) return 0;
-  const totalNeeded = mats.reduce((s: number, m: any) => s + m.quantity_needed, 0);
-  const totalCollected = mats.reduce((s: number, m: any) => s + m.collected, 0);
-  return totalNeeded > 0 ? Math.round(totalCollected / totalNeeded * 100) : 0;
-});
+function clearGathererGoalById(goalId: string): void {
+  const filtered = getBotGoals(props.bot.username).filter((g: any) => g.id !== goalId);
+  botStore.saveSettings(props.bot.username, { goals: filtered, goal: null });
+}
 
 const stationInfo = computed(() => {
   const bot = currentBot.value;
@@ -534,20 +697,26 @@ function setGathererGoal(t: any): void {
   const mats = buildMaterials(t);
   if (!mats.length) { notif('No build materials for this facility', 'warn'); return; }
   const bot = currentBot.value as any;
-  const goal = {
+  if (!bot?.poi || !bot?.system) {
+    notif('Bot must be docked at the target station when setting a Build goal', 'warn');
+    return;
+  }
+  const newGoal = {
     id: `goal_${t.id}_${Date.now()}`,
     target_id: t.id,
     target_name: t.name,
-    target_poi: bot?.poi || '',
-    target_system: bot?.system || '',
+    goal_type: 'build',
+    target_poi: bot.poi,
+    target_system: bot.system,
     materials: mats.map((m: any) => ({
       item_id: m.item_id || '',
       item_name: m.name || m.item_name || (m.item_id || '').replace(/_/g, ' '),
       quantity_needed: m.quantity || m.quantity_needed || 1,
     })),
   };
-  botStore.saveSettings(props.bot.username, { goal });
-  notif(`Gather goal set: ${t.name} (×${mats.length} material type${mats.length > 1 ? 's' : ''})`, 'success');
+  const existing = getBotGoals(props.bot.username);
+  botStore.saveSettings(props.bot.username, { goals: [...existing, newGoal], goal: null });
+  notif(`Gather goal added: ${t.name} (×${mats.length} material type${mats.length > 1 ? 's' : ''})`, 'success');
 }
 
 async function loadTypes(): Promise<void> {

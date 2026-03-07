@@ -120,7 +120,9 @@ export interface Module {
   id: string;
   name: string;
   type: string;
+  slot_type?: string;
   type_id?: string;
+  size?: number;
   cpu_usage?: number;
   power_usage?: number;
   /** Legacy alias for cpu_usage. */
@@ -132,8 +134,35 @@ export interface Module {
   wear_status?: string;
   quality?: number;
   quality_grade?: string;
+  // Combat / weapon stats
+  damage?: number;
+  damage_type?: string;
+  ammo_type?: string;
+  current_ammo?: number;
+  loaded_ammo_id?: string;
+  loaded_ammo_name?: string;
+  magazine_size?: number;
+  range?: number;
+  reach?: number;
+  cooldown?: number;
+  // Defense / hull stats (now correctly populated by the server)
+  armor_bonus?: number;
+  hull_bonus?: number;
+  shield_bonus?: number;
+  speed_bonus?: number;
+  cargo_bonus?: number;
+  cloak_strength?: number;
+  // Utility / industrial stats
   mining_power?: number;
   mining_range?: number;
+  harvest_power?: number;
+  harvest_range?: number;
+  scanner_power?: number;
+  fuel_efficiency?: number;
+  drone_capacity?: number;
+  drone_bandwidth?: number;
+  // Special
+  special?: string;
   stats?: Record<string, number>;
 }
 

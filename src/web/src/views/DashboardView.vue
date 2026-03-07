@@ -1,7 +1,7 @@
 <template>
   <div class="flex-1 flex flex-col overflow-hidden">
     <!-- Fleet Stats Bar -->
-    <div class="flex gap-4 m-2 px-3 py-2 bg-space-card border border-space-border rounded-lg">
+    <div class="flex gap-4 m-2 px-2 py-2 bg-space-card border border-space-border rounded-lg">
       <span class="text-xs font-semibold text-space-text-dim uppercase tracking-wider self-center mr-2">
         Fleet Stats
       </span>
@@ -38,7 +38,7 @@
         <span class="text-xs text-space-text-dim">Explored</span>
       </div>
       <!-- Game server stats (pushed via WebSocket every tick ~10s) -->
-      <div v-if="gameStats.online_players" class="flex items-center gap-3 ml-auto border-l border-space-border pl-4">
+      <div v-if="gameStats.online_players" class="flex items-center gap-2 ml-auto border-l border-space-border pl-4">
         <div class="flex flex-col items-center min-w-14">
           <span class="text-base font-bold text-space-cyan">{{ gameStats.online_players }} / {{ gameStats.total_players }}</span>
           <span class="text-[10px] text-space-text-dim">Online</span>
@@ -60,7 +60,7 @@
     </div>
 
     <!-- Bot table card -->
-    <div class="card overflow-hidden flex flex-col mx-2 px-3 py-2">
+    <div class="card overflow-hidden flex flex-col mx-2 px-2 py-2">
       <!-- Bot table -->
       <div class="flex-1 overflow-auto p-0">
         <table class="w-full text-sm">
@@ -106,7 +106,7 @@
               </td>
               <td class="px-0 py-1">
                 <span 
-                  class="badge px-3 py-0.5"
+                  class="badge px-2 py-0.5"
                   :class="{
                     'badge-green': bot.state === 'running',
                     'badge-yellow': bot.state === 'stopped' || bot.state === 'idle',
@@ -198,7 +198,7 @@
       <div class="grid grid-cols-3 gap-2 h-72">
 
         <!-- Activity Log -->
-        <div class="card flex flex-col overflow-hidden py-2 px-3">
+        <div class="card flex flex-col overflow-hidden py-2 px-2">
           <div class="flex items-center justify-between pb-1.5 border-b border-space-border shrink-0">
             <span class="text-xs font-semibold text-space-text-dim uppercase tracking-wider">Activity Log</span>
             <select v-model="activityBotFilter" class="input text-[11px] py-0 h-5 pl-1 max-w-[100px]">
@@ -225,7 +225,7 @@
         </div>
 
         <!-- Broadcast / Chat -->
-        <div class="card flex flex-col overflow-hidden py-2 px-3">
+        <div class="card flex flex-col overflow-hidden py-2 px-2">
           <div class="flex items-center justify-between pb-1.5 border-b border-space-border shrink-0">
             <span class="text-xs font-semibold text-space-text-dim uppercase tracking-wider">Broadcast / Chat</span>
             <span class="text-[11px] text-space-text-dim">{{ botStore.broadcastLogs.length }} msgs</span>
@@ -327,7 +327,7 @@
         </div>
 
         <!-- System Messages -->
-        <div class="card flex flex-col overflow-hidden py-2 px-3">
+        <div class="card flex flex-col overflow-hidden py-2 px-2">
           <div class="flex items-center gap-1 pb-1.5 border-b border-space-border shrink-0">
             <span class="text-xs font-semibold text-space-text-dim uppercase tracking-wider flex-1">System Messages</span>
             <select v-model="systemBotFilter" class="input text-[11px] py-0 h-5 pl-1 max-w-[90px]">
@@ -382,7 +382,7 @@
         placeholder="Type a message..." 
         class="flex-1 input text-xs px-2 py-1"
       />
-      <button @click="sendChat" class="btn btn-primary text-xs px-3 py-1">
+      <button @click="sendChat" class="btn btn-primary text-xs px-2 py-1">
         Send
       </button>
     </div>
@@ -422,7 +422,7 @@
                 v-for="routine in availableRoutines" 
                 :key="routine.id"
                 @click="startBotData.routine = routine.id"
-                class="p-3 border rounded cursor-pointer transition-colors"
+                class="p-2 border rounded cursor-pointer transition-colors"
                 :class="{
                   'border-space-accent bg-space-accent bg-opacity-10': startBotData.routine === routine.id,
                   'border-space-border hover:border-space-accent hover:bg-space-row-hover': startBotData.routine !== routine.id

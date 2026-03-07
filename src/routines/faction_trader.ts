@@ -371,6 +371,7 @@ export const factionTraderRoutine: Routine = async function* (ctx: RoutineContex
         const revenue = totalSold * route.sellPrice;
         bot.stats.totalTrades++;
         bot.stats.totalProfit += revenue;
+        bot.stats.totalEarned = (bot.stats.totalEarned ?? 0) + revenue;
         ctx.log("trade", `Faction sale complete: ${totalSold}x ${route.itemName} — ${revenue}cr revenue`);
         await factionDonateProfit(ctx, revenue);
       }
@@ -497,6 +498,7 @@ export const factionTraderRoutine: Routine = async function* (ctx: RoutineContex
           const revenue = inCargo * route.sellPrice;
           bot.stats.totalTrades++;
           bot.stats.totalProfit += revenue;
+          bot.stats.totalEarned = (bot.stats.totalEarned ?? 0) + revenue;
           ctx.log("trade", `Sold ${inCargo}x ${route.itemName} at ${route.destPoiName} — ${revenue}cr revenue`);
           await factionDonateProfit(ctx, revenue);
         } else {

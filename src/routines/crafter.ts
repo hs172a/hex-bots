@@ -549,12 +549,28 @@ async function grindCraftingXP(
     while (bot.state === "running") {
       if (!hasMaterialsAnywhere(ctx, target)) break;
 
-      await withdrawFactionMaterials(ctx, target);
-      await withdrawStorageMaterials(ctx, target);
+      // Calculate how many batches to pull BEFORE withdrawing so withdrawal fills cargo
+      // for multiple crafts rather than just 1 (the old bug: withdraw count defaulted to 1).
+      const reserved = bot.poi ? getReservedForGoals(bot.poi, bot.username) : new Map<string, number>();
+      let wantBatches = MAX_CRAFT_BATCH;
+      if (target.components.length > 0) {
+        const currentCargo = bot.inventory.reduce((s, i) => s + i.quantity, 0);
+        const slotsPerCraft = target.components.reduce((s, c) => s + c.quantity, 0);
+        const freeSlots = bot.cargoMax > 0 ? bot.cargoMax - currentCargo : 0;
+        const cargoCapBatches = slotsPerCraft > 0 ? Math.max(1, Math.floor(freeSlots / slotsPerCraft)) : MAX_CRAFT_BATCH;
+        const availBatches = target.components.reduce((min, c) => {
+          const avail = countItemAvailable(ctx, c.item_id, reserved);
+          return Math.min(min, Math.floor(avail / c.quantity));
+        }, MAX_CRAFT_BATCH);
+        wantBatches = Math.max(1, Math.min(MAX_CRAFT_BATCH, cargoCapBatches, availBatches));
+      }
+
+      await withdrawFactionMaterials(ctx, target, wantBatches);
+      await withdrawStorageMaterials(ctx, target, wantBatches);
 
       if (getMissingMaterial(ctx, target)) break;
 
-      // Calculate how many batches we can craft from current cargo
+      // Calculate actual batch from what landed in cargo
       let batchCount = 1;
       if (target.components.length > 0) {
         batchCount = target.components.reduce((min, c) => {
@@ -642,6 +658,36 @@ export function getRecipeProfitability(ctx: RoutineContext, recipe: Recipe): Rec
     fullyFunded: hasMaterialsAnywhere(ctx, recipe),
     bestSellPoi: bestSell?.poiId ?? null,
   };
+}
+
+/**
+ * Deposit all non-essential cargo items to faction storage (fallback: own storage).
+ * Called at start/end of cycle AND whenever cargo exceeds the safety threshold mid-craft.
+ */
+async function dumpCargo(ctx: RoutineContext): Promise<void> {
+  const { bot } = ctx;
+  if (!bot.docked) return;
+  const MIN_FUEL_CELLS = 5;
+  for (const item of [...bot.inventory]) {
+    if (item.quantity <= 0) continue;
+    const lower = item.itemId.toLowerCase();
+    if (lower.includes("energy_cell")) continue;
+    const qty = lower === "fuel_cell"
+      ? Math.max(0, item.quantity - MIN_FUEL_CELLS)
+      : item.quantity;
+    if (qty <= 0) continue;
+    const dResp = await bot.exec("faction_deposit_items", { item_id: item.itemId, quantity: qty });
+    if (!dResp.error) {
+      applyDepositDelta(ctx, item.itemId, qty, dResp.result as Record<string, unknown> || {}, "faction");
+    } else {
+      const dResp2 = await bot.exec("deposit_items", { item_id: item.itemId, quantity: qty });
+      if (!dResp2.error) {
+        applyDepositDelta(ctx, item.itemId, qty, dResp2.result as Record<string, unknown> || {}, "station");
+      } else {
+        ctx.log("warn", `[dumpCargo] Cannot deposit ${qty}x ${item.name || item.itemId}: ${dResp2.error.message}`);
+      }
+    }
+  }
 }
 
 /** Check if the bot has the required skill level to craft a recipe. */
@@ -802,13 +848,118 @@ export const crafterRoutine: Routine = async function* (ctx: RoutineContext) {
       }
     }
 
-    // ── Process each configured limit ──
+    // ── Phase 0: Process assigned crafter goals (highest priority) ──────────────
+    // Any fleet goal where crafter_bot === this bot's username gets processed here.
+    // Gatherer bots deliver materials to this station; once present, we craft and
+    // gift/deposit the result. Cargo is dumped whenever it nears capacity.
     let totalCrafted = 0;
-    const craftedSummary: string[] = [];   // "5x Fuel Cells"
-    const prereqSummary: string[] = [];    // "3x Refined Alloy (prereq)"
-    const missingSummary: string[] = [];   // "Armor Plate (2x titanium_ingot)"
-    const skillSummary: string[] = [];     // "Solarian Composite (skill too low, crafted 5x Refined Iron for XP)"
+    const craftedSummary: string[] = [];
+    const prereqSummary: string[] = [];
+    const missingSummary: string[] = [];
+    const skillSummary: string[] = [];
     const atLimitCount = { count: 0 };
+
+    yield "crafter_goals";
+    {
+      const allBotSettings = readSettings();
+      for (const [settingsKey, botSettings] of Object.entries(allBotSettings)) {
+        if (bot.state !== "running") break;
+        if (settingsKey === "crafter" || settingsKey === "gatherer" || typeof botSettings !== "object" || !botSettings) continue;
+        const bs = botSettings as Record<string, unknown>;
+        const arr = (bs.goals as any[] | undefined) ?? [];
+        const legacy = (bs.goal || null) as any | null;
+        const goals: any[] = arr.length > 0 ? arr : (legacy ? [legacy] : []);
+        for (const goal of goals) {
+          if (bot.state !== "running") break;
+          if (!goal?.crafter_bot || goal.crafter_bot !== bot.username) continue;
+          if (goal.goal_type !== "craft" && goal.goal_type !== "crafter") continue;
+
+          const recipe = recipes.find(r =>
+            r.output_item_id === goal.target_id ||
+            r.recipe_id === goal.target_id ||
+            (goal.target_name && r.name === goal.target_name)
+          );
+          if (!recipe) {
+            ctx.log("warn", `[CrafterGoal] No recipe for '${goal.target_name || goal.target_id}' — skipping`);
+            continue;
+          }
+          if (!hasMaterialsAnywhere(ctx, recipe)) {
+            ctx.log("craft", `[CrafterGoal] Waiting for materials: ${goal.target_name || recipe.name}`);
+            continue;
+          }
+          ctx.log("craft", `[CrafterGoal] Crafting: ${goal.target_name || recipe.name}${goal.gift_target ? ` → gift to ${goal.gift_target}` : ""}`);
+
+          let goalCrafted = 0;
+          while (bot.state === "running" && hasMaterialsAnywhere(ctx, recipe)) {
+            // Dump cargo if nearly full before pulling more materials
+            if (bot.cargoMax > 0 && bot.inventory.reduce((s, i) => s + i.quantity, 0) / bot.cargoMax > 0.75) {
+              await dumpCargo(ctx);
+            }
+            const reserved = bot.poi ? getReservedForGoals(bot.poi) : new Map<string, number>();
+            let wantBatches = MAX_CRAFT_BATCH;
+            if (recipe.components.length > 0) {
+              const currentCargo = bot.inventory.reduce((s, i) => s + i.quantity, 0);
+              const slotsPerCraft = recipe.components.reduce((s, c) => s + c.quantity, 0);
+              const freeSlots = bot.cargoMax > 0 ? bot.cargoMax - currentCargo : 999;
+              const cargoCapBatches = slotsPerCraft > 0 ? Math.max(1, Math.floor(freeSlots / slotsPerCraft)) : MAX_CRAFT_BATCH;
+              const availBatches = recipe.components.reduce((min, c) => {
+                const avail = countItemAvailable(ctx, c.item_id, reserved);
+                return Math.min(min, Math.floor(avail / c.quantity));
+              }, MAX_CRAFT_BATCH);
+              wantBatches = Math.max(1, Math.min(MAX_CRAFT_BATCH, cargoCapBatches, availBatches));
+            }
+            await withdrawFactionMaterials(ctx, recipe, wantBatches);
+            await withdrawStorageMaterials(ctx, recipe, wantBatches);
+            if (getMissingMaterial(ctx, recipe)) break;
+
+            let batchCount = 1;
+            if (recipe.components.length > 0) {
+              batchCount = recipe.components.reduce((min, c) => {
+                const have = countInCargo(ctx, c.item_id);
+                return Math.min(min, Math.floor(have / c.quantity));
+              }, 99);
+              batchCount = Math.max(1, Math.min(batchCount, MAX_CRAFT_BATCH));
+            }
+            yield `crafter_goal_${recipe.recipe_id}`;
+            const craftResp = await bot.exec("craft", { recipe_id: recipe.recipe_id, count: batchCount });
+            if (craftResp.error) {
+              ctx.log("error", `[CrafterGoal] ${recipe.name}: ${craftResp.error.message}`);
+              break;
+            }
+            const result = craftResp.result as Record<string, unknown> || {};
+            const qty = (result?.count as number) || (result?.quantity as number) || batchCount;
+            goalCrafted += qty;
+            totalCrafted += qty;
+            bot.stats.totalCrafted += qty;
+            applyCraftDelta(ctx, recipe, batchCount, result);
+          }
+
+          if (goalCrafted > 0) {
+            craftedSummary.push(`${goalCrafted}x ${recipe.name} [goal]`);
+            const outputId = recipe.output_item_id || recipe.recipe_id;
+            const outputItem = bot.inventory.find(i => i.itemId === outputId);
+            if (outputItem && outputItem.quantity > 0) {
+              if (goal.gift_target) {
+                const giftResp = await bot.exec("send_gift", {
+                  recipient: goal.gift_target,
+                  item_id: outputId,
+                  quantity: outputItem.quantity,
+                });
+                if (!giftResp.error) {
+                  ctx.log("trade", `[CrafterGoal] Gifted ${outputItem.quantity}x ${recipe.name} to ${goal.gift_target}`);
+                  applyDepositDelta(ctx, outputId, outputItem.quantity, giftResp.result as Record<string, unknown> || {}, "station");
+                } else {
+                  ctx.log("error", `[CrafterGoal] Gift to ${goal.gift_target} failed: ${giftResp.error.message} — depositing to storage`);
+                  await dumpCargo(ctx);
+                }
+              } else {
+                await dumpCargo(ctx);
+              }
+            }
+          }
+        }
+      }
+    }
 
     for (const { recipeId, limit } of settings.craftLimits) {
       if (bot.state !== "running") break;

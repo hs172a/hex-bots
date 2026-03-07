@@ -1,30 +1,6 @@
 <template>
   <div class="flex-1 flex gap-2 p-2 overflow-hidden">
 
-    <!-- Sidebar: bot list -->
-    <div class="w-52 bg-space-card border border-space-border rounded-lg flex flex-col overflow-hidden flex-shrink-0">
-      <div class="px-3 py-2 border-b border-space-border">
-        <h3 class="text-xs font-semibold text-space-text-dim uppercase tracking-wider">Bots</h3>
-      </div>
-      <div class="flex-1 overflow-auto p-1.5 space-y-0.5">
-        <div
-          v-for="bot in botStore.bots"
-          :key="bot.username"
-          @click="selectBot(bot.username)"
-          class="w-full px-2 py-1.5 text-sm rounded-md cursor-pointer border transition-colors"
-          :class="selectedBot === bot.username
-            ? 'bg-[rgba(88,166,255,0.08)] border-space-accent text-space-accent'
-            : 'border-transparent text-space-text hover:bg-space-row-hover'"
-        >
-          <div class="flex items-center gap-1.5 min-w-0">
-            <span v-if="(bot as any).empire" :title="empireName((bot as any).empire)" class="shrink-0 leading-none">{{ empireIcon((bot as any).empire) }}</span>
-            <span class="truncate">{{ bot.username }}</span>
-          </div>
-        </div>
-        <div v-if="botStore.bots.length === 0" class="text-xs text-space-text-dim italic p-2">No bots</div>
-      </div>
-    </div>
-
     <!-- Main Content -->
     <div class="flex-1 bg-space-card border border-space-border rounded-lg flex flex-col overflow-hidden">
 
@@ -186,6 +162,7 @@
                     <button
                       @click="completeM(m.mission_id || m.id)"
                       :disabled="!m.is_complete || !!inFlight[m.mission_id || m.id]"
+                      :title="!!inFlight[m.mission_id || m.id] ? 'Claim request in progress…' : !m.is_complete ? 'Complete all objectives first to claim rewards' : 'Claim mission rewards'"
                       class="flex-1 text-xs px-3 py-1.5 rounded font-semibold transition-colors"
                       :class="m.is_complete
                         ? 'bg-green-600 hover:bg-green-500 text-white shadow-sm'
@@ -481,7 +458,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, reactive } from 'vue';
+import { ref, computed, reactive, watch, onMounted } from 'vue';
 import { useBotStore } from '../stores/botStore';
 import { empireIcon, empireName } from '../utils/empires';
 import {
@@ -494,6 +471,14 @@ defineEmits(['openProfile']);
 
 const botStore = useBotStore();
 const selectedBot = ref<string | null>(null);
+
+// ── Auto-sync: when a bot profile is opened from another page, auto-select here
+onMounted(() => {
+  if (botStore.selectedBot && !selectedBot.value) selectBot(botStore.selectedBot);
+});
+watch(() => botStore.selectedBot, (username) => {
+  if (username && username !== selectedBot.value) selectBot(username);
+});
 
 // ── Manual mission target (mission_runner setting) ──────────────
 const manualMissionId = computed(() =>

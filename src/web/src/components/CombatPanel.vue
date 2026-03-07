@@ -76,6 +76,26 @@
       </div>
     </div>
 
+    <!-- Reload Weapon -->
+    <div class="card py-2 px-3">
+      <h4 class="text-xs font-semibold text-space-text-dim uppercase mb-2">🔄 Reload Weapon</h4>
+      <div class="flex gap-2 items-center">
+        <select v-model="reloadWeapon" class="input text-xs flex-1 !p-1">
+          <option value="">{{ weaponMods.length > 0 ? 'Select weapon...' : 'No weapons' }}</option>
+          <option v-for="wep in weaponMods" :key="wep.module_id || wep.id" :value="wep.module_id || wep.id">
+            {{ wep.name || wep.type_id || 'Weapon' }} ({{ wep.current_ammo ?? 0 }}/{{ wep.magazine_size ?? '?' }})
+          </option>
+        </select>
+        <select v-model="reloadAmmo" class="input text-xs w-40 !p-1">
+          <option value="">{{ ammoItems.length > 0 ? 'Select ammo...' : 'No ammo' }}</option>
+          <option v-for="ammo in ammoItems" :key="ammo.itemId" :value="ammo.itemId">
+            {{ ammo.name }} ({{ ammo.quantity }})
+          </option>
+        </select>
+        <button @click="execReload" :disabled="!reloadWeapon || !reloadAmmo" class="btn text-xs px-3 py-1 disabled:opacity-50">🔄 Reload</button>
+      </div>
+    </div>
+
     <!-- Nearby entities -->
     <div class="card py-2 px-3">
       <div class="flex items-center justify-between mb-2">
@@ -172,6 +192,8 @@ const scanningId = ref<string | null>(null);
 const attackingId = ref<string | null>(null);
 const scanResult = ref<Record<string, unknown> | null>(null);
 const currentStance = ref<'fire' | 'brace' | 'flee'>('fire');
+const reloadWeapon = ref('');
+const reloadAmmo = ref('');
 
 const currentBot = computed(() => botStore.bots.find(b => b.username === props.bot.username) || props.bot);
 const hullPct = computed(() => currentBot.value.maxHull > 0 ? Math.round((currentBot.value.hull / currentBot.value.maxHull) * 100) : 0);
@@ -180,6 +202,11 @@ const shieldPct = computed(() => currentBot.value.maxShield > 0 ? Math.round((cu
 const weaponMods = computed(() => {
   const inv = (currentBot.value as any).modules || [];
   return inv.filter((m: any) => m.ammo_type || m.slot_type === 'weapon' || (m.damage != null && m.damage > 0));
+});
+
+const ammoItems = computed(() => {
+  const cargo = (currentBot.value as any).inventory || [];
+  return cargo.filter((i: any) => (i.itemId || '').includes('ammo') || (i.itemId || '').includes('rounds') || (i.name || '').toLowerCase().includes('ammo'));
 });
 
 const combatLogs = computed(() => {
@@ -267,6 +294,18 @@ async function doAdvance() {
 async function doRetreat() {
   const r = await execCmd('retreat');
   emit('notif', r.ok ? 'Retreating from battle' : (r.error || 'Failed to retreat'), r.ok ? 'warn' : 'error');
+}
+
+async function execReload() {
+  if (!reloadWeapon.value || !reloadAmmo.value) return;
+  const r = await execCmd('reload', { weapon_instance_id: reloadWeapon.value, ammo_item_id: reloadAmmo.value });
+  if (r.ok) {
+    emit('notif', 'Weapon reloaded successfully', 'success');
+    reloadWeapon.value = '';
+    reloadAmmo.value = '';
+  } else {
+    emit('notif', r.error || 'Failed to reload weapon', 'error');
+  }
 }
 
 function formatKey(k: string): string {

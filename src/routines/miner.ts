@@ -761,6 +761,7 @@ export const minerRoutineV2: Routine = async function* (ctx: RoutineContext) {
         ctx.mapStore.recordMiningYield(bot.system, bot.poi, { item_id: oreId, name: oreName });
         oresMinedMap.set(oreName, (oresMinedMap.get(oreName) || 0) + 1);
         bot.stats.totalMined++;
+        bot.stats.totalOreUnits = (bot.stats.totalOreUnits ?? 0) + 1;
       }
 
       // Update cargo from mine result (no additional API call)

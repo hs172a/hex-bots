@@ -1,27 +1,6 @@
 <template>
   <div class="flex-1 flex gap-2 p-2 overflow-hidden">
 
-    <!-- Sidebar: bot selector -->
-    <div class="w-56 bg-space-card border border-space-border rounded-lg flex flex-col overflow-hidden flex-shrink-0">
-      <div class="px-3 py-2 border-b border-space-border">
-        <h3 class="text-xs font-semibold text-space-text-dim uppercase tracking-wider">Bots</h3>
-      </div>
-      <div class="flex-1 overflow-auto p-2 space-y-0.5">
-        <div
-          v-for="bot in botStore.bots"
-          :key="bot.username"
-          @click="selectBot(bot.username)"
-          class="w-full px-2 py-2 text-sm rounded-md cursor-pointer border transition-colors"
-          :class="selectedBot === bot.username
-            ? 'bg-[rgba(88,166,255,0.1)] border-space-accent text-space-accent'
-            : 'border-transparent text-space-text hover:bg-space-row-hover'"
-        >
-          <span class="truncate">{{ bot.username }}</span>
-        </div>
-        <div v-if="botStore.bots.length === 0" class="text-xs text-space-text-dim italic p-2">No bots</div>
-      </div>
-    </div>
-
     <!-- Main panel -->
     <div class="flex-1 bg-space-card border border-space-border rounded-lg flex flex-col overflow-hidden">
 
@@ -184,7 +163,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, watch } from 'vue';
+import { ref, computed, watch, onMounted } from 'vue';
 import { useBotStore } from '../stores/botStore';
 
 const botStore = useBotStore();
@@ -192,6 +171,14 @@ const botStore = useBotStore();
 // ── State ─────────────────────────────────────────────────────
 
 const selectedBot = ref<string | null>(null);
+
+// ── Auto-sync: pre-select bot from profile navigation
+onMounted(() => {
+  if (botStore.selectedBot && !selectedBot.value) selectBot(botStore.selectedBot);
+});
+watch(() => botStore.selectedBot, (username) => {
+  if (username && username !== selectedBot.value) selectBot(username);
+});
 const entries = ref<any[]>([]);
 const loading = ref(false);
 const hasMore = ref(false);

@@ -82,6 +82,13 @@ export const salvagerRoutine: Routine = async function* (ctx: RoutineContext) {
   const settings0 = getSalvagerSettings(bot.username);
   const homeSystem0 = settings0.homeSystem || startSystem;
 
+  // ── Startup: release any stale tow from a previous interrupted run ──
+  // release_tow is a no-op when not currently towing, so errors are silently ignored.
+  if (settings0.enableTowing) {
+    const relResp = await bot.exec("release_tow");
+    if (!relResp.error) ctx.log("salvage", "Released stale tow from previous run");
+  }
+
   // ── Startup: return home and dump non-fuel cargo to storage ──
   await bot.refreshCargo();
   const nonFuelCargo = bot.inventory.filter(i => {
@@ -339,6 +346,12 @@ export const salvagerRoutine: Routine = async function* (ctx: RoutineContext) {
     }
     bot.docked = true;
 
+    // ── Set home base at current station for death-recovery respawn ──
+    // Called once per cycle so the bot always respawns at the latest known station.
+    if (settings.enableTowing) {
+      await bot.exec("set_home_base");
+    }
+
     // ── Process towed wreck at salvage yard (sell_wreck or scrap_wreck) ──
     if (settings.enableTowing) {
       if (settings.depositMode === "sell") {
@@ -357,6 +370,9 @@ export const salvagerRoutine: Routine = async function* (ctx: RoutineContext) {
           }
           // v0.174.1: scrap_wreck deposits to station storage — refresh so we see the new items
           await bot.refreshStorage();
+        } else {
+          // No towed wreck to scrap — release any partial tow state
+          await bot.exec("release_tow");
         }
       }
     }

@@ -1,5 +1,5 @@
 <template>
-  <div class="flex-1 flex flex-col gap-2 py-2 px-0 overflow-hidden">
+  <div class="flex-1 flex flex-col gap-2 pt-2 px-0 overflow-hidden">
     <!-- Manual Control Panel -->
     <div class="card py-2 px-2 flex flex-col flex-1 overflow-hidden">
       <div class="py-1 px-0 border-b border-space-border bg-space-card">
@@ -11,7 +11,7 @@
 
           <!-- Travel -->
           <div class="flex gap-2 items-center self-start">
-            <label class="text-xs text-space-text-dim w-20">Travel</label>
+            <label class="text-xs text-space-text-dim w-18">Travel</label>
             <select v-model="travelPoi" class="input text-xs flex-1 !p-1">
               <option value="">Select POI...</option>
               <option v-for="poi in systemPois" :key="poi.id" :value="poi.id">
@@ -92,20 +92,27 @@
           </div>
 
           <!-- Dock/Undock / Mine/Scan / Refuel/Repair -->
-          <div class="flex gap-2 items-center col-span-2">
-            <label class="text-xs text-space-text-dim w-20"></label>
-            <button @click="execCommand('dock')" class="btn btn-secondary text-xs px-3 py-1 flex-1">🏠 Dock</button>
-            <button @click="execCommand('undock')" class="btn btn-secondary text-xs px-3 py-1 flex-1">🚀 Undock</button>
-            <button @click="execCommand('mine')" class="btn btn-secondary text-xs px-3 py-1 flex-1">⛏️ Mine</button>
-            <button @click="execCommand('scan')" class="btn btn-secondary text-xs px-3 py-1 flex-1">🔍 Scan</button>
-            <button @click="execCommand('refuel')" class="btn btn-secondary text-xs px-3 py-1 flex-1">⛽ Refuel</button>
-            <button @click="execCommand('repair')" class="btn btn-secondary text-xs px-3 py-1 flex-1">🔧 Repair</button>
+          <div class="flex gap-2 items-center">
+            <label class="text-xs text-space-text-dim w-18"></label>
+            <button @click="execCommand('dock')" class="btn btn-secondary text-xs px-3 py-1">🏠 Dock</button>
+            <button @click="execCommand('undock')" class="btn btn-secondary text-xs px-3 py-1">🚀 Undock</button>
+            <button @click="execCommand('mine')" class="btn btn-secondary text-xs px-3 py-1">⛏️ Mine</button>
+            <button @click="execCommand('scan')" class="btn btn-secondary text-xs px-3 py-1">🔍 Scan</button>
+            <button @click="execCommand('refuel')" class="btn btn-secondary text-xs px-3 py-1">⛽ Refuel</button>
+            <button @click="execCommand('repair')" class="btn btn-secondary text-xs px-3 py-1">🔧 Repair</button>
+          </div>
+
+          <!-- Withdraw Credits (gifts arrive as stored credits) -->
+          <div class="flex gap-2 items-center">
+            <label class="text-xs text-space-text-dim w-18">W.Credits</label>
+            <input v-model.number="withdrawCreditsAmount" type="number" min="1" class="input text-xs w-28 !p-1 scrollbar-dark" placeholder="Amount" />
+            <button @click="execWithdrawCredits" class="btn text-xs px-3 py-1" title="Collect gifted/stored credits into your balance">Collect ₡</button>
           </div>
 
           <!-- Craft -->
           <div class="flex flex-col gap-1 col-span-2">
             <div class="flex gap-2 items-center">
-              <label class="text-xs text-space-text-dim w-20">Craft</label>
+              <label class="text-xs text-space-text-dim w-18">Craft</label>
               <select v-model="craftRecipe" class="input text-xs flex-1 !p-1">
                 <option value="">{{ craftableRecipes.length > 0 ? `Select recipe... (${craftableRecipes.length} available)` : (recipes.length > 0 ? 'No craftable recipes' : 'Loading...') }}</option>
                 <option v-for="r in craftableRecipes" :key="r.id" :value="r.id">
@@ -140,7 +147,7 @@
 
           <!-- Sell -->
           <div class="flex gap-2 items-center">
-            <label class="text-xs text-space-text-dim w-20">Sell</label>
+            <label class="text-xs text-space-text-dim w-18">Sell</label>
             <select v-model="sellItem" class="input text-xs flex-1 !p-1">
               <option value="">No items</option>
               <option v-for="item in inventory" :key="item.itemId" :value="item.itemId">
@@ -153,7 +160,7 @@
 
           <!-- Buy -->
           <div class="flex gap-2 items-center">
-            <label class="text-xs text-space-text-dim w-20">Buy</label>
+            <label class="text-xs text-space-text-dim w-18">Buy</label>
             <select v-model="buyItem" class="input text-xs flex-1 !p-1">
               <option value="">No market data</option>
               <option v-for="item in marketItems" :key="item.item_id" :value="item.item_id">
@@ -164,61 +171,9 @@
             <button @click="execBuy" class="btn text-xs px-3 py-1">Buy</button>
           </div>
 
-          <!-- Deposit -->
-          <div class="flex gap-2 items-center">
-            <label class="text-xs text-space-text-dim w-20">Deposit</label>
-            <select v-model="depositItem" class="input text-xs flex-1 !p-1">
-              <option value="">No items</option>
-              <option v-for="item in inventory" :key="item.itemId" :value="item.itemId">
-                {{ item.name }} ({{ item.quantity }})
-              </option>
-            </select>
-            <input v-model.number="depositQty" type="number" min="1" class="input text-xs w-16 !p-1 scrollbar-dark" value="1">
-            <button @click="execDeposit" class="btn text-xs px-3 py-1">Deposit</button>
-          </div>
-
-          <!-- Withdraw -->
-          <div class="flex gap-2 items-center">
-            <label class="text-xs text-space-text-dim w-20">Withdraw</label>
-            <select v-model="withdrawItem" class="input text-xs flex-1 !p-1">
-              <option value="">No items</option>
-              <option v-for="item in storage" :key="item.itemId" :value="item.itemId">
-                {{ item.name }} ({{ item.quantity }})
-              </option>
-            </select>
-            <input v-model.number="withdrawQty" type="number" min="1" class="input text-xs w-16 !p-1 scrollbar-dark" value="1">
-            <button @click="execWithdraw" class="btn text-xs px-3 py-1">Withdraw</button>
-          </div>
-
-          <!-- Faction Deposit -->
-          <div class="flex gap-2 items-center">
-            <label class="text-xs text-space-accent w-20">F.Deposit</label>
-            <select v-model="factionDepositItem" class="input text-xs flex-1 !p-1">
-              <option value="">No items</option>
-              <option v-for="item in inventory" :key="item.itemId" :value="item.itemId">
-                {{ item.name }} ({{ item.quantity }})
-              </option>
-            </select>
-            <input v-model.number="factionDepositQty" type="number" min="1" class="input text-xs w-16 !p-1 scrollbar-dark" value="1">
-            <button @click="execFactionDeposit" class="btn text-xs px-3 py-1 border-space-accent/50">F.Deposit</button>
-          </div>
-
-          <!-- Faction Withdraw -->
-          <div class="flex gap-2 items-center">
-            <label class="text-xs text-space-accent w-20">F.Withdraw</label>
-            <select v-model="factionWithdrawItem" class="input text-xs flex-1 !p-1">
-              <option value="">No items</option>
-              <option v-for="item in factionStorage" :key="item.itemId" :value="item.itemId">
-                {{ item.name }} ({{ item.quantity }})
-              </option>
-            </select>
-            <input v-model.number="factionWithdrawQty" type="number" min="1" class="input text-xs w-16 !p-1 scrollbar-dark" value="1">
-            <button @click="execFactionWithdraw" class="btn text-xs px-3 py-1 border-space-accent/50">F.Withdraw</button>
-          </div>
-
           <!-- Gift Item -->
           <div class="flex gap-2 items-center">
-            <label class="text-xs text-space-text-dim w-20">Gift Item</label>
+            <label class="text-xs text-space-text-dim w-18">Gift Item</label>
             <select v-model="giftTarget" class="input text-xs w-32 !p-1">
               <option value="">No bots</option>
               <option v-for="b in otherBots" :key="b.username" :value="b.username">
@@ -235,9 +190,76 @@
             <button @click="execGiftItem" class="btn text-xs px-3 py-1">Send</button>
           </div>
 
+          <!-- Buy Order (create_buy_order at market price) -->
+          <div class="flex gap-2 items-center">
+            <label class="text-xs text-space-cyan w-18">Buy Order</label>
+            <select v-model="buyOrderItem" class="input text-xs flex-1 !p-1">
+              <option value="">No market data</option>
+              <option v-for="item in marketItems" :key="item.item_id" :value="item.item_id">
+                {{ item.name || item.item_id }}
+              </option>
+            </select>
+            <input v-model.number="buyOrderQty" type="number" min="1" class="input text-xs w-14 !p-1 scrollbar-dark" value="1" />
+            <span class="text-[11px] text-space-text-dim shrink-0">₡</span>
+            <input v-model.number="buyOrderPrice" type="number" min="1" class="input text-xs w-18 !p-1 scrollbar-dark" placeholder="Price" />
+            <button @click="execBuyOrder" :disabled="!buyOrderItem || buyOrderPrice <= 0" class="btn text-xs px-3 py-1 border-space-cyan/50 text-space-cyan disabled:opacity-40">Order</button>
+          </div>
+
+          <!-- Deposit -->
+          <div class="flex gap-2 items-center">
+            <label class="text-xs text-space-text-dim w-18">Deposit</label>
+            <select v-model="depositItem" class="input text-xs flex-1 !p-1">
+              <option value="">No items</option>
+              <option v-for="item in inventory" :key="item.itemId" :value="item.itemId">
+                {{ item.name }} ({{ item.quantity }})
+              </option>
+            </select>
+            <input v-model.number="depositQty" type="number" min="1" class="input text-xs w-16 !p-1 scrollbar-dark" value="1">
+            <button @click="execDeposit" class="btn text-xs px-3 py-1">Deposit</button>
+          </div>
+
+          <!-- Withdraw -->
+          <div class="flex gap-2 items-center">
+            <label class="text-xs text-space-text-dim w-18">Withdraw</label>
+            <select v-model="withdrawItem" class="input text-xs flex-1 !p-1">
+              <option value="">No items</option>
+              <option v-for="item in storage" :key="item.itemId" :value="item.itemId">
+                {{ item.name }} ({{ item.quantity }})
+              </option>
+            </select>
+            <input v-model.number="withdrawQty" type="number" min="1" class="input text-xs w-16 !p-1 scrollbar-dark" value="1">
+            <button @click="execWithdraw" class="btn text-xs px-3 py-1">Withdraw</button>
+          </div>
+
+          <!-- Faction Deposit -->
+          <div class="flex gap-2 items-center">
+            <label class="text-xs text-space-accent w-18">F.Deposit</label>
+            <select v-model="factionDepositItem" class="input text-xs flex-1 !p-1">
+              <option value="">No items</option>
+              <option v-for="item in inventory" :key="item.itemId" :value="item.itemId">
+                {{ item.name }} ({{ item.quantity }})
+              </option>
+            </select>
+            <input v-model.number="factionDepositQty" type="number" min="1" class="input text-xs w-16 !p-1 scrollbar-dark" value="1">
+            <button @click="execFactionDeposit" class="btn text-xs px-3 py-1 border-space-accent/50">F.Deposit</button>
+          </div>
+
+          <!-- Faction Withdraw -->
+          <div class="flex gap-2 items-center">
+            <label class="text-xs text-space-accent w-18">F.Withdraw</label>
+            <select v-model="factionWithdrawItem" class="input text-xs flex-1 !p-1">
+              <option value="">No items</option>
+              <option v-for="item in factionStorage" :key="item.itemId" :value="item.itemId">
+                {{ item.name }} ({{ item.quantity }})
+              </option>
+            </select>
+            <input v-model.number="factionWithdrawQty" type="number" min="1" class="input text-xs w-16 !p-1 scrollbar-dark" value="1">
+            <button @click="execFactionWithdraw" class="btn text-xs px-3 py-1 border-space-accent/50">F.Withdraw</button>
+          </div>
+
           <!-- Send Credits -->
           <div class="flex gap-2 items-center">
-            <label class="text-xs text-space-text-dim w-20">Send Credits</label>
+            <label class="text-xs text-space-text-dim w-18">Send Credits</label>
             <select v-model="creditsTarget" class="input text-xs flex-1 !p-1">
               <option value="">No bots</option>
               <option v-for="b in otherBots" :key="b.username" :value="b.username">
@@ -248,16 +270,9 @@
             <button @click="execSendCredits" class="btn text-xs px-3 py-1">Send</button>
           </div>
 
-          <!-- Withdraw Credits (gifts arrive as stored credits) -->
-          <div class="flex gap-2 items-center">
-            <label class="text-xs text-space-text-dim w-20">W.Credits</label>
-            <input v-model.number="withdrawCreditsAmount" type="number" min="1" class="input text-xs w-28 !p-1 scrollbar-dark" placeholder="Amount" />
-            <button @click="execWithdrawCredits" class="btn text-xs px-3 py-1" title="Collect gifted/stored credits into your balance">Collect ₡</button>
-          </div>
-
           <!-- Status Commands -->
-          <div class="flex gap-2 items-center">
-            <label class="text-xs text-space-text-dim"></label>
+          <div class="flex gap-2 items-center col-span-2">
+            <label class="text-xs text-space-text-dim w-18"></label>
             <button @click="execCommand('get_status')" class="btn text-xs px-2 py-1">🚀 Status</button>
             <button @click="execCommand('get_cargo')" class="btn text-xs px-2 py-1">📦 Cargo</button>
             <button @click="execCommand('view_storage')" class="btn text-xs px-2 py-1">🏠 Storage</button>
@@ -288,7 +303,7 @@
 
           <!-- Custom Command -->
           <div class="flex gap-2 items-center col-span-2">
-            <label class="text-xs text-space-text-dim w-20">Custom</label>
+            <label class="text-xs text-space-text-dim w-18">Custom</label>
             <input v-model="customCmd" type="text" placeholder="command" class="input text-xs w-32 !p-1">
             <input v-model="customParams" type="text" placeholder='{"key":"val"}' class="input text-xs flex-1 !p-1">
             <button @click="execCustom" class="btn btn-primary text-xs px-3 py-1">Run</button>
@@ -299,7 +314,7 @@
     </div>
 
     <!-- Activity Log -->
-    <div class="card py-2 px-2 flex flex-col h-56">
+    <div class="card py-2 px-2 flex flex-col h-60">
       <div class="flex py-1 px-0 items-center justify-between border-b border-space-border bg-space-card">
         <div class="flex items-center gap-2">
           <h3 class="text-xs font-semibold text-space-text-dim uppercase">Activity Log</h3>
@@ -362,6 +377,9 @@ const sellItem = ref('');
 const sellQty = ref(1);
 const buyItem = ref('');
 const buyQty = ref(1);
+const buyOrderItem = ref('');
+const buyOrderQty = ref(1);
+const buyOrderPrice = ref(0);
 const depositItem = ref('');
 const depositQty = ref(1);
 const withdrawItem = ref('');
@@ -378,6 +396,8 @@ const creditsTarget = ref('');
 const creditsAmount = ref(100);
 const customCmd = ref('');
 const customParams = ref('');
+const reloadWeapon = ref('');
+const reloadAmmo = ref('');
 
 // Data state
 const systemPois = ref<any[]>([]);
@@ -406,6 +426,20 @@ const cargoFree = computed(() => {
   return Math.max(0, max - used);
 });
 
+const weaponModules = computed(() => {
+  const mods = (currentBot.value as any).modules || [];
+  return mods.filter((m: any) => m.ammo_type || m.slot_type === 'weapon' || (m.damage != null && m.damage > 0));
+});
+
+const ammoItems = computed(() => {
+  return inventory.value.filter((i: any) => (i.itemId || '').includes('ammo') || (i.itemId || '').includes('rounds') || (i.name || '').toLowerCase().includes('ammo'));
+});
+
+watch(buyOrderItem, (itemId) => {
+  if (!itemId) { buyOrderPrice.value = 0; return; }
+  const item = marketItems.value.find((i: any) => i.item_id === itemId);
+  if (item) buyOrderPrice.value = item.buy_price ?? 0;
+});
 watch(sellItem, (itemId) => {
   if (!itemId) return;
   const item = inventory.value.find((i: any) => i.itemId === itemId);
@@ -467,7 +501,7 @@ function scrollToBottom() {
   });
 }
 watch(() => botLogs.value.length, scrollToBottom);
-defineExpose({ scrollToBottom });
+defineExpose({ scrollToBottom, ldRelocating });
 
 const knownSystems = computed(() => {
   const systems: any[] = [];
@@ -887,7 +921,43 @@ async function ldDoRelocationStep() {
     ldTimer = setTimeout(() => ldDoRelocationStep(), 12000);
   } else {
     ldRelocating.value = false;
+    ldAutoDock();
   }
+}
+
+async function ldAutoDock() {
+  // Brief pause to let the server register the jump before we query POIs
+  await new Promise(r => setTimeout(r, 2500));
+
+  // Try to find a dockable station from cached map data first
+  const sysId = currentBot.value?.system;
+  if (!sysId) return;
+
+  const findStation = (pois: any[]) =>
+    pois.find((p: any) => p.type === 'station' || p.poi_type === 'station' ||
+      p.type === 'outpost' || p.poi_type === 'outpost' ||
+      p.type === 'base' || p.poi_type === 'base');
+
+  let pois: any[] = (botStore.mapData[sysId] as any)?.pois || [];
+  let station = findStation(pois);
+
+  if (!station) {
+    // Cache miss — query the server
+    const sysRes = await execAsync('get_system', { system_id: sysId });
+    pois = sysRes.data?.pois || [];
+    station = findStation(pois);
+  }
+
+  if (!station) {
+    ldRouteError.value = 'Arrived at destination — no station found. Dock manually.';
+    return;
+  }
+
+  const poiId = station.id || station.poi_id;
+  const travelRes = await execAsync('travel', { target_poi: poiId });
+  if (travelRes && !travelRes.ok) return; // travel failed silently
+  await new Promise(r => setTimeout(r, 10000));
+  await execAsync('dock');
 }
 
 // Exec actions
@@ -902,6 +972,10 @@ function refreshPublicCatalog() {
 function execCraft() { if (craftRecipe.value) execCommand('craft', { recipe_id: craftRecipe.value, count: craftQty.value }); }
 function execSell() { if (sellItem.value) execCommand('sell', { item_id: sellItem.value, quantity: sellQty.value }); }
 function execBuy() { if (buyItem.value) execCommand('buy', { item_id: buyItem.value, quantity: buyQty.value }); }
+function execBuyOrder() {
+  if (!buyOrderItem.value || buyOrderPrice.value <= 0) return;
+  execCommand('create_buy_order', { item_id: buyOrderItem.value, quantity: buyOrderQty.value, price_each: buyOrderPrice.value });
+}
 function execDeposit() { if (depositItem.value) execCommand('deposit_items', { item_id: depositItem.value, quantity: depositQty.value }); }
 function execWithdraw() { if (withdrawItem.value) execCommand('withdraw_items', { item_id: withdrawItem.value, quantity: withdrawQty.value }); }
 function execWithdrawCredits() { if (withdrawCreditsAmount.value > 0) execCommand('withdraw_credits', { amount: withdrawCreditsAmount.value }); }
@@ -909,6 +983,7 @@ function execFactionDeposit() { if (factionDepositItem.value) execCommand('facti
 function execFactionWithdraw() { if (factionWithdrawItem.value) execCommand('faction_withdraw_items', { item_id: factionWithdrawItem.value, quantity: factionWithdrawQty.value }); }
 function execGiftItem() { if (giftTarget.value && giftItem.value) execCommand('send_gift', { recipient: giftTarget.value, item_id: giftItem.value, quantity: giftQty.value }); }
 function execSendCredits() { if (creditsTarget.value) execCommand('send_gift', { recipient: creditsTarget.value, credits: creditsAmount.value }); }
+function execReload() { if (reloadWeapon.value && reloadAmmo.value) execCommand('reload', { weapon_instance_id: reloadWeapon.value, ammo_item_id: reloadAmmo.value }); }
 
 async function execCustom() {
   if (!customCmd.value) return;

@@ -39,6 +39,7 @@ import {
   sleep,
   isOreBeltPoi,
 } from "./common.js";
+import { getMarketPricesStore } from "../data/market-prices-store.js";
 
 // ── Types ─────────────────────────────────────────────────────
 
@@ -174,6 +175,19 @@ async function scoreTrading(
   minMargin: number,
 ): Promise<number> {
   const { bot } = ctx;
+
+  // First: check market_prices DB for known routes from current system (free, no tick cost)
+  const mps = getMarketPricesStore();
+  if (mps && bot.system) {
+    const routes = mps.getBestRoutesFromSystem(bot.system, minMargin, 3);
+    if (routes.length > 0) {
+      const bestMargin = routes[0].margin;
+      const routeBonus = bestMargin >= minMargin * 3 ? 30 : bestMargin >= minMargin ? 20 : 0;
+      return tradingLevel * 15 + routeBonus;
+    }
+  }
+
+  // Fallback: query analyze_market API if docked (costs no tick, just network)
   if (!bot.docked) return tradingLevel * 10;
 
   const resp = await bot.exec("analyze_market", { mode: "overview" });
@@ -183,7 +197,6 @@ async function scoreTrading(
   const insights = r.top_insights as Array<Record<string, unknown>> | undefined;
   if (!Array.isArray(insights) || insights.length === 0) return tradingLevel * 10;
 
-  // Extract best margin from insights
   let bestMargin = 0;
   for (const insight of insights) {
     const margin = Number(insight.margin ?? insight.profit ?? insight.value ?? 0);

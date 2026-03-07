@@ -60,8 +60,12 @@
                     <span v-if="mod.mining_power != null" class="text-amber-400">⛏️ {{ mod.mining_power }} pwr</span>
                     <span v-if="mod.mining_range != null" class="text-amber-400">📡 {{ mod.mining_range }} rng</span>
                     <span v-if="mod.damage != null" class="text-red-400">💥 {{ mod.damage }} dmg</span>
-                    <span v-if="mod.shield_bonus != null" class="text-blue-400">🛡️ +{{ mod.shield_bonus }}</span>
-                    <span v-if="mod.armor_bonus != null" class="text-slate-400">🔩 +{{ mod.armor_bonus }}</span>
+                    <span v-if="mod.damage_type" class="text-red-300">{{ mod.damage_type }}</span>
+                    <span v-if="mod.shield_bonus != null && mod.shield_bonus !== 0" class="text-blue-400">🛡️ +{{ mod.shield_bonus }}</span>
+                    <span v-if="mod.hull_bonus != null && mod.hull_bonus !== 0" class="text-emerald-400">❤️ +{{ mod.hull_bonus }}</span>
+                    <span v-if="mod.armor_bonus != null && mod.armor_bonus !== 0" class="text-slate-400">🔩 +{{ mod.armor_bonus }}</span>
+                    <span v-if="mod.speed_bonus != null && mod.speed_bonus !== 0" :class="mod.speed_bonus > 0 ? 'text-cyan-400' : 'text-orange-300'">💨 {{ mod.speed_bonus > 0 ? '+' : '' }}{{ mod.speed_bonus }}</span>
+                    <span v-if="mod.cargo_bonus != null && mod.cargo_bonus !== 0" class="text-amber-400">📦 +{{ mod.cargo_bonus }}</span>
                     <span v-if="mod.ammo_type" class="text-orange-400">🎯 {{ mod.ammo_type }}</span>
                   </div>
                 </div>
@@ -71,6 +75,26 @@
           </div>
         </div>
       </div><!-- /side-by-side row -->
+
+      <!-- Reload Weapon -->
+      <div class="card py-2 px-2">
+        <h3 class="text-xs font-semibold text-space-text-dim uppercase border-b border-space-border pb-1 mb-2">🔄 Reload Weapon</h3>
+        <div class="flex gap-2 items-center">
+          <select v-model="reloadWeapon" class="input text-xs flex-1 !p-1">
+            <option value="">{{ weaponModules.length > 0 ? 'Select weapon...' : 'No weapons installed' }}</option>
+            <option v-for="wep in weaponModules" :key="wep.module_id || wep.id" :value="wep.module_id || wep.id">
+              {{ wep.name || wep.type_id || 'Weapon' }} ({{ wep.current_ammo ?? 0 }}/{{ wep.magazine_size ?? '?' }})
+            </option>
+          </select>
+          <select v-model="reloadAmmo" class="input text-xs w-56 !p-1">
+            <option value="">{{ ammoItems.length > 0 ? 'Select ammo...' : 'No ammo in cargo' }}</option>
+            <option v-for="ammo in ammoItems" :key="ammo.itemId" :value="ammo.itemId">
+              {{ ammo.name }} ({{ ammo.quantity }})
+            </option>
+          </select>
+          <button @click="execReload" :disabled="!reloadWeapon || !reloadAmmo || shipActionLoading" class="btn text-xs px-3 py-1 disabled:opacity-50">🔄 Reload</button>
+        </div>
+      </div>
 
       <!-- Install from Cargo -->
       <div class="card py-2 px-2">
@@ -124,7 +148,13 @@
               <div class="flex flex-col items-end gap-1 shrink-0">
                 <div v-if="item.sell_price > 0" class="flex items-center gap-1">
                   <span class="text-xs text-space-yellow font-semibold">{{ item.sell_price.toLocaleString() }}₡</span>
-                  <button @click="buyModuleItem(item.item_id, 1)" :disabled="shipActionLoading" class="text-xs px-2 py-0.5 bg-blue-600 hover:bg-blue-700 rounded transition-colors disabled:opacity-50">Buy</button>
+                  <input
+                    :value="shopQty[item.item_id] ?? 1"
+                    @input="shopQty[item.item_id] = Math.max(1, parseInt(($event.target as HTMLInputElement).value) || 1)"
+                    type="number" min="1" :max="item.sell_quantity || 9999"
+                    class="input text-xs w-14 !p-0.5 scrollbar-dark text-center"
+                  />
+                  <button @click="buyModuleItem(item.item_id, shopQty[item.item_id] ?? 1)" :disabled="shipActionLoading || item.sell_quantity <= 0" class="text-xs px-2 py-0.5 bg-blue-600 hover:bg-blue-700 rounded transition-colors disabled:opacity-50">Buy</button>
                 </div>
                 <div v-else class="text-[11px] text-space-text-dim italic">no sell orders</div>
               </div>
@@ -186,6 +216,9 @@ const shopFilter = ref('all');
 const marketItems = ref<any[]>([]);
 const shipTooltipVisible = ref(false);
 const shipTooltipPos = ref({ x: 0, y: 0 });
+const reloadWeapon = ref('');
+const reloadAmmo = ref('');
+const shopQty = ref<Record<string, number>>({});
 
 const currentBot = computed(() => {
   const bot = botStore.bots.find(b => b.username === props.bot.username);
@@ -235,6 +268,21 @@ const shipCatalogEntry = computed(() => {
   return botStore.publicShips.find(
     (s: any) => s.id === id || s.class === id || s.ship_class === id
   ) || null;
+});
+
+const weaponModules = computed(() => {
+  return installedModules.value.filter((m: any) => m.ammo_type || m.slot_type === 'weapon' || (m.damage != null && m.damage > 0));
+});
+
+const ammoItems = computed(() => {
+  return inventory.value.filter((i: any) => {
+    const id = (i.itemId || '').toLowerCase();
+    const name = (i.name || '').toLowerCase();
+    return id.includes('ammo') || id.includes('rounds') || id.includes('_pack') ||
+           id.includes('_charge') || id.includes('torpedo') || id.includes('missile') ||
+           id.includes('_cell') || id.includes('_core') || name.includes('ammo') ||
+           name.includes('rounds') || name.includes('charges') || name.includes('munition');
+  });
 });
 
 function refreshMarket() {
@@ -306,6 +354,13 @@ function uninstallModule(moduleId: string) {
   execCommand('uninstall_mod', { module_id: moduleId });
 }
 
+function execReload() {
+  if (!reloadWeapon.value || !reloadAmmo.value) return;
+  shipActionLoading.value = true;
+  execCommand('reload', { weapon_instance_id: reloadWeapon.value, ammo_item_id: reloadAmmo.value });
+  setTimeout(() => { shipActionLoading.value = false; }, 3000);
+}
+
 function buyModuleItem(itemId: string, quantity: number) {
   if (!itemId || shipActionLoading.value) return;
   execCommand('buy', { item_id: itemId, quantity });
@@ -350,7 +405,7 @@ function shopCatIcon(category: string): string {
 }
 
 function shipImageUrl(classId: string): string {
-  return `https://www.spacemolt.com/_next/image?url=%2Fimages%2Fships%2Fcatalog%2F${encodeURIComponent(classId)}.webp&w=640&q=75`;
+  return `/ships/${classId}.webp`;
 }
 
 onMounted(() => {
