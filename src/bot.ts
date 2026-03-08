@@ -895,12 +895,12 @@ export class Bot extends EventEmitter {
 
     try {
       for await (const stateName of routine(ctx)) {
-        if ((this._state as BotState) === "stopping") {
+        if ((this._state as BotState) !== "running") {
           this.log("system", `Stopped during state: ${stateName}`);
           break;
         }
         // Small gap between actions
-        await sleep(2000);
+        await sleep(2000, this._abortController?.signal);
       }
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
@@ -1190,6 +1190,11 @@ export class Bot extends EventEmitter {
     }
   }
 
+  /** Expose the current abort signal so routines can make sleep() interruptible. */
+  get abortSignal(): AbortSignal | null {
+    return this._abortController?.signal ?? null;
+  }
+
   /** Signal the bot to stop after the current action. */
   stop(): void {
     if (this._state !== "running") return;
@@ -1295,6 +1300,12 @@ function getCategoryColor(category: string): string {
   return CATEGORY_COLORS[category] || CATEGORY_COLORS.info;
 }
 
-function sleep(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms));
+function sleep(ms: number, signal?: AbortSignal | null): Promise<void> {
+  return new Promise((resolve) => {
+    const timer = setTimeout(resolve, ms);
+    if (signal) {
+      if (signal.aborted) { clearTimeout(timer); resolve(); return; }
+      signal.addEventListener("abort", () => { clearTimeout(timer); resolve(); }, { once: true });
+    }
+  });
 }

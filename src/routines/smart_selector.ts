@@ -38,6 +38,7 @@ import {
   ensureDocked,
   tryRefuel,
   sleep,
+  sleepBot,
   isOreBeltPoi,
 } from "./common.js";
 import { getMarketPricesStore } from "../data/market-prices-store.js";
@@ -508,6 +509,33 @@ async function buildCandidates(
     candidates.push({ key: "hunter", name: "Hunter", fn: hunterRoutine, score: hunterScore });
   }
 
+  // Idle fallback — when all productive routines score low, boost mission_runner so the bot
+  // does something useful instead of defaulting to miner (which may also be pointless).
+  // Only applies if mission_runner hasn't run recently (no point spamming it either).
+  {
+    const minerCand   = candidates.find(c => c.key === "miner");
+    const traderCand  = candidates.find(c => c.key === "trader");
+    const gathererCand = candidates.find(c => c.key === "gatherer");
+    const isIdle =
+      (minerCand?.score ?? 0) <= 5 &&
+      (traderCand?.score ?? 0) <= 30 &&
+      (gathererCand?.score ?? 0) === 0 &&
+      !hasGasPoi && !hasIcePoi;
+
+    if (isIdle) {
+      const MISSION_IDLE_COOLDOWN_MS = 5 * 60 * 1000;
+      const lastMission = lastRunMs.get("mission_runner") ?? 0;
+      const missionElapsed = Date.now() - lastMission;
+      if (lastMission === 0 || missionElapsed >= MISSION_IDLE_COOLDOWN_MS) {
+        const missionCand = candidates.find(c => c.key === "mission_runner");
+        if (missionCand) {
+          missionCand.score += 30;
+          ctx.log("system", "SmartSelector: idle — +30 to mission_runner as fallback (productive routines all low)");
+        }
+      }
+    }
+  }
+
   return candidates.sort((a, b) => b.score - a.score);
 }
 
@@ -545,7 +573,7 @@ export const smartSelectorRoutine: Routine = async function* (ctx: RoutineContex
       ctx.log("system", `SmartSelector: forced routine = ${settings.forcedRoutine}`);
       yield `forced:${settings.forcedRoutine}`;
       yield* FORCED_ROUTINES[settings.forcedRoutine](ctx);
-      await sleep(5_000);
+      await sleepBot(ctx, 5_000);
       continue;
     }
 
@@ -555,7 +583,7 @@ export const smartSelectorRoutine: Routine = async function* (ctx: RoutineContex
       ctx.log("system", `SmartSelector: hull critical (${Math.round(hullPct)}%) — returning home`);
       yield "safety:return_home";
       yield* returnHomeRoutine(ctx);
-      await sleep(10_000);
+      await sleepBot(ctx, 10_000);
       continue;
     }
 
@@ -566,7 +594,7 @@ export const smartSelectorRoutine: Routine = async function* (ctx: RoutineContex
       yield "safety:refuel";
       await ensureDocked(ctx);
       await tryRefuel(ctx);
-      await sleep(5_000);
+      await sleepBot(ctx, 5_000);
       continue;
     }
 
@@ -631,7 +659,7 @@ export const smartSelectorRoutine: Routine = async function* (ctx: RoutineContex
       ctx.log("system", "SmartSelector: no viable routine found — defaulting to miner");
       yield "running:miner";
       yield* minerRoutineV2(ctx);
-      await sleep(5_000);
+      await sleepBot(ctx, 5_000);
       continue;
     }
 
@@ -656,14 +684,14 @@ export const smartSelectorRoutine: Routine = async function* (ctx: RoutineContex
         const msg = err instanceof Error ? err.message : String(err);
         ctx.log("warn", `SmartSelector: ${candidate.name} failed (${msg}) — trying next candidate`);
         // Short pause before trying next
-        await sleep(3_000);
+        await sleepBot(ctx, 3_000);
       }
     }
     if (!routineCompleted) {
       ctx.log("system", "SmartSelector: all candidates failed — waiting 30s before re-evaluating");
-      await sleep(30_000);
+      await sleepBot(ctx, 30_000);
       continue;
     }
-    await sleep(5_000);
+    await sleepBot(ctx, 5_000);
   }
 };

@@ -1,7 +1,7 @@
 <template>
   <div class="flex-1 flex flex-col overflow-hidden">
     <!-- Tab bar -->
-    <div class="flex border-b border-space-border bg-space-card px-3 shrink-0">
+    <div class="flex border-b border-space-border bg-space-card px-2 shrink-0">
       <button v-for="t in TABS" :key="t.id" @click="activeTab = t.id"
         class="px-4 py-2 text-xs font-medium border-b-2 transition-all"
         :class="activeTab === t.id ? 'text-space-text-bright border-space-accent' : 'text-space-text-dim border-transparent hover:text-space-text'">
@@ -14,11 +14,11 @@
     <!-- Commander Header -->
     <div class="flex items-center justify-between">
       <h3 class="text-sm font-semibold text-space-text-bright">Commander Advisory</h3>
-      <div class="flex items-center gap-3">
+      <div class="flex items-center gap-2">
         <span v-if="lastEvalTime" class="text-xs text-space-text-dim">
           Last eval: {{ formatTimeAgo(lastEvalTime) }}
         </span>
-        <button @click="refreshAll" class="btn btn-primary px-3 py-1 text-xs">
+        <button @click="refreshAll" class="btn btn-primary px-2 py-1 text-xs">
           Refresh
         </button>
       </div>
@@ -38,7 +38,7 @@
             </span>
           </div>
         </div>
-        <div class="p-3 space-y-3">
+        <div class="p-2 space-y-3">
           <!-- Active material requests from crafters -->
           <div v-if="economyData.materialNeeds?.length">
             <span class="text-xs text-space-text-dim uppercase font-semibold" title="Materials currently requested by crafters via cooperative delivery">Material Needs</span>
@@ -89,16 +89,16 @@
         <div class="px-2 py-1 border-b border-space-border">
           <span class="text-xs font-semibold text-space-text-dim uppercase">Suggestions</span>
         </div>
-        <div class="p-3">
+        <div class="p-2">
           <div v-if="suggestions.length === 0" class="text-xs text-space-text-dim">
             {{ commanderReasoning || 'No suggestions — current assignments look optimal.' }}
           </div>
-          <div v-else class="space-y-2">
+          <div v-else class="space-y-1">
             <div 
               v-for="s in suggestions" :key="s.username"
               class="flex items-center justify-between px-2 py-1 rounded border border-space-border bg-space-bg"
             >
-              <div class="flex items-center gap-3">
+              <div class="flex items-center gap-2">
                 <span class="text-sm font-medium text-space-text-bright">{{ s.username }}</span>
                 <span class="text-xs text-space-text-dim">{{ s.currentRoutine || 'idle' }}</span>
                 <span class="text-space-accent text-xs">→</span>
@@ -127,7 +127,7 @@
           {{ creditHistory.length }} data points
         </span>
       </div>
-      <div class="p-3">
+      <div class="p-2">
         <div v-if="creditHistory.length < 2" class="text-xs text-space-text-dim py-4 text-center">
           Not enough data yet. Credit history is recorded every 60 seconds while bots are active.
         </div>
@@ -157,13 +157,13 @@
         <span class="text-xs font-semibold text-space-text-dim uppercase">Gather Goals</span>
         <span class="text-xs text-space-text-dim">{{ gathererGoals.length }} active</span>
       </div>
-      <div class="p-3">
+      <div class="p-2">
         <div v-if="!gathererGoals.length" class="text-xs text-space-text-dim italic">
           No gather goals active. Set from Station → Build tab, Faction → Buildings, or Shipyard → Commission.
         </div>
         <div v-else class="grid grid-cols-4 gap-2.5 mb-2">
           <div v-for="entry in gathererGoals" :key="entry.username + ':' + entry.goal.id"
-            class="flex flex-col p-3 rounded-md border bg-space-bg"
+            class="flex flex-col p-2 rounded-md border bg-space-bg"
             :class="(!entry.goal.target_system || !entry.goal.target_poi) && !entry.goal.target_bot ? 'border-space-red/40' : 'border-space-border'">
             <!-- Header row -->
             <div class="flex items-center justify-between mb-1.5">
@@ -195,7 +195,7 @@
                 :style="{ width: Math.min(entry.overallPct, 100) + '%' }"></div>
             </div>
             <!-- Per-material rows -->
-            <div class="space-y-1.5">
+            <div class="space-y-1">
               <div v-for="m in entry.materials" :key="m.item_id" class="flex items-center gap-2">
                 <div class="flex-1 min-w-0">
                   <div class="flex items-center justify-between text-[11px] mb-0.5">
@@ -221,7 +221,7 @@
         <span class="text-xs font-semibold text-space-text-dim uppercase">Craft Planner</span>
         <span class="text-[10px] text-space-text-dim">Recipe dependency tree → gather goal</span>
       </div>
-      <div class="p-3">
+      <div class="p-2">
         <!-- Controls -->
         <div class="flex gap-2 items-end mb-3 flex-wrap">
           <div class="flex-1 min-w-32">
@@ -250,7 +250,7 @@
               <option v-for="b in botStore.bots" :key="b.username" :value="b.username">{{ b.username }}</option>
             </select>
           </div>
-          <button @click="analyzeCraftPlan" :disabled="!craftPlan.itemId" class="btn btn-primary px-3 py-1.5 text-xs self-end">Analyze</button>
+          <button @click="analyzeCraftPlan" :disabled="!craftPlan.itemId" class="btn btn-primary px-2 py-1.5 text-xs self-end">Analyze</button>
         </div>
         <!-- Goal options row -->
         <div class="flex gap-2 items-end mb-2 flex-wrap">
@@ -299,7 +299,7 @@
         <!-- Result -->
         <div v-if="craftPlanResult">
           <!-- Summary + action -->
-          <div class="flex items-center gap-3 mb-2">
+          <div class="flex items-center gap-2 mb-2">
             <span v-if="craftPlanNeeds.length === 0" class="text-xs text-green-400">✓ All materials already available — ready to craft!</span>
             <span v-else class="text-xs text-space-text">{{ craftPlanNeeds.length }} material type(s) need gathering</span>
             <button
@@ -334,7 +334,7 @@
               <span v-if="row.node.crafts_needed > 0" class="text-blue-400/60">→ {{ row.node.crafts_needed }}× craft</span>
             </div>
           </div>
-          <div class="flex gap-3 mt-1.5 text-[10px] text-space-text-dim">
+          <div class="flex gap-2 mt-1.5 text-[10px] text-space-text-dim">
             <span><span class="text-green-400">✓</span> satisfied</span>
             <span><span class="text-blue-400">◇</span> craft</span>
             <span><span class="text-orange-400">◆</span> gather</span>
@@ -351,10 +351,10 @@
           {{ showAddGoal ? 'Cancel' : '+ Add Goal' }}
         </button>
       </div>
-      <div class="p-3">
+      <div class="p-2">
         <!-- Add Goal Form -->
-        <div v-if="showAddGoal" class="mb-3 p-3 border border-space-border rounded bg-space-bg">
-          <div class="flex gap-3 items-end">
+        <div v-if="showAddGoal" class="mb-3 p-2 border border-space-border rounded bg-space-bg">
+          <div class="flex gap-2 items-end">
             <div class="flex-1">
               <label class="text-xs text-space-text-dim">Type</label>
               <select v-model="newGoal.type" class="input w-full mt-1 text-xs">
@@ -365,7 +365,7 @@
               <label class="text-xs text-space-text-dim">Priority</label>
               <input v-model.number="newGoal.priority" type="number" min="1" max="10" class="input w-full mt-1 text-xs">
             </div>
-            <button @click="addGoal" class="btn btn-primary px-3 py-1.5 text-xs">Add</button>
+            <button @click="addGoal" class="btn btn-primary px-2 py-1.5 text-xs">Add</button>
           </div>
         </div>
 
@@ -373,12 +373,12 @@
         <div v-if="goals.length === 0" class="text-xs text-space-text-dim">
           No goals configured. Add goals to guide the Commander's routine suggestions.
         </div>
-        <div v-else class="space-y-2">
+        <div v-else class="space-y-1">
           <div 
             v-for="(goal, i) in goals" :key="i"
             class="flex items-center justify-between px-2 py-1 rounded border border-space-border bg-space-bg"
           >
-            <div class="flex items-center gap-3">
+            <div class="flex items-center gap-2">
               <span class="text-sm font-medium text-space-text-bright">{{ goal.type }}</span>
               <span class="text-xs px-2 py-0.5 rounded bg-space-accent/20 text-space-accent">
                 priority {{ goal.priority }}
@@ -403,10 +403,10 @@
   <ActionLogView v-else-if="activeTab === 'log'" />
 
   <!-- AI Agent Tab -->
-  <div v-else-if="activeTab === 'agent'" class="flex-1 flex flex-col gap-3 p-2 overflow-auto scrollbar-dark">
+  <div v-else-if="activeTab === 'agent'" class="flex-1 flex flex-col gap-2 p-2 overflow-auto scrollbar-dark">
     <!-- Bot Selector -->
-    <div class="card py-2 px-3">
-      <div class="flex items-center gap-3 flex-wrap">
+    <div class="card py-2 px-2">
+      <div class="flex items-center gap-2 flex-wrap">
         <span class="text-xs font-semibold text-space-text-dim uppercase">Bot</span>
         <select v-model="agentBot" class="input text-xs min-w-36">
           <option v-for="b in botStore.bots" :key="b.username" :value="b.username">{{ b.username }}</option>
@@ -415,18 +415,18 @@
           :class="agentBotStatus === 'running' ? 'bg-green-900/40 text-green-300' : 'bg-[#21262d] text-space-text-dim'">{{ agentBotStatus }}</span>
         <span v-if="agentBotRoutine" class="text-[11px] text-space-cyan">{{ agentBotRoutine }}</span>
         <div class="ml-auto flex gap-2">
-          <button v-if="agentBotStatus !== 'running'" @click="startAgent('pi_commander')" class="btn btn-primary text-xs px-3">▶ Start PI Commander</button>
-          <button v-if="agentBotStatus !== 'running'" @click="startAgent('ai')" class="btn btn-secondary text-xs px-3">▶ Start AI</button>
-          <button v-if="agentBotStatus === 'running'" @click="stopAgent" class="btn text-xs px-3 bg-red-900/40 text-red-300 border-red-700/40 hover:bg-red-900/70">⏹ Stop</button>
+          <button v-if="agentBotStatus !== 'running'" @click="startAgent('pi_commander')" class="btn btn-primary text-xs px-2">▶ Start PI Commander</button>
+          <button v-if="agentBotStatus !== 'running'" @click="startAgent('ai')" class="btn btn-secondary text-xs px-2">▶ Start AI</button>
+          <button v-if="agentBotStatus === 'running'" @click="stopAgent" class="btn text-xs px-2 bg-red-900/40 text-red-300 border-red-700/40 hover:bg-red-900/70">⏹ Stop</button>
         </div>
       </div>
     </div>
 
     <!-- Instruction Editor -->
-    <div class="card py-2 px-3">
+    <div class="card py-2 px-2">
       <div class="flex items-center justify-between mb-2">
         <h4 class="text-xs font-semibold text-space-text-dim uppercase">Mission Instruction</h4>
-        <button @click="saveInstruction" class="btn btn-primary text-xs px-3">Save</button>
+        <button @click="saveInstruction" class="btn btn-primary text-xs px-2">Save</button>
       </div>
       <textarea v-model="agentInstruction" rows="3" class="input w-full text-xs resize-y font-mono"
         placeholder="Mine ore, sell it, and upgrade your ship when you can afford a better one."></textarea>
@@ -434,13 +434,13 @@
     </div>
 
     <!-- TODO Editor -->
-    <div class="card py-2 px-3">
+    <div class="card py-2 px-2">
       <div class="flex items-center justify-between mb-2">
         <h4 class="text-xs font-semibold text-space-text-dim uppercase">Agent TODO List</h4>
         <div class="flex gap-2">
-          <button @click="loadTodo" :disabled="todoLoading" class="btn btn-secondary text-xs px-3">{{ todoLoading ? '⏳' : '🔄 Load' }}</button>
-          <button @click="saveTodo" class="btn btn-primary text-xs px-3">Save</button>
-          <button @click="clearTodo" class="btn text-xs px-3 bg-red-900/30 text-red-300 border-red-700/30 hover:bg-red-900/60">🗑️ Clear</button>
+          <button @click="loadTodo" :disabled="todoLoading" class="btn btn-secondary text-xs px-2">{{ todoLoading ? '⏳' : '🔄 Load' }}</button>
+          <button @click="saveTodo" class="btn btn-primary text-xs px-2">Save</button>
+          <button @click="clearTodo" class="btn text-xs px-2 bg-red-900/30 text-red-300 border-red-700/30 hover:bg-red-900/60">🗑️ Clear</button>
         </div>
       </div>
       <textarea v-model="agentTodo" rows="8" class="input w-full text-xs resize-y font-mono"
@@ -449,7 +449,7 @@
     </div>
 
     <!-- Agent Log -->
-    <div class="card py-2 px-3">
+    <div class="card py-2 px-2">
       <div class="flex items-center justify-between mb-2">
         <h4 class="text-xs font-semibold text-space-text-dim uppercase">📝 Agent Log</h4>
         <span class="text-[11px] text-space-text-dim">{{ agentLogs.length }} lines</span>
@@ -698,7 +698,7 @@ async function removeGoal(index: number) {
 }
 
 async function refreshAll() {
-  await Promise.all([fetchEconomy(), fetchCommander(), fetchCreditHistory(), fetchGoals()])
+  await Promise.all([fetchEconomy(), fetchCommander(), fetchCreditHistory(), fetchGoals(), botStore.fetchFactionStorage()])
 }
 
 // ── Craft Planner ────────────────────────────────────────────
@@ -859,7 +859,12 @@ const gathererGoals = computed(() => {
       : (botSettings.goal ? [botSettings.goal] : [])
     for (const goal of rawGoals) {
       const materials = (goal.materials || []).map((m: any) => {
-        const inFaction = b.factionStorage?.find((i: any) => i.itemId === m.item_id)?.quantity ?? 0
+        // Use global factionStorageItems DB (aggregated from all bots' view_faction_storage calls)
+        // Filter by target_poi when available; otherwise sum across all POIs
+        const fsItems = botStore.factionStorageItems
+        const inFaction = fsItems
+          .filter(i => i.item_id === m.item_id && (!goal.target_poi || i.poi_id === goal.target_poi))
+          .reduce((sum, i) => sum + i.quantity, 0)
         const inCargo = b.inventory?.find((i: any) => i.itemId === m.item_id)?.quantity ?? 0
         const collected = Math.min(inFaction + inCargo, m.quantity_needed)
         const pct = m.quantity_needed > 0 ? Math.round(collected / m.quantity_needed * 100) : 0

@@ -12,6 +12,7 @@ import {
   ensureDocked,
   readSettings,
   sleep,
+  sleepBot,
   logAgentEvent,
 } from "./common.js";
 
@@ -202,7 +203,7 @@ export const tradeBrokerRoutine: Routine = async function* (ctx: RoutineContext)
     }
 
     yield "idle";
-    await sleep(settings.cycleIntervalSec * 1_000);
+    await sleepBot(ctx, settings.cycleIntervalSec * 1_000);
   }
 
   // Clear notification hook on exit

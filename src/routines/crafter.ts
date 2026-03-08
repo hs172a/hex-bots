@@ -13,6 +13,7 @@ import {
   logFactionActivity,
   logAgentEvent,
   getReservedForGoals,
+  sleepBot,
 } from "./common.js";
 
 // ── Settings ─────────────────────────────────────────────────
@@ -298,7 +299,7 @@ function applyCraftDelta(
  *  Updates bot state in-memory from API responses — no extra get_cargo calls. */
 async function withdrawStorageMaterials(ctx: RoutineContext, recipe: Recipe, count = 1): Promise<void> {
   const { bot } = ctx;
-  const reserved = bot.poi ? getReservedForGoals(bot.poi, bot.username) : new Map<string, number>();
+  const reserved = getReservedForGoals(bot.poi ?? "", bot.username);
   for (const comp of recipe.components) {
     const inCargo = countInCargo(ctx, comp.item_id);
     const wantInCargo = comp.quantity * count;
@@ -332,7 +333,7 @@ async function withdrawStorageMaterials(ctx: RoutineContext, recipe: Recipe, cou
  *  Updates bot state in-memory from API responses — no extra get_cargo calls. */
 async function withdrawFactionMaterials(ctx: RoutineContext, recipe: Recipe, count = 1): Promise<void> {
   const { bot } = ctx;
-  const reserved = bot.poi ? getReservedForGoals(bot.poi, bot.username) : new Map<string, number>();
+  const reserved = getReservedForGoals(bot.poi ?? "", bot.username);
   for (const comp of recipe.components) {
     const inCargo = countInCargo(ctx, comp.item_id);
     const wantInCargo = comp.quantity * count;
@@ -552,7 +553,7 @@ async function grindCraftingXP(
 
       // Calculate how many batches to pull BEFORE withdrawing so withdrawal fills cargo
       // for multiple crafts rather than just 1 (the old bug: withdraw count defaulted to 1).
-      const reserved = bot.poi ? getReservedForGoals(bot.poi, bot.username) : new Map<string, number>();
+      const reserved = getReservedForGoals(bot.poi ?? "", bot.username);
       let wantBatches = MAX_CRAFT_BATCH;
       if (target.components.length > 0) {
         const currentCargo = bot.inventory.reduce((s, i) => s + i.quantity, 0);
@@ -768,13 +769,13 @@ export const crafterRoutine: Routine = async function* (ctx: RoutineContext) {
   while (bot.state === "running") {
     // ── Death recovery ──
     const alive = await detectAndRecoverFromDeath(ctx);
-    if (!alive) { await sleep(30000); continue; }
+    if (!alive) { await sleepBot(ctx, 30000); continue; }
 
     const settings = getCrafterSettings();
 
     if (settings.craftLimits.length === 0 && !settings.autoCraft) {
       ctx.log("info", "No craft limits configured and autoCraft is off — check Crafter settings. Waiting 30s...");
-      await sleep(30000);
+      await sleepBot(ctx, 30000);
       continue;
     }
 
@@ -792,7 +793,7 @@ export const crafterRoutine: Routine = async function* (ctx: RoutineContext) {
     const recipes = await fetchAllRecipes(ctx);
     if (recipes.length === 0) {
       ctx.log("error", "No recipes available — waiting 60s");
-      await sleep(60000);
+      await sleepBot(ctx, 60000);
       continue;
     }
 
@@ -925,7 +926,7 @@ export const crafterRoutine: Routine = async function* (ctx: RoutineContext) {
             if (bot.cargoMax > 0 && bot.inventory.reduce((s, i) => s + i.quantity, 0) / bot.cargoMax > 0.75) {
               await dumpCargo(ctx);
             }
-            const reserved = bot.poi ? getReservedForGoals(bot.poi) : new Map<string, number>();
+            const reserved = getReservedForGoals(bot.poi ?? "");
             let wantBatches = MAX_CRAFT_BATCH;
             if (recipe.components.length > 0) {
               const currentCargo = bot.inventory.reduce((s, i) => s + i.quantity, 0);
@@ -1068,7 +1069,7 @@ export const crafterRoutine: Routine = async function* (ctx: RoutineContext) {
         // ── Calculate how many we can/should craft in one API call ──────────
         const remaining = needed - crafted;
         // Cap by what's available anywhere, respecting gather-goal reservations
-        const craftReserved = bot.poi ? getReservedForGoals(bot.poi) : new Map<string, number>();
+        const craftReserved = getReservedForGoals(bot.poi ?? "");
         const availableFromAll = recipe.components.length > 0
           ? recipe.components.reduce((min, c) => {
               const avail = countItemAvailable(ctx, c.item_id, craftReserved);
@@ -1231,7 +1232,7 @@ export const crafterRoutine: Routine = async function* (ctx: RoutineContext) {
         if (!hasMaterialsAnywhere(ctx, recipe)) continue; // materials may have been consumed
 
         // Compute maximum viable batch respecting gather-goal reservations
-        const autoReserved = bot.poi ? getReservedForGoals(bot.poi) : new Map<string, number>();
+        const autoReserved = getReservedForGoals(bot.poi ?? "");
         const targetBatch = (): number => recipe.components.length > 0
           ? Math.min(MAX_CRAFT_BATCH, recipe.components.reduce((min, c) =>
               Math.min(min, Math.floor(countItemAvailable(ctx, c.item_id, autoReserved) / c.quantity)), MAX_CRAFT_BATCH))
@@ -1347,6 +1348,6 @@ export const crafterRoutine: Routine = async function* (ctx: RoutineContext) {
         ? Math.max(settings.cycleDelayMs * 6, 60000)   // Wait longer when materials missing
         : settings.cycleDelayMs * 3;                   // Moderate wait when nothing to craft
     ctx.log("info", `Waiting ${Math.round(delayMs / 1000)}s before next cycle...`);
-    await sleep(delayMs);
+    await sleepBot(ctx, delayMs);
   }
 };

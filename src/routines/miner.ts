@@ -28,6 +28,7 @@ import {
   readSettings,
   scavengeWrecks,
   sleep,
+  sleepBot,
   logAgentEvent,
 } from "./common.js";
 
@@ -492,7 +493,7 @@ export const minerRoutineV2: Routine = async function* (ctx: RoutineContext) {
   while (bot.state === "running") {
     // ── Death recovery ──
     const alive = await detectAndRecoverFromDeath(ctx);
-    if (!alive) { await sleep(30000); continue; }
+    if (!alive) { await sleepBot(ctx, 30000); continue; }
 
     // Re-read settings each cycle
     const settings = getMinerV2Settings(bot.username, ctx.mapStore);

@@ -646,7 +646,7 @@ async function tryFuelFromStorage(ctx: RoutineContext): Promise<boolean> {
   }
 
   // 4. Faction storage: withdraw everything sellable and sell it (skip goal-reserved items)
-  const _fuelReserved = bot.poi ? getReservedForGoals(bot.poi) : new Map<string, number>();
+  const _fuelReserved = getReservedForGoals(bot.poi ?? "");
   const sellableFaction = bot.factionStorage.filter(i => {
     if (i.itemId === FUEL_CELL || i.quantity <= 0) return false;
     const res = _fuelReserved.get(i.itemId) ?? 0;
@@ -2155,7 +2155,6 @@ export async function detectAndRecoverFromDeath(ctx: RoutineContext): Promise<bo
  */
 export function getReservedForGoals(poiId: string, _excludeUsername?: string): Map<string, number> {
   const reserved = new Map<string, number>();
-  if (!poiId) return reserved;
   const allSettings = readSettings();
   for (const [, settings] of Object.entries(allSettings)) {
     const s = settings as Record<string, unknown>;
@@ -2166,18 +2165,21 @@ export function getReservedForGoals(poiId: string, _excludeUsername?: string): M
     for (const goalObj of rawGoals) {
       if (!goalObj || typeof goalObj !== "object") continue;
       const goal = goalObj as Record<string, unknown>;
-      if (goal.target_poi !== poiId) continue;
-      // Reserve input materials (items gatherers need to collect)
-      for (const mat of (goal.materials as Array<{ item_id: string; quantity_needed: number }> || [])) {
-        const qty = (mat.quantity_needed as number) || 0;
-        if (qty > 0) reserved.set(mat.item_id, (reserved.get(mat.item_id) ?? 0) + qty);
-      }
-      // Also reserve the OUTPUT of crafter-type goals that are being crafted at this station.
-      // Crafted items deposited to faction storage must not be sold by trader/quartermaster.
+      // Reserve the OUTPUT of crafter-type goals GLOBALLY — crafted items deposited to
+      // faction storage must not be withdrawn by any routine at any station, because they
+      // are the input for a downstream build goal.  This guard is intentionally NOT gated
+      // on target_poi so that bots at different stations also respect the reservation.
       if ((goal.goal_type === "crafter" || goal.goal_type === "craft") && goal.target_id) {
         const outputQty = (goal.quantity as number) || Number.MAX_SAFE_INTEGER;
         const existing = reserved.get(goal.target_id as string) ?? 0;
         reserved.set(goal.target_id as string, Math.max(existing, outputQty));
+      }
+      // Reserve INPUT materials only at the specific build-target POI
+      if (poiId && goal.target_poi === poiId) {
+        for (const mat of (goal.materials as Array<{ item_id: string; quantity_needed: number }> || [])) {
+          const qty = (mat.quantity_needed as number) || 0;
+          if (qty > 0) reserved.set(mat.item_id, (reserved.get(mat.item_id) ?? 0) + qty);
+        }
       }
     }
   }
@@ -2223,8 +2225,19 @@ export function writeSettings(updates: Record<string, Record<string, unknown>>):
 
 // ── Utilities ────────────────────────────────────────────────
 
-export function sleep(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms));
+export function sleep(ms: number, signal?: AbortSignal | null): Promise<void> {
+  return new Promise((resolve) => {
+    const timer = setTimeout(resolve, ms);
+    if (signal) {
+      if (signal.aborted) { clearTimeout(timer); resolve(); return; }
+      signal.addEventListener("abort", () => { clearTimeout(timer); resolve(); }, { once: true });
+    }
+  });
+}
+
+/** Like sleep() but automatically uses ctx.bot.abortSignal so Stop halts the wait immediately. */
+export function sleepBot(ctx: RoutineContext, ms: number): Promise<void> {
+  return sleep(ms, ctx.bot.abortSignal);
 }
 
 /** Log an entry to the faction activity log. Types: deposit, withdraw, donation, gift */

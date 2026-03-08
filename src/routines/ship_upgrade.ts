@@ -15,7 +15,7 @@ import {
   repairShip,
   detectAndRecoverFromDeath,
   readSettings,
-  sleep,
+  sleepBot,
   logStatus,
 } from "./common.js";
 
@@ -114,7 +114,7 @@ export const shipUpgradeRoutine: Routine = async function* (ctx: RoutineContext)
       await repairShip(ctx);
       logStatus(ctx);
       ctx.log("system", "ShipUpgrade complete.");
-      while (bot.state === "running") { await sleep(30000); yield "idle"; }
+      while (bot.state === "running") { await sleepBot(ctx, 30000); yield "idle"; }
       return;
     }
   }
@@ -199,5 +199,5 @@ export const shipUpgradeRoutine: Routine = async function* (ctx: RoutineContext)
   ctx.log("system", `ShipUpgrade complete: ${oldShipClass} → ${settings.targetShipClass} (cost ${price}cr)`);
 
   // Idle until stopped
-  while (bot.state === "running") { await sleep(30000); yield "idle"; }
+  while (bot.state === "running") { await sleepBot(ctx, 30000); yield "idle"; }
 };

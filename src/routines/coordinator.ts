@@ -660,7 +660,7 @@ async function placeMarketOrders(
   // ── Sell orders (faction storage liquidation) ──
   await bot.refreshFactionStorage();
   let sellOrdersPlaced = currentSellCount;
-  const coordReserved = bot.poi ? getReservedForGoals(bot.poi) : new Map<string, number>();
+  const coordReserved = getReservedForGoals(bot.poi ?? "");
 
   for (const item of bot.factionStorage) {
     if (sellOrdersPlaced >= settings.maxSellOrders) break;

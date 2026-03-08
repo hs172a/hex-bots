@@ -20,6 +20,7 @@ import {
   getSystemInfo,
   readSettings,
   sleep,
+  sleepBot,
   logStatus,
   logAgentEvent,
 } from "./common.js";
@@ -838,7 +839,7 @@ export const missionRunnerRoutine: Routine = async function* (ctx: RoutineContex
 
   while (bot.state === "running") {
     const alive = await detectAndRecoverFromDeath(ctx);
-    if (!alive) { await sleep(30000); continue; }
+    if (!alive) { await sleepBot(ctx, 30000); continue; }
 
     const settings = getMissionRunnerSettings();
 

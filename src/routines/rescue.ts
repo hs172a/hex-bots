@@ -12,6 +12,7 @@ import {
   detectAndRecoverFromDeath,
   readSettings,
   sleep,
+  sleepBot,
   logStatus,
 } from "./common.js";
 
@@ -100,7 +101,7 @@ export const rescueRoutine: Routine = async function* (ctx: RoutineContext) {
   while (bot.state === "running") {
     // ── Death recovery ──
     const alive = await detectAndRecoverFromDeath(ctx);
-    if (!alive) { await sleep(30000); continue; }
+    if (!alive) { await sleepBot(ctx, 30000); continue; }
 
     const settings = getRescueSettings();
 

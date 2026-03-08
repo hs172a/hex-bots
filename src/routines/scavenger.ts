@@ -21,6 +21,7 @@ import {
   readSettings,
   scavengeWrecks,
   sleep,
+  sleepBot,
   logStatus,
 } from "./common.js";
 
@@ -198,7 +199,7 @@ export const scavengerRoutine: Routine = async function* (ctx: RoutineContext) {
 
   while (bot.state === "running") {
     const alive = await detectAndRecoverFromDeath(ctx);
-    if (!alive) { await sleep(30000); continue; }
+    if (!alive) { await sleepBot(ctx, 30000); continue; }
 
     const settings = getScavengerSettings();
 
@@ -298,7 +299,7 @@ export const scavengerRoutine: Routine = async function* (ctx: RoutineContext) {
       logStatus(ctx);
     } else {
       ctx.log("info", "No systems to roam to — waiting...");
-      await sleep(30000);
+      await sleepBot(ctx, 30000);
     }
 
     await sleep(3000);

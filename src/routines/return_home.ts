@@ -10,7 +10,7 @@ import {
   navigateToSystem,
   detectAndRecoverFromDeath,
   readSettings,
-  sleep,
+  sleepBot,
   logStatus,
   tryRefuel,
   collectFromStorage,
@@ -88,7 +88,7 @@ export const returnHomeRoutine: Routine = async function* (ctx: RoutineContext) 
 
   // Idle until stopped
   while (bot.state === "running") {
-    await sleep(30000);
+    await sleepBot(ctx, 30000);
     yield "idle";
   }
 };

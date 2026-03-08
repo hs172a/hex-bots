@@ -20,6 +20,7 @@ import {
   fullSalvageWrecks,
   getSystemInfo,
   sleep,
+  sleepBot,
 } from "./common.js";
 
 // ── Settings ─────────────────────────────────────────────────
@@ -126,7 +127,7 @@ export const salvagerRoutine: Routine = async function* (ctx: RoutineContext) {
   while (bot.state === "running") {
     // ── Death recovery ──
     const alive = await detectAndRecoverFromDeath(ctx);
-    if (!alive) { await sleep(30000); continue; }
+    if (!alive) { await sleepBot(ctx, 30000); continue; }
 
     const settings = getSalvagerSettings(bot.username);
     const homeSystem = settings.homeSystem || startSystem;
@@ -145,7 +146,7 @@ export const salvagerRoutine: Routine = async function* (ctx: RoutineContext) {
     const fueled = await ensureFueled(ctx, safetyOpts.fuelThresholdPct);
     if (!fueled) {
       ctx.log("error", "Cannot refuel — waiting 30s...");
-      await sleep(30000);
+      await sleepBot(ctx, 30000);
       continue;
     }
 
@@ -187,7 +188,7 @@ export const salvagerRoutine: Routine = async function* (ctx: RoutineContext) {
 
     if (visitPois.length === 0) {
       ctx.log("error", "No salvageable POIs in this system — waiting 60s");
-      await sleep(60000);
+      await sleepBot(ctx, 60000);
       continue;
     }
 
@@ -441,7 +442,7 @@ export const salvagerRoutine: Routine = async function* (ctx: RoutineContext) {
     // If nothing was found, wait longer before next sweep
     if (totalLooted === 0) {
       ctx.log("scavenge", "No wrecks found — waiting 60s before next sweep");
-      await sleep(60000);
+      await sleepBot(ctx, 60000);
     }
   }
 };

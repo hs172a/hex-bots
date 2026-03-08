@@ -5,6 +5,36 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [2.5.0] - 2026-03-08
+
+### Fixed
+
+#### Crafter output reservation — global faction storage protection (`src/routines/common.ts`)
+- `getReservedForGoals`: crafter/craft goal OUTPUT items are now reserved **globally** (not gated on `target_poi` match). Any routine at any station will see crafted outputs (e.g. `optical_fiber_bundle`) as reserved and will not withdraw them.
+- All 10 callers updated to `getReservedForGoals(bot.poi ?? "")` so they always receive crafter-output reservations even when not docked.
+
+#### Goals progress bar now reflects faction storage (`src/web/src/views/CommanderView.vue`)
+- `gathererGoals` computed now reads `botStore.factionStorageItems` (global DB aggregated from all bots' `view_faction_storage` calls) instead of per-bot WS-cached `b.factionStorage` which was often empty.
+- `refreshAll()` now calls `botStore.fetchFactionStorage()` → faction storage auto-refreshes every 30 s alongside other Commander data.
+
+#### forceStop / Stop button now halts bots immediately (`src/bot.ts`, `src/routines/common.ts`, all routines)
+- `sleep()` is now abort-aware: resolves immediately when the bot's abort signal fires instead of waiting the full timer.
+- Added `sleepBot(ctx, ms)` helper in `common.ts` that auto-passes `ctx.bot.abortSignal`.
+- Added `get abortSignal()` getter on `Bot` class to expose the abort signal to routines.
+- `for-await` runner loop now breaks when state `!== "running"` (not only `=== "stopping"`), so the 15 s force-idle fallback also terminates the generator.
+- All 13 routines updated: `smart_selector`, `trader`, `miner`, `mission_runner`, `crafter`, `quartermaster`, `salvager`, `scavenger`, `scout`, `rescue`, `return_home`, `ship_upgrade`, `trade_broker`.
+
+#### SmartSelector: mission runner idle-fallback boost (`src/routines/smart_selector.ts`)
+- When miner score ≤ 5 AND trader score ≤ 30 AND no gatherer/gas/ice — mission_runner gets +30 pts so the bot tries missions instead of defaulting to the pointless miner fallback.
+- A 5-min cooldown prevents immediate re-triggering.
+
+### API compatibility — game v0.188.x
+- **v0.188.2**: `find_route` fuel estimates now account for cargo load (automatic, no code change).
+- **v0.188.2**: `jump`/`travel` can escape NPC pirate combat (automatic, routines can benefit without changes).
+- **v0.188.3**: Faction storage L2–L4 capacity caps fixed server-side (L2: 200k, L3: 300k, L4: 500k) — no code changes needed since no hardcoded 100k cap exists in routines.
+
+---
+
 ## [2.4.5] - 2026-03-08
 
 ### Added

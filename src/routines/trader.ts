@@ -22,6 +22,7 @@ import {
   readSettings,
   getReservedForGoals,
   sleep,
+  sleepBot,
   logAgentEvent,
 } from "./common.js";
 
@@ -480,7 +481,7 @@ async function sellFactionStorageItems(ctx: RoutineContext): Promise<{ count: nu
   if (buyableItems.size === 0) return { count: 0, revenue: 0 };
 
   // Find faction storage items we can sell here (skip fuel, raw ores, ice, gas, goal-reserved)
-  const traderReserved = bot.poi ? getReservedForGoals(bot.poi) : new Map<string, number>();
+  const traderReserved = getReservedForGoals(bot.poi ?? "");
   const toSell: Array<{ itemId: string; name: string; qty: number }> = [];
   for (const item of bot.factionStorage) {
     const lower = item.itemId.toLowerCase();
@@ -563,7 +564,7 @@ export const traderRoutine: Routine = async function* (ctx: RoutineContext) {
   while (bot.state === "running") {
     // ── Death recovery ──
     const alive = await detectAndRecoverFromDeath(ctx);
-    if (!alive) { await sleep(30000); continue; }
+    if (!alive) { await sleepBot(ctx, 30000); continue; }
 
     const settings = getTraderSettings(bot.username);
     const safetyOpts = {
@@ -804,7 +805,7 @@ export const traderRoutine: Routine = async function* (ctx: RoutineContext) {
         return;
       }
       ctx.log("trade", `No profitable trade routes found (${noRouteStreak}/3) — waiting 60s before re-scanning`);
-      await sleep(60000);
+      await sleepBot(ctx, 60000);
       continue;
     }
     noRouteStreak = 0; // reset streak on successful route found
@@ -1033,7 +1034,7 @@ export const traderRoutine: Routine = async function* (ctx: RoutineContext) {
         const fueled = await ensureFueled(ctx, safetyOpts.fuelThresholdPct);
         if (!fueled) {
           ctx.log("error", "Cannot refuel for trade run — waiting 30s");
-          await sleep(30000);
+          await sleepBot(ctx, 30000);
           break;
         }
 
@@ -1308,7 +1309,7 @@ export const traderRoutine: Routine = async function* (ctx: RoutineContext) {
         }
       }
       ctx.log("trade", "All routes failed — waiting 60s before re-scanning");
-      await sleep(60000);
+      await sleepBot(ctx, 60000);
       continue;
     }
 

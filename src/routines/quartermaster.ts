@@ -15,6 +15,7 @@ import {
   readSettings,
   getReservedForGoals,
   sleep,
+  sleepBot,
   logStatus,
 } from "./common.js";
 
@@ -42,7 +43,7 @@ export const quartermasterRoutine: Routine = async function* (ctx: RoutineContex
 
   while (bot.state === "running") {
     const alive = await detectAndRecoverFromDeath(ctx);
-    if (!alive) { await sleep(30000); continue; }
+    if (!alive) { await sleepBot(ctx, 30000); continue; }
 
     const settings = getQuartermasterSettings();
 
@@ -76,7 +77,7 @@ export const quartermasterRoutine: Routine = async function* (ctx: RoutineContex
 
     // ── Withdraw sellable items (skip goal-reserved items) ──
     yield "withdraw_goods";
-    const qmReserved = bot.poi ? getReservedForGoals(bot.poi) : new Map<string, number>();
+    const qmReserved = getReservedForGoals(bot.poi ?? "");
     const sellable = items.filter(i => {
       const lower = i.id.toLowerCase();
       // Keep raw ores for crafters, keep fuel/energy for fleet

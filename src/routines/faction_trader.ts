@@ -338,7 +338,7 @@ export const factionTraderRoutine: Routine = async function* (ctx: RoutineContex
           continue;
         }
 
-        const ftReserved1 = bot.poi ? getReservedForGoals(bot.poi) : new Map<string, number>();
+        const ftReserved1 = getReservedForGoals(bot.poi ?? "");
         const ftSurplus1 = (bot.factionStorage.find(i => i.itemId === route.itemId)?.quantity ?? 0) - (ftReserved1.get(route.itemId) ?? 0);
         if (ftSurplus1 <= 0) break;
         let wQty = Math.min(remaining, maxItemsForCargo(freeSpace, route.itemId), ftSurplus1);
@@ -427,7 +427,7 @@ export const factionTraderRoutine: Routine = async function* (ctx: RoutineContex
         continue;
       }
 
-      const ftReserved2 = bot.poi ? getReservedForGoals(bot.poi) : new Map<string, number>();
+      const ftReserved2 = getReservedForGoals(bot.poi ?? "");
       const ftSurplus2 = (bot.factionStorage.find(i => i.itemId === route.itemId)?.quantity ?? 0) - (ftReserved2.get(route.itemId) ?? 0);
       if (ftSurplus2 <= 0) continue;
       qty = Math.min(qty, ftSurplus2);
