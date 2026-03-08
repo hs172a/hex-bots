@@ -9,7 +9,13 @@
  *  1. Station claims  — "I'm heading to station X to deposit/sell item Y"
  *  2. Trade route claims — "I own the fromSystem→toSystem route for item Z this cycle"
  *  3. Material demand signals — "I need N units of item W" (crafter → miners)
+ *
+ * Persistence bridge: when a NeedsMatrixDb is connected (call connectNeedsMatrixDb()),
+ * broadcastMaterialNeed() also writes a 'buy' target to the needs_matrix SQLite table
+ * so demands survive restarts and are visible to bots on other VMs via DataSync.
  */
+
+import type { NeedsMatrixDb } from "./data/needs-matrix-db.js";
 
 // ── Constants ─────────────────────────────────────────────────
 
@@ -100,6 +106,14 @@ const tradeRouteClaims = new Map<string, TradeRouteClaim>();
 
 /** Active material demands, keyed by `${bot}:${itemId}`. */
 const materialDemands = new Map<string, MaterialDemand>();
+
+/** Optional NeedsMatrixDb for persistent cross-VM demand signals. */
+let _needsMatrixDb: NeedsMatrixDb | null = null;
+
+/** Connect a NeedsMatrixDb so broadcastMaterialNeed() also writes to SQLite. */
+export function connectNeedsMatrixDb(db: NeedsMatrixDb): void {
+  _needsMatrixDb = db;
+}
 
 /** Active gather component claims, keyed by `${goalId}:${itemId}`. */
 const gatherClaims = new Map<string, GatherComponentClaim>();
@@ -301,6 +315,10 @@ export function broadcastMaterialNeed(
     stationSystem: opts?.stationSystem,
     useGift: opts?.useGift,
   });
+  // Persist to needs_matrix so cross-VM bots can see the demand signal
+  if (_needsMatrixDb && quantity > 0) {
+    _needsMatrixDb.setTarget(itemId, itemId, 'material', quantity, 'buy', 60);
+  }
 }
 
 /** Clear a specific material demand (call when the crafter obtained what it needed). */

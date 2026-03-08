@@ -645,8 +645,13 @@ async function tryFuelFromStorage(ctx: RoutineContext): Promise<boolean> {
     }
   }
 
-  // 4. Faction storage: withdraw everything sellable and sell it
-  const sellableFaction = bot.factionStorage.filter(i => i.itemId !== FUEL_CELL && i.quantity > 0);
+  // 4. Faction storage: withdraw everything sellable and sell it (skip goal-reserved items)
+  const _fuelReserved = bot.poi ? getReservedForGoals(bot.poi) : new Map<string, number>();
+  const sellableFaction = bot.factionStorage.filter(i => {
+    if (i.itemId === FUEL_CELL || i.quantity <= 0) return false;
+    const res = _fuelReserved.get(i.itemId) ?? 0;
+    return i.quantity > res; // only sell surplus above reserved amount
+  });
   if (sellableFaction.length > 0) {
     let withdrawn = false;
     for (const item of sellableFaction) {
@@ -2153,11 +2158,27 @@ export function getReservedForGoals(poiId: string, _excludeUsername?: string): M
   if (!poiId) return reserved;
   const allSettings = readSettings();
   for (const [, settings] of Object.entries(allSettings)) {
-    const goal = (settings as Record<string, unknown>)?.goal as Record<string, unknown> | undefined;
-    if (!goal || goal.target_poi !== poiId) continue;
-    for (const mat of (goal.materials as Array<{ item_id: string; quantity_needed: number }> || [])) {
-      const qty = (mat.quantity_needed as number) || 0;
-      if (qty > 0) reserved.set(mat.item_id, (reserved.get(mat.item_id) ?? 0) + qty);
+    const s = settings as Record<string, unknown>;
+    // Support both new goals[] array and legacy goal object
+    const rawGoals: unknown[] = Array.isArray(s.goals) && s.goals.length > 0
+      ? (s.goals as unknown[])
+      : (s.goal ? [s.goal] : []);
+    for (const goalObj of rawGoals) {
+      if (!goalObj || typeof goalObj !== "object") continue;
+      const goal = goalObj as Record<string, unknown>;
+      if (goal.target_poi !== poiId) continue;
+      // Reserve input materials (items gatherers need to collect)
+      for (const mat of (goal.materials as Array<{ item_id: string; quantity_needed: number }> || [])) {
+        const qty = (mat.quantity_needed as number) || 0;
+        if (qty > 0) reserved.set(mat.item_id, (reserved.get(mat.item_id) ?? 0) + qty);
+      }
+      // Also reserve the OUTPUT of crafter-type goals that are being crafted at this station.
+      // Crafted items deposited to faction storage must not be sold by trader/quartermaster.
+      if ((goal.goal_type === "crafter" || goal.goal_type === "craft") && goal.target_id) {
+        const outputQty = (goal.quantity as number) || Number.MAX_SAFE_INTEGER;
+        const existing = reserved.get(goal.target_id as string) ?? 0;
+        reserved.set(goal.target_id as string, Math.max(existing, outputQty));
+      }
     }
   }
   return reserved;
@@ -2346,4 +2367,54 @@ export async function checkAndDeliverDemands(ctx: RoutineContext): Promise<numbe
   }
 
   return fulfilled;
+}
+
+// ── Game map API helpers ──────────────────────────────────────
+
+export interface BestSellResult {
+  system_id: string;
+  poi_id: string;
+  price: number;
+  station_name?: string;
+}
+
+/**
+ * Find the station across the known galaxy offering the highest sell price for an item.
+ * Reads from the locally cached mapStore market data — same source as the AI's
+ * map_find_best_sell_price tool in ai.ts. No network call required.
+ */
+export function findGameBestSellPrice(
+  ctx: RoutineContext,
+  itemId: string,
+): BestSellResult | null {
+  const result = ctx.mapStore.findBestSellPrice(itemId);
+  if (!result) return null;
+  return {
+    system_id: result.systemId,
+    poi_id: result.poiId,
+    price: result.price,
+    station_name: result.poiName,
+  };
+}
+
+/**
+ * Find arbitrage opportunities for an item (or all items) using locally cached
+ * market data. Same source as the AI's map_get_price_spreads tool in ai.ts.
+ * Returns the best spread found, or null if no data available.
+ */
+export function getGamePriceSpreads(
+  ctx: RoutineContext,
+  itemId?: string,
+): { itemId: string; buyAt: number; sellAt: number; spread: number; sourcePoiName: string; destPoiName: string } | null {
+  const spreads = ctx.mapStore.findPriceSpreads(itemId);
+  if (spreads.length === 0) return null;
+  const best = spreads[0];
+  return {
+    itemId: best.itemId,
+    buyAt: best.buyAt,
+    sellAt: best.sellAt,
+    spread: best.sellAt - best.buyAt,
+    sourcePoiName: best.sourcePoiName,
+    destPoiName: best.destPoiName,
+  };
 }

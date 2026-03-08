@@ -48,8 +48,9 @@ import { EconomyEngine } from "./commander/economy-engine.js";
 import type { FleetSummary } from "./commander/types.js";
 import { GoalsStore } from "./data/goals-store.js";
 import { FactionStorageDb } from "./data/faction-storage-db.js";
+import { NeedsMatrixDb } from "./data/needs-matrix-db.js";
 import { initMarketPricesStore } from "./data/market-prices-store.js";
-import { getAllMaterialDemands } from "./swarmcoord.js";
+import { getAllMaterialDemands, connectNeedsMatrixDb } from "./swarmcoord.js";
 import { GoalSchema } from "./types/config.js";
 import { AdvisoryCommander } from "./commander/advisory-commander.js";
 import { initDataSync, DataSyncClient, DataSyncServer } from "./datasync.js";
@@ -632,11 +633,9 @@ async function handleExec(action: WebAction): Promise<WebActionResult> {
         const itemId = p2?.item_id as string | undefined;
         const qty = (p2?.quantity as number | undefined) || 1;
         if (itemId) {
-          mapStore.adjustFactionStorageItem(
-            bot.poi,
-            itemId,
-            command === "faction_deposit_items" ? qty : -qty,
-          );
+          const delta = command === "faction_deposit_items" ? qty : -qty;
+          mapStore.adjustFactionStorageItem(bot.poi, itemId, delta);
+          mapStore.adjustNeedsMatrixCurrent(itemId, delta, botName);
         }
       }
     }
@@ -673,6 +672,12 @@ async function handleExec(action: WebAction): Promise<WebActionResult> {
         const sysName = mapStore.getSystem(sys)?.name || sys;
         const poiName = mapStore.getSystem(sys)?.pois?.find((p: any) => p.id === bot.poi)?.name || bot.poi;
         mapStore.updateFactionStorageItems(bot.poi, sys, sysName, poiName, rawItems);
+        // Update needs_matrix current_qty from the canonical faction storage snapshot
+        for (const item of rawItems as Array<{ item_id?: string; id?: string; quantity?: number }>) {
+          const itemId = item.item_id || item.id || "";
+          const qty = (item.quantity as number) || 0;
+          if (itemId) mapStore.updateNeedsMatrixCurrent(itemId, qty, botName);
+        }
       }
     } else {
       // Station has no faction storage facility — clear any stale cached items
@@ -758,6 +763,9 @@ async function main(): Promise<void> {
   mapStore.connectToDb(db);
   const factionStorageDb = new FactionStorageDb(db);
   mapStore.connectToFactionStorageDb(factionStorageDb);
+  const needsMatrixDb = new NeedsMatrixDb(db);
+  mapStore.connectToNeedsMatrixDb(needsMatrixDb);
+  connectNeedsMatrixDb(needsMatrixDb);
   initMarketPricesStore(db);
 
   // Live in-memory fallback: synthesizes faction storage from bot.factionStorage arrays when

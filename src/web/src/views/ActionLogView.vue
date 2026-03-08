@@ -4,41 +4,45 @@
     <!-- Main panel -->
     <div class="flex-1 bg-space-card border border-space-border rounded-lg flex flex-col overflow-hidden">
 
-      <div v-if="!selectedBot" class="flex items-center justify-center h-full text-space-text-dim text-sm italic">
-        Select a bot to view action log
+      <!-- Toolbar -->
+      <div class="flex items-center gap-2 px-3 py-2 border-b border-space-border shrink-0 flex-wrap">
+        <!-- Bot selector -->
+        <select v-model="selectedBotModel" class="input text-xs py-0 h-7 min-w-36">
+          <option value="__all__">🌐 All Bots</option>
+          <option v-for="b in botStore.bots" :key="b.username" :value="b.username">{{ b.username }}</option>
+        </select>
+        <div class="w-px h-4 bg-space-border mx-1 shrink-0"></div>
+
+        <!-- Category filter pills -->
+        <div class="flex flex-wrap gap-1">
+          <button
+            v-for="cat in CATEGORIES"
+            :key="cat.id"
+            @click="toggleCategory(cat.id)"
+            class="text-[11px] px-2 py-0.5 rounded-full border transition-colors"
+            :class="activeCategories.has(cat.id)
+              ? `${cat.activeClass} border-transparent`
+              : 'border-space-border text-space-text-dim hover:border-space-accent'"
+          >{{ cat.icon }} {{ cat.label }}</button>
+        </div>
+
+        <div class="ml-auto flex items-center gap-2 shrink-0">
+          <select v-model="pageLimit" class="input text-xs py-0 h-6 px-1">
+            <option value="25">25</option>
+            <option value="50">50</option>
+            <option value="100">100</option>
+          </select>
+          <button @click="reload" :disabled="loading" class="btn btn-secondary text-xs px-3 py-1">
+            <span :class="{ 'animate-spin inline-block': loading }">🔄</span> Refresh
+          </button>
+        </div>
+      </div>
+
+      <div v-if="!selectedBotModel" class="flex items-center justify-center h-full text-space-text-dim text-sm italic">
+        Select a bot above
       </div>
 
       <template v-else>
-
-        <!-- Toolbar -->
-        <div class="flex items-center gap-2 px-3 py-2 border-b border-space-border shrink-0 flex-wrap">
-          <span class="text-xs font-semibold text-space-text-bright">{{ selectedBot }}</span>
-          <div class="w-px h-4 bg-space-border mx-1"></div>
-
-          <!-- Category filter pills -->
-          <div class="flex flex-wrap gap-1">
-            <button
-              v-for="cat in CATEGORIES"
-              :key="cat.id"
-              @click="toggleCategory(cat.id)"
-              class="text-[11px] px-2 py-0.5 rounded-full border transition-colors"
-              :class="activeCategories.has(cat.id)
-                ? `${cat.activeClass} border-transparent`
-                : 'border-space-border text-space-text-dim hover:border-space-accent'"
-            >{{ cat.icon }} {{ cat.label }}</button>
-          </div>
-
-          <div class="ml-auto flex items-center gap-2">
-            <select v-model="pageLimit" class="input text-xs py-0 h-6 px-1">
-              <option value="25">25</option>
-              <option value="50">50</option>
-              <option value="100">100</option>
-            </select>
-            <button @click="loadPage(null)" :disabled="loading" class="btn btn-secondary text-xs px-3 py-1">
-              <span :class="{ 'animate-spin inline-block': loading }">🔄</span> Refresh
-            </button>
-          </div>
-        </div>
 
         <!-- Log entries -->
         <div class="flex-1 overflow-auto px-3 py-2 space-y-1 scrollbar-dark" ref="logContainerRef">
@@ -63,6 +67,10 @@
 
                   <!-- Meta row -->
                   <div class="flex flex-wrap items-center gap-2 text-[11px] text-space-text-dim">
+                    <!-- Bot badge (shown in fleet / all-bots mode) -->
+                    <span v-if="entry._bot" class="px-1.5 py-0 rounded font-mono font-semibold bg-[#1e2a3a] text-space-cyan border border-space-accent/30">
+                      {{ entry._bot }}
+                    </span>
                     <span class="px-1.5 py-0 rounded font-medium" :class="categoryStyle(entry.category).badge">
                       {{ entry.category }}
                     </span>
@@ -170,15 +178,21 @@ const botStore = useBotStore();
 
 // ── State ─────────────────────────────────────────────────────
 
-const selectedBot = ref<string | null>(null);
+/** "__all__" = fleet view, or a specific bot username */
+const selectedBotModel = ref<string>('__all__');
 
-// ── Auto-sync: pre-select bot from profile navigation
+// ── Auto-sync: pre-select bot from profile navigation (if set)
 onMounted(() => {
-  if (botStore.selectedBot && !selectedBot.value) selectBot(botStore.selectedBot);
+  if (botStore.selectedBot) selectedBotModel.value = botStore.selectedBot;
+  reload();
 });
 watch(() => botStore.selectedBot, (username) => {
-  if (username && username !== selectedBot.value) selectBot(username);
+  if (username && username !== selectedBotModel.value) {
+    selectedBotModel.value = username;
+  }
 });
+watch(selectedBotModel, () => reload());
+
 const entries = ref<any[]>([]);
 const loading = ref(false);
 const hasMore = ref(false);
@@ -211,7 +225,7 @@ function toggleCategory(id: string) {
     s.add(id);
   }
   activeCategories.value = s;
-  loadPage(null);
+  reload();
 }
 
 // ── Card styles per category ──────────────────────────────────
@@ -234,44 +248,77 @@ function categoryStyle(cat: string) {
 
 // ── API calls ─────────────────────────────────────────────────
 
-function loadPage(before: string | null) {
-  if (!selectedBot.value) return;
+/** Fetch action log entries for a single bot, returning a tagged list. */
+function fetchBotLog(username: string, params: Record<string, any>): Promise<any[]> {
+  return new Promise((resolve) => {
+    botStore.sendExec(username, 'get_action_log', params, (res: any) => {
+      if (res.ok && res.data?.entries) {
+        resolve((res.data.entries as any[]).map(e => ({ ...e, _bot: username })));
+      } else {
+        resolve([]);
+      }
+    });
+  });
+}
+
+async function reload() {
   loading.value = true;
-  if (before === null) {
-    entries.value = [];
-    beforeCursor.value = null;
-    hasMore.value = false;
-  }
+  entries.value = [];
+  beforeCursor.value = null;
+  hasMore.value = false;
 
   const categories = [...activeCategories.value];
   const params: Record<string, any> = { limit: pageLimit.value };
   if (categories.length < CATEGORIES.length) params.category = categories.join(',');
-  if (before) params.before = before;
 
-  botStore.sendExec(selectedBot.value!, 'get_action_log', params, (res: any) => {
-    loading.value = false;
-    if (res.ok && res.data) {
-      const data = res.data;
-      const newEntries: any[] = data.entries ?? [];
-      if (before) {
+  if (selectedBotModel.value === '__all__') {
+    // Parallel fetch all bots
+    const bots = botStore.bots.map(b => b.username);
+    const results = await Promise.all(bots.map(u => fetchBotLog(u, params)));
+    const merged = results.flat().sort((a, b) => {
+      const ta = a.created_at ? new Date(a.created_at).getTime() : 0;
+      const tb = b.created_at ? new Date(b.created_at).getTime() : 0;
+      return tb - ta; // newest first
+    });
+    entries.value = merged.slice(0, pageLimit.value * Math.max(1, bots.length));
+    hasMore.value = false; // all-bots mode doesn't support cursor pagination
+  } else {
+    await new Promise<void>((resolve) => {
+      botStore.sendExec(selectedBotModel.value, 'get_action_log', params, (res: any) => {
+        if (res.ok && res.data) {
+          const data = res.data;
+          const newEntries: any[] = (data.entries ?? []).map((e: any) => ({ ...e, _bot: selectedBotModel.value }));
+          entries.value = newEntries;
+          hasMore.value = data.has_more === true;
+          beforeCursor.value = newEntries.length > 0 ? String(newEntries[newEntries.length - 1].id) : null;
+        }
+        resolve();
+      });
+    });
+  }
+
+  loading.value = false;
+}
+
+async function loadMore() {
+  if (selectedBotModel.value === '__all__' || !beforeCursor.value) return;
+  loading.value = true;
+  const categories = [...activeCategories.value];
+  const params: Record<string, any> = { limit: pageLimit.value, before: beforeCursor.value };
+  if (categories.length < CATEGORIES.length) params.category = categories.join(',');
+  await new Promise<void>((resolve) => {
+    botStore.sendExec(selectedBotModel.value, 'get_action_log', params, (res: any) => {
+      if (res.ok && res.data) {
+        const data = res.data;
+        const newEntries: any[] = (data.entries ?? []).map((e: any) => ({ ...e, _bot: selectedBotModel.value }));
         entries.value = [...entries.value, ...newEntries];
-      } else {
-        entries.value = newEntries;
+        hasMore.value = data.has_more === true;
+        beforeCursor.value = newEntries.length > 0 ? String(newEntries[newEntries.length - 1].id) : null;
       }
-      hasMore.value = data.has_more === true;
-      // before cursor = id of the oldest (last) entry in this page
-      beforeCursor.value = newEntries.length > 0 ? String(newEntries[newEntries.length - 1].id) : null;
-    }
+      resolve();
+    });
   });
-}
-
-function loadMore() {
-  if (beforeCursor.value) loadPage(beforeCursor.value);
-}
-
-function selectBot(username: string) {
-  selectedBot.value = username;
-  loadPage(null);
+  loading.value = false;
 }
 
 // ── Formatters ────────────────────────────────────────────────
@@ -306,5 +353,5 @@ function formatEntry(entry: any): string {
 }
 
 // Reload when limit changes
-watch(pageLimit, () => loadPage(null));
+watch(pageLimit, () => reload());
 </script>

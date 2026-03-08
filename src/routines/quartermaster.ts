@@ -13,6 +13,7 @@ import {
   tryRefuel,
   detectAndRecoverFromDeath,
   readSettings,
+  getReservedForGoals,
   sleep,
   logStatus,
 } from "./common.js";
@@ -73,14 +74,21 @@ export const quartermasterRoutine: Routine = async function* (ctx: RoutineContex
 
     ctx.log("info", `Faction storage: ${items.length} item type(s)`);
 
-    // ── Withdraw sellable items ──
+    // ── Withdraw sellable items (skip goal-reserved items) ──
     yield "withdraw_goods";
+    const qmReserved = bot.poi ? getReservedForGoals(bot.poi) : new Map<string, number>();
     const sellable = items.filter(i => {
       const lower = i.id.toLowerCase();
       // Keep raw ores for crafters, keep fuel/energy for fleet
       if (lower.startsWith("ore_")) return false;
       if (lower.includes("fuel") || lower.includes("energy_cell")) return false;
+      // Skip items reserved for active gather/crafter goals
+      const res = qmReserved.get(i.id) ?? 0;
+      if (i.qty <= res) return false;
       return i.qty >= settings.sellThreshold;
+    }).map(i => {
+      const res = qmReserved.get(i.id) ?? 0;
+      return { ...i, qty: i.qty - res }; // only sell surplus
     });
 
     if (!bot.inFaction) {

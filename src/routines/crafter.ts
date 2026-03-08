@@ -6,6 +6,7 @@ import {
   repairShip,
   ensureFueled,
   detectAndRecoverFromDeath,
+  navigateToSystem,
   readSettings,
   scavengeWrecks,
   sleep,
@@ -588,6 +589,11 @@ async function grindCraftingXP(
       crafted.push(`${qty}x ${target.output_name || target.name}`);
       bot.stats.totalCrafted += qty;
       applyCraftDelta(ctx, target, batchCount, result);
+
+      // Flush crafted output if cargo is getting full to prevent accumulation
+      if (bot.cargoMax > 0 && bot.inventory.reduce((s, i) => s + i.quantity, 0) / bot.cargoMax > 0.75) {
+        await dumpCargo(ctx);
+      }
     }
   }
 
@@ -883,6 +889,30 @@ export const crafterRoutine: Routine = async function* (ctx: RoutineContext) {
             ctx.log("warn", `[CrafterGoal] No recipe for '${goal.target_name || goal.target_id}' — skipping`);
             continue;
           }
+          // Navigate to the goal's target station if this bot is elsewhere
+          if (goal.target_system && goal.target_system !== bot.system) {
+            ctx.log("craft", `[CrafterGoal] Navigating to ${goal.target_system} for '${goal.target_name || recipe.name}'`);
+            await navigateToSystem(ctx, goal.target_system, { fuelThresholdPct: 50, hullThresholdPct: 30 });
+            await ensureDocked(ctx);
+            await bot.refreshFactionStorage();
+          } else if (goal.target_poi && bot.docked && goal.target_poi !== bot.poi) {
+            ctx.log("craft", `[CrafterGoal] Need to dock at ${goal.target_poi} — undocking and traveling`);
+            await ensureDocked(ctx); // travel within system handled by ensureDocked logic
+            await bot.refreshFactionStorage();
+          }
+
+          // Skill check BEFORE withdrawing any materials
+          const goalSkillOk = canCraftSkillwise(ctx, recipe);
+          if (!goalSkillOk.ok) {
+            ctx.log("warn", `[CrafterGoal] Skill too low for '${recipe.name}': ${goalSkillOk.reason} — grinding XP`);
+            const xpItems = await grindCraftingXP(ctx, recipes, recipeIndex, undefined, illegalRecipes);
+            if (xpItems.length > 0) {
+              ctx.log("craft", `[CrafterGoal] XP grind: ${xpItems.join(", ")}`);
+              await dumpCargo(ctx);
+            }
+            continue;
+          }
+
           if (!hasMaterialsAnywhere(ctx, recipe)) {
             ctx.log("craft", `[CrafterGoal] Waiting for materials: ${goal.target_name || recipe.name}`);
             continue;
@@ -1022,6 +1052,7 @@ export const crafterRoutine: Routine = async function* (ctx: RoutineContext) {
           xpCrafted = await grindCraftingXP(ctx, recipes, recipeIndex, undefined, illegalRecipes);
         }
         if (xpCrafted.length > 0) {
+          await dumpCargo(ctx); // flush crafted XP items before next recipe
           skillSummary.push(`${recipe.name} (${skillCheck.reason}, ground ${xpCrafted.join(", ")} for XP)`);
         } else {
           skillSummary.push(`${recipe.name} (${skillCheck.reason})`);

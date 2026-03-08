@@ -522,18 +522,65 @@
             <!-- Right: Quote (1/3) -->
             <div v-if="commissionQuote" class="flex-1 bg-space-bg border border-space-accent/30 rounded-md p-3 text-xs space-y-1.5 min-w-0">
               <div class="text-space-text font-semibold">Quote: {{ commissionQuote.ship_class || commissionShipClass }}</div>
-              <div class="text-space-yellow">💰 Total cost: {{ fmt(commissionQuote.total_cost || commissionQuote.cost || 0) }} cr</div>
-              <div v-if="commissionQuote.build_time" class="text-space-text-dim">⏱️ Build time: {{ commissionQuote.build_time }}s</div>
-              <div v-if="commissionQuote.issues?.length" class="space-y-0.5">
-                <div class="text-[11px] text-space-red font-medium mt-1">Issues to resolve:</div>
-                <div v-for="(issue, i) in commissionQuote.issues" :key="i" class="text-[11px] text-space-red/80 pl-2">• {{ issue }}</div>
-              </div>
-              <div v-if="commissionQuote.materials?.length > 0" class="space-y-0.5 pt-1 border-t border-[#21262d]">
-                <div class="text-[11px] uppercase tracking-wider text-space-text-dim mb-1">Materials (sourced by shipyard)</div>
-                <div v-for="mat in commissionQuote.materials" :key="mat.item_id" class="text-space-text-dim pl-1 text-[11px]">
-                  {{ mat.item_name || mat.item_id }}: ×{{ mat.quantity }}
+
+              <!-- Cost breakdown -->
+              <div class="space-y-0.5">
+                <div class="flex justify-between items-center">
+                  <span class="text-space-text-dim">💰 Credits only:</span>
+                  <span :class="commissionQuote.can_afford_credits_only ? 'text-space-green' : 'text-red-400'" class="font-medium">
+                    {{ fmt(commissionQuote.credits_only_total || 0) }} cr
+                    <span class="text-[10px]">{{ commissionQuote.can_afford_credits_only ? '✓' : '✗' }}</span>
+                  </span>
+                </div>
+                <div class="flex justify-between items-center">
+                  <span class="text-space-text-dim">� Provide materials:</span>
+                  <span :class="commissionQuote.can_afford_provide_materials ? 'text-space-green' : 'text-red-400'" class="font-medium">
+                    {{ fmt(commissionQuote.provide_materials_total || commissionQuote.labor_cost || 0) }} cr
+                    <span class="text-[10px]">{{ commissionQuote.can_afford_provide_materials ? '✓' : '✗' }}</span>
+                  </span>
+                </div>
+                <div v-if="commissionQuote.material_cost" class="flex justify-between text-[11px]">
+                  <span class="text-space-text-dim pl-2">↳ material markup:</span>
+                  <span class="text-space-text-dim">{{ fmt(commissionQuote.material_cost) }} cr</span>
+                </div>
+                <div v-if="commissionQuote.player_credits != null" class="flex justify-between text-[11px] pt-0.5 border-t border-[#21262d]">
+                  <span class="text-space-text-dim">Your credits:</span>
+                  <span class="text-space-cyan">{{ fmt(commissionQuote.player_credits) }} cr</span>
                 </div>
               </div>
+
+              <!-- Shipyard tier -->
+              <div v-if="commissionQuote.shipyard_tier_required != null" class="flex justify-between text-[11px]">
+                <span class="text-space-text-dim">🏭 Shipyard tier:</span>
+                <span :class="commissionQuote.shipyard_tier_here >= commissionQuote.shipyard_tier_required ? 'text-space-green' : 'text-red-400'">
+                  {{ commissionQuote.shipyard_tier_here }} / req {{ commissionQuote.shipyard_tier_required }}
+                  {{ commissionQuote.shipyard_tier_here >= commissionQuote.shipyard_tier_required ? '✓' : '✗' }}
+                </span>
+              </div>
+
+              <div v-if="commissionQuote.build_time" class="text-space-text-dim">⏱️ Build time: {{ commissionQuote.build_time }}s</div>
+
+              <!-- Issues / skill requirements -->
+              <div v-if="!commissionQuote.can_commission" class="rounded bg-red-950/40 border border-red-800/40 p-1.5 space-y-0.5">
+                <div class="text-[11px] text-red-400 font-medium">Cannot commission here — {{ commissionQuote.issues?.length || 1 }} issue(s):</div>
+                <div v-if="commissionQuote.issues?.length" v-for="(issue, i) in commissionQuote.issues" :key="i" class="text-[11px] text-red-300/80 pl-1">• {{ issue }}</div>
+                <div v-else class="text-[11px] text-red-300/80 pl-1">• Check skill or shipyard requirements above</div>
+              </div>
+
+              <!-- Build materials with your inventory counts -->
+              <div v-if="(commissionQuote.build_materials || commissionQuote.materials)?.length > 0" class="space-y-0.5 pt-1 border-t border-[#21262d]">
+                <div class="text-[11px] uppercase tracking-wider text-space-text-dim mb-1">🔩 Build Materials</div>
+                <div class="grid grid-cols-2 gap-x-2 gap-y-0.5">
+                  <div v-for="mat in (commissionQuote.build_materials || commissionQuote.materials)" :key="mat.item_id"
+                    class="text-[11px] flex items-center justify-between gap-1">
+                    <span class="text-space-text-dim truncate">{{ mat.name || mat.item_name || mat.item_id }}</span>
+                    <span :class="(botBuildMats[mat.item_id] || 0) >= mat.quantity ? 'text-space-green' : 'text-red-400'" class="shrink-0 font-medium">
+                      {{ botBuildMats[mat.item_id] || 0 }}/{{ mat.quantity }}
+                    </span>
+                  </div>
+                </div>
+              </div>
+
               <div v-if="commissionQuote.message" class="text-space-text-dim italic text-[11px]">{{ commissionQuote.message }}</div>
 
               <!-- provide_materials + commission button -->
@@ -559,7 +606,10 @@
                     <button @click="showCommissionConfirm = false" class="text-[11px] px-3 py-1 rounded border border-space-border text-space-text-dim hover:border-space-red hover:text-space-red transition-colors">Cancel</button>
                   </div>
                 </div>
-                <button v-else @click="showCommissionConfirm = true" :disabled="loading" class="btn btn-primary text-xs px-3 py-1 w-full">🔨 Commission Ship</button>
+                <button v-else @click="showCommissionConfirm = true"
+                  :disabled="loading || commissionQuote.can_commission === false"
+                  :title="commissionQuote.can_commission === false ? 'Resolve issues above before commissioning' : ''"
+                  class="btn btn-primary text-xs px-3 py-1 w-full disabled:opacity-50">🔨 Commission Ship</button>
               </div>
             </div>
           </div>

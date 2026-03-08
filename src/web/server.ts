@@ -531,6 +531,15 @@ export class WebServer {
         if (url.pathname === "/api/faction-buildings") {
           return Response.json(mapStore.getAllFactionBuildings());
         }
+        if (url.pathname === "/api/needs-matrix") {
+          const source = url.searchParams.get("source") as 'mine' | 'buy' | 'craft' | null;
+          const deficitsOnly = url.searchParams.get("deficits") === "1";
+          let items = source
+            ? mapStore.getNeedsMatrixBySource(source)
+            : mapStore.getAllNeedsMatrix();
+          if (deficitsOnly) items = items.filter(e => e.target_qty > e.current_qty);
+          return Response.json(items);
+        }
 
         // Player profile proxy
         if (url.pathname.startsWith("/api/player-info/")) {

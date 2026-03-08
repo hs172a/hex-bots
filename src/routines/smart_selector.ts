@@ -32,6 +32,7 @@ import { iceHarvesterRoutine } from "./ice_harvester.js";
 import { returnHomeRoutine } from "./return_home.js";
 import { hunterRoutine } from "./hunter.js";
 import { crafterRoutine, scoreCrafter } from "./crafter.js";
+import { gathererRoutine, scoreGatherer } from "./gatherer.js";
 import {
   readSettings,
   ensureDocked,
@@ -87,31 +88,51 @@ function skillLevel(ctx: RoutineContext, ...ids: string[]): number {
 // ── System POI helpers ────────────────────────────────────────
 
 /**
- * Score the miner based on ore belt availability:
- * - Current system has a belt  → full score (miningLevel * 10 + 20)
- * - Another known system has a belt → reduced score (miningLevel * 6) — miner will navigate
- * - No belt anywhere in the map → near-zero (1) — should not win selection
+ * Score the miner based on ore belt availability AND needs_matrix quota state:
+ * - If needs_matrix is fresh AND all ore targets are met → return 1 (no point mining more)
+ * - Current system has a belt + active deficit → full score (miningLevel * 10 + 20)
+ * - Another known system has belt + deficit   → reduced score (miningLevel * 6)
+ * - No belt anywhere in the map               → near-zero (1)
  */
 function scoreMiner(ctx: RoutineContext, miningLevel: number): number {
-  const sys = ctx.mapStore.getSystem(ctx.bot.system);
+  const NEEDS_MATRIX_MAX_AGE_MS = 2 * 60 * 60 * 1000; // 2 hours
 
-  // Check current system first
+  // Check needs_matrix: if coordinator has written fresh targets, honour them
+  const nmAll = ctx.mapStore.getNeedsMatrixBySource('mine');
+  if (nmAll.length > 0) {
+    const age = Date.now() - new Date(nmAll[0].updated_target_at).getTime();
+    if (age <= NEEDS_MATRIX_MAX_AGE_MS) {
+      const deficits = nmAll.filter(e => e.target_qty > e.current_qty);
+      if (deficits.length === 0) {
+        // All ore quotas satisfied — no point mining more right now
+        return 1;
+      }
+      // Has deficits — apply a priority multiplier (max deficit as % of target → 0.5–1.5x)
+      const maxDeficitPct = Math.max(...deficits.map(e => (e.target_qty - e.current_qty) / Math.max(1, e.target_qty)));
+      const priorityMul = 0.5 + Math.min(1.0, maxDeficitPct);
+
+      const sys = ctx.mapStore.getSystem(ctx.bot.system);
+      if (sys?.pois.some(p => isOreBeltPoi(p.type))) {
+        return Math.round((miningLevel * 10 + 20) * priorityMul);
+      }
+      const allSystems = ctx.mapStore.getAllSystems ? ctx.mapStore.getAllSystems() : {};
+      const anyBelt = Object.values(allSystems).some(s => s.pois.some(p => isOreBeltPoi(p.type)));
+      return anyBelt ? Math.round(miningLevel * 6 * priorityMul) : 1;
+    }
+  }
+
+  // No needs_matrix data yet — fall back to pure belt-based scoring
+  const sys = ctx.mapStore.getSystem(ctx.bot.system);
   if (sys?.pois.some(p => isOreBeltPoi(p.type))) {
     return miningLevel * 10 + 20;
   }
-
-  // Check entire known map for any ore belt
   const allSystems = ctx.mapStore.getAllSystems ? ctx.mapStore.getAllSystems() : {};
   const anyBeltKnown = Object.values(allSystems).some(s =>
     s.pois.some(p => isOreBeltPoi(p.type))
   );
-
   if (anyBeltKnown) {
-    // Miner will travel to another system — give it a lower score
     return miningLevel * 6;
   }
-
-  // No ore belt mapped at all — miner cannot do anything useful
   return 1;
 }
 
@@ -275,6 +296,28 @@ async function buildCandidates(
     ctx.log("system", `SmartSelector: ${nearbyEnemyCount} hostile(s) nearby — applying -${enemyPenalty} penalty to passive routines`);
   }
 
+  // Miner cooldown — prevents rapid re-selection after a quick/depleted-belt run
+  const MINER_COOLDOWN_MS = 5 * 60 * 1000;
+  const lastMine = lastRunMs.get("miner") ?? 0;
+  const minerElapsed = Date.now() - lastMine;
+  const minerCooldownPenalty = lastMine > 0 && minerElapsed < MINER_COOLDOWN_MS
+    ? Math.round((1 - minerElapsed / MINER_COOLDOWN_MS) * 35)
+    : 0;
+  if (minerCooldownPenalty > 0) {
+    ctx.log("system", `SmartSelector: miner cooldown -${minerCooldownPenalty} (ran ${Math.round(minerElapsed / 1000)}s ago)`);
+  }
+
+  // Trader cooldown — prevents no-route loop (trader keeps winning score but finds nothing)
+  const TRADER_COOLDOWN_MS = 8 * 60 * 1000;
+  const lastTrade = lastRunMs.get("trader") ?? 0;
+  const traderElapsed = Date.now() - lastTrade;
+  const traderCooldownPenalty = lastTrade > 0 && traderElapsed < TRADER_COOLDOWN_MS
+    ? Math.round((1 - traderElapsed / TRADER_COOLDOWN_MS) * 75)
+    : 0;
+  if (traderCooldownPenalty > 0) {
+    ctx.log("system", `SmartSelector: trader cooldown -${traderCooldownPenalty} (ran ${Math.round(traderElapsed / 1000)}s ago)`);
+  }
+
   const candidates: RoutineCandidate[] = [
     {
       key: "mission_runner",
@@ -286,7 +329,7 @@ async function buildCandidates(
       key: "trader",
       name: "Trader",
       fn: traderRoutine,
-      score: Math.max(0, tradeScore - enemyPenalty + allyBonus - lowCreditsPenalty),
+      score: Math.max(0, tradeScore - enemyPenalty + allyBonus - lowCreditsPenalty - traderCooldownPenalty),
     },
     {
       key: "gas_harvester",
@@ -312,9 +355,30 @@ async function buildCandidates(
       key: "miner",
       name: "Miner",
       fn: minerRoutineV2,
-      score: Math.max(0, scoreMiner(ctx, miningLevel) - enemyPenalty + allyBonus),
+      score: Math.max(0, scoreMiner(ctx, miningLevel) - enemyPenalty + allyBonus - minerCooldownPenalty),
     },
   ];
+
+  // Needs-matrix quota saturation: if all ore targets are met, boost explorer to redirect bot
+  const QUOTA_NM_AGE_MS = 2 * 60 * 60 * 1000;
+  const nmOre = ctx.mapStore.getNeedsMatrixBySource('mine');
+  if (nmOre.length > 0) {
+    const nmAge = Date.now() - new Date(nmOre[0].updated_target_at).getTime();
+    if (nmAge <= QUOTA_NM_AGE_MS && nmOre.every(e => e.current_qty >= e.target_qty)) {
+      const explorerCand = candidates.find(c => c.key === "explorer");
+      if (explorerCand) {
+        explorerCand.score += 20;
+        ctx.log("system", "SmartSelector: all ore quotas met — +20 to explorer (pivot to exploration)");
+      }
+    }
+  }
+
+  // Gatherer — runs when fleet has active gather goals needing materials
+  const gathererScore = scoreGatherer(ctx);
+  if (gathererScore > 0) {
+    candidates.push({ key: "gatherer", name: "Gatherer", fn: gathererRoutine, score: gathererScore });
+    ctx.log("system", `SmartSelector: gatherer score=${gathererScore} (pending fleet goals)`);
+  }
 
   // Crafter — dynamic score based on profitable craftable recipes in catalog cache.
   // Apply a cooldown penalty if crafter ran recently (< 5 min ago) to prevent monopolisation.
@@ -332,6 +396,38 @@ async function buildCandidates(
       ctx.log("system", `SmartSelector: crafter cooldown -${crafterCooldownPenalty} (ran ${Math.round(crafterElapsed / 1000)}s ago)`);
     }
     candidates.push({ key: "crafter", name: "Crafter", fn: crafterRoutine, score: finalCraftScore });
+  }
+
+  // ── Crafter goal override ─────────────────────────────────────
+  // If this bot is named as crafter_bot in any fleet goal, force crafter routine
+  // regardless of the normal score. A pending goal is higher priority than any
+  // economic routine (trader, miner, etc.).
+  {
+    const allSettings = readSettings();
+    let assignedGoalFound = false;
+    for (const [, bSettings] of Object.entries(allSettings)) {
+      if (!bSettings || typeof bSettings !== "object") continue;
+      const bs = bSettings as Record<string, unknown>;
+      const arr = (bs.goals as any[] | undefined) ?? [];
+      const legacy = bs.goal as any | null;
+      const goals: any[] = arr.length > 0 ? arr : (legacy ? [legacy] : []);
+      if (goals.some((g: any) => g?.crafter_bot === bot.username &&
+          (g.goal_type === "craft" || g.goal_type === "crafter"))) {
+        assignedGoalFound = true;
+        break;
+      }
+    }
+    if (assignedGoalFound) {
+      const crafterCand = candidates.find(c => c.key === "crafter");
+      if (crafterCand) {
+        crafterCand.score = 200; // guaranteed highest priority
+        ctx.log("system", `SmartSelector: assigned crafter goal detected — forcing crafter (score=200)`);
+      } else if (craftingLevel > 0) {
+        // craftingLevel may be 0 above; add the candidate anyway if there's a goal
+        candidates.push({ key: "crafter", name: "Crafter", fn: crafterRoutine, score: 200 });
+        ctx.log("system", `SmartSelector: assigned crafter goal detected — adding crafter candidate (score=200)`);
+      }
+    }
   }
 
   // Single faction intel query — results applied to both trader (trade signal) and hunter (threat)
@@ -426,6 +522,7 @@ const FORCED_ROUTINES: Record<string, Routine> = {
   ice_harvester:  iceHarvesterRoutine,
   return_home:    returnHomeRoutine,
   hunter:         hunterRoutine,
+  gatherer:       gathererRoutine,
 };
 
 // ── Main routine ──────────────────────────────────────────────
@@ -489,7 +586,8 @@ export const smartSelectorRoutine: Routine = async function* (ctx: RoutineContex
         for (const item of [...bot.inventory]) {
           if (item.quantity <= 0) continue;
           const sellResp = await bot.exec("sell", { item_id: item.itemId, quantity: item.quantity });
-          if (sellResp.error) {
+          const sellOk = !sellResp.error && ((sellResp.result as any)?.quantity_sold ?? 1) > 0;
+          if (!sellOk) {
             let deposited = false;
             if (bot.inFaction && !noFacStorage) {
               const facResp = await bot.exec("faction_deposit_items", { item_id: item.itemId, quantity: item.quantity });

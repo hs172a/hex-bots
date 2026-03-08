@@ -282,6 +282,18 @@
             <label class="text-[10px] text-space-text-dim">Gift target (optional)</label>
             <input v-model="craftPlan.giftTarget" placeholder="username or leave blank" class="input w-full mt-0.5 text-xs">
           </div>
+          <!-- Craft station: where the crafter should dock and craft -->
+          <div v-if="craftPlan.goalType === 'crafter'" class="flex-1 min-w-40">
+            <label class="text-[10px] text-purple-300">Craft station</label>
+            <select v-model="craftPlan.craftStation" class="input w-full mt-0.5 text-xs">
+              <option value="">(auto-detect from crafter bot)</option>
+              <option v-for="s in knownStations" :key="s.id" :value="s.id">{{ s.name }}</option>
+            </select>
+          </div>
+        </div>
+        <!-- Skill warning -->
+        <div v-if="crafterSkillWarning" class="mb-2 px-2 py-1.5 rounded bg-yellow-900/30 border border-yellow-700/50 text-[11px] text-yellow-300">
+          {{ crafterSkillWarning }}
         </div>
 
         <!-- Result -->
@@ -291,7 +303,7 @@
             <span v-if="craftPlanNeeds.length === 0" class="text-xs text-green-400">✓ All materials already available — ready to craft!</span>
             <span v-else class="text-xs text-space-text">{{ craftPlanNeeds.length }} material type(s) need gathering</span>
             <button
-              v-if="craftPlanNeeds.length > 0 && (craftPlan.goalType === 'crafter' ? craftPlan.crafterBot : craftPlan.botName)"
+              v-if="craftPlanResult && (craftPlanNeeds.length > 0 || craftPlan.goalType === 'crafter') && (craftPlan.goalType === 'crafter' ? craftPlan.crafterBot : craftPlan.botName)"
               @click="createCraftGatherGoal"
               class="btn btn-primary px-2 py-0.5 text-xs"
             >📦 {{ craftPlan.goalType === 'crafter' ? `Create Crafter Goal → ${craftPlan.crafterBot}` : craftPlan.goalType === 'craft' ? `Create Craft Goal → ${craftPlan.botName}` : `Create Gather Goal → ${craftPlan.botName}` }}</button>
@@ -691,7 +703,7 @@ async function refreshAll() {
 
 // ── Craft Planner ────────────────────────────────────────────
 
-const craftPlan = reactive({ itemId: '', quantity: 1, botName: '', goalType: 'build' as 'build' | 'craft' | 'crafter', crafterBot: '', giftTarget: '' })
+const craftPlan = reactive({ itemId: '', quantity: 1, botName: '', goalType: 'build' as 'build' | 'craft' | 'crafter', crafterBot: '', giftTarget: '', craftStation: '' })
 const craftPlanResult = ref<RecipeNode | null>(null)
 const craftPlanNeeds = ref<GatherNeed[]>([])
 
@@ -702,6 +714,49 @@ const craftableItems = computed(() => {
   return [...index.values()]
     .map(r => ({ item_id: r.output_item_id, name: items[r.output_item_id]?.name || r.output_name }))
     .sort((a, b) => a.name.localeCompare(b.name))
+})
+
+/** All known stations across mapData — used for craft station picker. */
+const knownStations = computed(() => {
+  const result: Array<{ id: string; name: string; system: string }> = []
+  for (const [sysId, sys] of Object.entries(botStore.mapData as Record<string, any>)) {
+    for (const poi of (sys.pois || []) as any[]) {
+      if (poi.has_base || poi.type?.toLowerCase().includes('station') || poi.type?.toLowerCase().includes('base')) {
+        result.push({ id: poi.id, name: poi.name || poi.id, system: sysId })
+      }
+    }
+  }
+  return result.sort((a, b) => a.name.localeCompare(b.name))
+})
+
+/** Skill warning: check if the chosen crafter bot can actually craft the target item. */
+const crafterSkillWarning = computed(() => {
+  if (craftPlan.goalType !== 'crafter' || !craftPlan.crafterBot || !craftPlan.itemId) return ''
+  const catalog = botStore.catalog || { recipes: {}, items: {} }
+  const recipes = (catalog.recipes || {}) as Record<string, Record<string, unknown>>
+  // Find recipe that outputs the target item
+  const recipe = Object.values(recipes).find((r: any) => r.output_item_id === craftPlan.itemId || r.outputs?.[0]?.item_id === craftPlan.itemId) as any
+  if (!recipe) return ''
+  const reqSkill = recipe.required_skill || recipe.skill
+  const reqSkills = recipe.required_skills
+  let needSkillId = '', needLevel = 0
+  if (reqSkill && typeof reqSkill === 'object') {
+    needSkillId = reqSkill.skill_id || reqSkill.id || reqSkill.name || ''
+    needLevel = reqSkill.level || reqSkill.min_level || 0
+  } else if (reqSkills && typeof reqSkills === 'object') {
+    const entry = Object.entries(reqSkills as Record<string, number>)[0]
+    if (entry) { needSkillId = entry[0]; needLevel = entry[1] }
+  }
+  if (!needSkillId || !needLevel) return ''
+  const crafterBot = botStore.bots.find(b => b.username === craftPlan.crafterBot) as any
+  if (!crafterBot) return ''
+  const skills: any[] = crafterBot.skills || []
+  const skill = skills.find((s: any) => s.skill_id === needSkillId || s.id === needSkillId)
+  const haveLevel = skill?.level ?? 0
+  if (haveLevel < needLevel) {
+    return `⚠ ${craftPlan.crafterBot} has ${needSkillId} Lv${haveLevel} but needs Lv${needLevel} — goal will grind XP until skill is reached`
+  }
+  return ''
 })
 
 function analyzeCraftPlan() {
@@ -716,10 +771,16 @@ function analyzeCraftPlan() {
   const available = bot ? buildAvailabilityMap(bot as any) : new Map<string, number>()
   craftPlanResult.value = buildNode(craftPlan.itemId, craftPlan.quantity, itemNames, recipeIndex, available)
   craftPlanNeeds.value = extractGatherNeeds(craftPlanResult.value)
+  // Auto-set craftStation to crafter's current station if not already set
+  if (craftPlan.goalType === 'crafter' && craftPlan.crafterBot && !craftPlan.craftStation) {
+    const cb = botStore.bots.find(b => b.username === craftPlan.crafterBot) as any
+    if (cb?.poi) craftPlan.craftStation = cb.poi
+  }
 }
 
 function createCraftGatherGoal() {
-  if (!craftPlanNeeds.value.length) return
+  // For 'crafter' type allow creating even when needs are empty (materials already available → crafter crafts immediately)
+  if (!craftPlanNeeds.value.length && craftPlan.goalType !== 'crafter') return
   const isCrafterType = craftPlan.goalType === 'crafter'
   // crafter type: goal saved to crafter's settings; craft/build: saved to gatherer's settings
   const goalOwnerBot = isCrafterType ? craftPlan.crafterBot : craftPlan.botName
@@ -731,20 +792,28 @@ function createCraftGatherGoal() {
   const targetBot = botStore.bots.find(b => b.username === targetBotName) as any
   const rawItems = (botStore.catalog?.items || {}) as Record<string, { name?: string }>
   const targetName = rawItems[craftPlan.itemId]?.name || craftPlan.itemId
-  // Resolve station: prefer a station POI in current system, fallback homePoI/homeSystem
-  const mapSys = targetBot?.system ? (botStore.mapData[targetBot.system] as any) : null
-  const isStationPoi = (poiId: string) => !!(mapSys?.pois?.find((p: any) => p.id === poiId)?.has_base)
-  const resolvedPoi = (targetBot?.poi && isStationPoi(targetBot.poi))
-    ? targetBot.poi
-    : (targetBot?.homePoI || '')
-  const resolvedSystem = resolvedPoi
-    ? (targetBot?.system || targetBot?.homeSystem || '')
-    : (targetBot?.homeSystem || '')
+
+  // Use explicitly selected craftStation, else auto-resolve from target bot's current poi/home
+  let resolvedPoi = craftPlan.craftStation || ''
+  let resolvedSystem = ''
+  if (resolvedPoi) {
+    // Find the system that contains this POI
+    const stationEntry = knownStations.value.find(s => s.id === resolvedPoi)
+    resolvedSystem = stationEntry?.system || targetBot?.system || ''
+  } else {
+    // Legacy auto-resolve: crafter's current poi if it's a station
+    const mapSys = targetBot?.system ? (botStore.mapData[targetBot.system] as any) : null
+    const isStationPoi = (poiId: string) => !!(mapSys?.pois?.find((p: any) => p.id === poiId)?.has_base)
+    resolvedPoi = (targetBot?.poi && isStationPoi(targetBot.poi)) ? targetBot.poi : (targetBot?.homePoI || '')
+    resolvedSystem = resolvedPoi ? (targetBot?.system || targetBot?.homeSystem || '') : (targetBot?.homeSystem || '')
+  }
+
   const newGoal: any = {
     id: `${craftPlan.goalType}_${craftPlan.itemId}_${Date.now()}`,
     target_id: craftPlan.itemId,
     target_name: targetName,
     goal_type: craftPlan.goalType,
+    quantity: craftPlan.quantity,
     target_bot: targetBotName,
     target_poi: resolvedPoi,
     target_system: resolvedSystem,

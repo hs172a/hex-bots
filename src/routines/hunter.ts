@@ -71,7 +71,7 @@ function getHunterSettings(username?: string): {
 
   return {
     system: (botOverrides.system as string) || (h.system as string) || "",
-    refuelThreshold: (h.refuelThreshold as number) || 40,
+    refuelThreshold: (h.refuelThreshold as number) || 50,
     repairThreshold: (h.repairThreshold as number) || 30,
     fleeThreshold: (h.fleeThreshold as number) || 20,
     onlyNPCs: (h.onlyNPCs as boolean) !== false,
@@ -524,6 +524,55 @@ function findNextHuntSystem(fromSystemId: string, ms: MapStore): string | null {
   return null;
 }
 
+// ── Arrival combat scan ─────────────────────────────────────
+
+/**
+ * Immediately scan for and engage hostile entities after arriving in a new system.
+ * Handles "Drifter has detected you — Attack imminent" style ambushes that
+ * trigger on jump-in, before the regular patrol loop has a chance to scan.
+ * Returns the number of kills.
+ */
+async function scanAndEngageOnArrival(
+  ctx: RoutineContext,
+  settings: ReturnType<typeof getHunterSettings>,
+): Promise<number> {
+  const { bot } = ctx;
+  if (bot.ammo === 0) return 0;
+
+  const nearbyResp = await bot.exec("get_nearby");
+  if (nearbyResp.error || !nearbyResp.result) return 0;
+
+  const entities = parseNearby(nearbyResp.result);
+  const targets = entities.filter(e => isPirateTarget(e, settings.onlyNPCs));
+  if (targets.length === 0) return 0;
+
+  ctx.log("combat", `⚠️  ${targets.length} hostile(s) detected on arrival at ${bot.system}: ${targets.map(t => t.name).join(", ")} — engaging!`);
+
+  let kills = 0;
+  for (const target of targets) {
+    if (bot.state !== "running") break;
+    await bot.refreshStatus();
+    const hullPct = bot.maxHull > 0 ? Math.round((bot.hull / bot.maxHull) * 100) : 100;
+    if (hullPct <= settings.repairThreshold) {
+      ctx.log("system", `Hull at ${hullPct}% — skipping arrival engagement`);
+      break;
+    }
+    if (bot.ammo === 0) {
+      ctx.log("combat", "Out of ammo — cannot engage on arrival");
+      break;
+    }
+    const won = await engageTarget(ctx, target, settings.fleeThreshold, settings.preferredStance);
+    if (won) {
+      kills++;
+      await scavengeWrecks(ctx);
+    } else {
+      ctx.log("combat", "Retreated from arrival combat");
+      break;
+    }
+  }
+  return kills;
+}
+
 // ── Ammo management ──────────────────────────────────────────
 
 /**
@@ -852,6 +901,10 @@ export const hunterRoutine: Routine = async function* (ctx: RoutineContext) {
       const arrived = await navigateToSystem(ctx, alertTarget, safetyOpts);
       if (!arrived) {
         ctx.log("error", `Could not reach ${alertTarget} — resuming normal patrol`);
+      } else {
+        const k = await scanAndEngageOnArrival(ctx, settings);
+        totalKills += k;
+        bot.stats.totalKills = (bot.stats.totalKills ?? 0) + k;
       }
     }
 
@@ -863,6 +916,10 @@ export const hunterRoutine: Routine = async function* (ctx: RoutineContext) {
       const arrived = await navigateToSystem(ctx, patrolSystem, safetyOpts);
       if (!arrived) {
         ctx.log("error", `Could not reach ${patrolSystem} — patrolling ${bot.system} instead`);
+      } else {
+        const k = await scanAndEngageOnArrival(ctx, settings);
+        totalKills += k;
+        bot.stats.totalKills = (bot.stats.totalKills ?? 0) + k;
       }
     } else {
       await fetchSecurityLevel(ctx, bot.system);
@@ -875,7 +932,12 @@ export const hunterRoutine: Routine = async function* (ctx: RoutineContext) {
         if (huntTarget) {
           const sys = ctx.mapStore.getSystem(huntTarget);
           ctx.log("travel", `Found huntable system: ${sys?.name || huntTarget} (${sys?.security_level}) — navigating...`);
-          await navigateToSystem(ctx, huntTarget, safetyOpts);
+          const arrivedHunt = await navigateToSystem(ctx, huntTarget, safetyOpts);
+          if (arrivedHunt) {
+            const k = await scanAndEngageOnArrival(ctx, settings);
+            totalKills += k;
+            bot.stats.totalKills = (bot.stats.totalKills ?? 0) + k;
+          }
         } else {
           const conns = ctx.mapStore.getConnections(bot.system);
           const unmapped = conns.find(c => !ctx.mapStore.getSystem(c.system_id)?.security_level);
@@ -1129,7 +1191,12 @@ export const hunterRoutine: Routine = async function* (ctx: RoutineContext) {
         if (nextSystem) {
           const sys = ctx.mapStore.getSystem(nextSystem);
           ctx.log("travel", `Moving to ${sys?.name || nextSystem} (${sys?.security_level || "unknown"}) to continue hunt...`);
-          await navigateToSystem(ctx, nextSystem, safetyOpts);
+          const arrivedNext = await navigateToSystem(ctx, nextSystem, safetyOpts);
+          if (arrivedNext) {
+            const k = await scanAndEngageOnArrival(ctx, settings);
+            totalKills += k;
+            bot.stats.totalKills = (bot.stats.totalKills ?? 0) + k;
+          }
           await getSystemInfo(ctx);
           await fetchSecurityLevel(ctx, bot.system);
         } else {

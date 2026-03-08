@@ -7,7 +7,7 @@ import { Database } from "bun:sqlite";
 import { mkdirSync } from "fs";
 
 const DB_PATH = "data/hex-bots.db";
-const CURRENT_SCHEMA_VERSION = 7;
+const CURRENT_SCHEMA_VERSION = 8;
 
 export function createDatabase(): Database {
   mkdirSync("data", { recursive: true });
@@ -43,6 +43,7 @@ function applyMigrations(db: Database, fromVersion: number): void {
     if (fromVersion < 5) migrateV5(db);
     if (fromVersion < 6) migrateV6(db);
     if (fromVersion < 7) migrateV7(db);
+    if (fromVersion < 8) migrateV8(db);
 
     // Update schema version
     db.run("DELETE FROM schema_version");
@@ -360,6 +361,26 @@ function migrateV6(db: Database): void {
   `);
   db.run("CREATE INDEX IF NOT EXISTS idx_fb_system ON faction_buildings(system_id)");
   db.run("CREATE INDEX IF NOT EXISTS idx_fb_faction ON faction_buildings(faction_id)");
+}
+
+function migrateV8(db: Database): void {
+  // ── Needs Matrix (fleet production targets vs faction storage reality) ──
+  db.run(`
+    CREATE TABLE IF NOT EXISTS needs_matrix (
+      item_id             TEXT PRIMARY KEY,
+      item_name           TEXT NOT NULL DEFAULT '',
+      category            TEXT NOT NULL DEFAULT 'unknown',
+      target_qty          INTEGER NOT NULL DEFAULT 0,
+      current_qty         INTEGER NOT NULL DEFAULT 0,
+      source              TEXT NOT NULL DEFAULT 'mine',
+      priority            INTEGER NOT NULL DEFAULT 50,
+      updated_target_at   TEXT NOT NULL DEFAULT (datetime('now')),
+      updated_current_at  TEXT NOT NULL DEFAULT (datetime('now')),
+      updated_by          TEXT NOT NULL DEFAULT ''
+    )
+  `);
+  db.run("CREATE INDEX IF NOT EXISTS idx_nm_source ON needs_matrix(source)");
+  db.run("CREATE INDEX IF NOT EXISTS idx_nm_deficit ON needs_matrix(target_qty, current_qty)");
 }
 
 // ── CacheHelper ──

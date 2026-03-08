@@ -7,6 +7,7 @@ import {
   repairShip,
   readSettings,
   writeSettings,
+  getReservedForGoals,
   sleep,
   logFactionActivity,
   isOreBeltPoi,
@@ -146,6 +147,33 @@ async function fetchGlobalMarket(
     log("error", `Global market fetch error: ${err instanceof Error ? err.message : String(err)}`);
     return null;
   }
+}
+
+/**
+ * Fallback: build GlobalMarketData from locally cached market data in mapStore
+ * when the external HTTP endpoint is unavailable.
+ * Uses mapStore.getAllBuyDemand() — same source as the AI's map_get_buy_demand tool.
+ */
+function fetchBuyDemandFromMapStore(ctx: RoutineContext): GlobalMarketData | null {
+  const demand = ctx.mapStore.getAllBuyDemand();
+  if (demand.length === 0) return null;
+
+  const bidByItem = new Map<string, { bestPrice: number; totalQty: number; empires: string[] }>();
+  const askByItem = new Map<string, number>();
+  const baseValues = new Map<string, number>();
+
+  for (const entry of demand) {
+    const existing = bidByItem.get(entry.itemId);
+    if (!existing) {
+      bidByItem.set(entry.itemId, { bestPrice: entry.price, totalQty: entry.quantity, empires: [] });
+    } else {
+      if (entry.price > existing.bestPrice) existing.bestPrice = entry.price;
+      existing.totalQty += entry.quantity;
+    }
+  }
+
+  ctx.log("coord", `Local mapStore buy demand (fallback): ${bidByItem.size} items from ${demand.length} station entries`);
+  return { bidByItem, askByItem, baseValues };
 }
 
 // ── Recipe parsing ───────────────────────────────────────────
@@ -632,6 +660,7 @@ async function placeMarketOrders(
   // ── Sell orders (faction storage liquidation) ──
   await bot.refreshFactionStorage();
   let sellOrdersPlaced = currentSellCount;
+  const coordReserved = bot.poi ? getReservedForGoals(bot.poi) : new Map<string, number>();
 
   for (const item of bot.factionStorage) {
     if (sellOrdersPlaced >= settings.maxSellOrders) break;
@@ -641,6 +670,11 @@ async function placeMarketOrders(
     const lower = item.itemId.toLowerCase();
     if (lower.includes("fuel") || lower.includes("energy_cell")) continue;
 
+    // Skip items reserved for active gather/crafter goals
+    const reservedQty = coordReserved.get(item.itemId) ?? 0;
+    if (item.quantity <= reservedQty) continue;
+    const availableQty = item.quantity - reservedQty;
+
     // Find best known sell price
     const bestSell = ctx.mapStore.findBestSellPrice(item.itemId);
     const globalAsk = globalMarket?.askByItem.get(item.itemId);
@@ -648,7 +682,7 @@ async function placeMarketOrders(
     if (basePrice <= 0) continue;
 
     const sellPrice = Math.ceil(basePrice * 1.15); // 15% markup
-    const qty = Math.min(item.quantity, 50); // cap at 50
+    const qty = Math.min(availableQty, 50); // cap at 50, use surplus only
 
     // Withdraw items from faction storage
     const wResp = await bot.exec("faction_withdraw_items", { item_id: item.itemId, quantity: qty });
@@ -713,6 +747,10 @@ export const coordinatorRoutine: Routine = async function* (ctx: RoutineContext)
     if (settings.useGlobalMarket) {
       yield "fetch_global_market";
       globalMarket = (await fetchGlobalMarket(ctx.log)) ?? undefined;
+      if (!globalMarket) {
+        ctx.log("coord", "HTTP market unavailable — falling back to local mapStore demand cache");
+        globalMarket = fetchBuyDemandFromMapStore(ctx) ?? undefined;
+      }
     }
 
     // ── Build demand map ──
@@ -870,6 +908,22 @@ export const coordinatorRoutine: Routine = async function* (ctx: RoutineContext)
       if (skipped.length > 0) {
         ctx.log("coord", `Skipped (no materials): ${skipped.join(", ")}`);
       }
+
+      // ── Publish crafted product targets to needs_matrix (source='craft') ──
+      const craftEntries: Array<{ itemId: string; itemName: string; category: string; targetQty: number; priority?: number }> = [];
+      for (const [recipeId, limit] of Object.entries(newLimits)) {
+        if (limit <= 0) continue;
+        const recipe = recipes.find(r => r.recipe_id === recipeId);
+        if (!recipe || !recipe.output_item_id) continue;
+        craftEntries.push({
+          itemId: recipe.output_item_id,
+          itemName: recipe.output_name || recipe.name,
+          category: 'product',
+          targetQty: limit,
+          priority: Math.min(100, Math.round(50 + (profitable.find(p => p.recipe.recipe_id === recipeId)?.profitPct ?? 0) / 2)),
+        });
+      }
+      ctx.mapStore.replaceNeedsMatrixTargets('craft', craftEntries);
     }
 
     // ── Update miner targetOre + oreQuotas ──
@@ -903,6 +957,41 @@ export const coordinatorRoutine: Routine = async function* (ctx: RoutineContext)
       }
       if (Object.keys(minerUpdates).length > 0) {
         writeSettings({ miner: minerUpdates });
+      }
+
+      // ── Publish ore needs to needs_matrix (persistent, cross-VM signal) ──
+      const oreEntries = Object.entries(oreQuotas).map(([itemId, targetQty]) => ({
+        itemId,
+        itemName: ctx.catalogStore.resolveItemName(itemId),
+        category: 'ore',
+        targetQty,
+        priority: Math.min(100, Math.round((oreQuotas[itemId] / Math.max(1, Math.max(...Object.values(oreQuotas)))) * 80) + 20),
+      }));
+      ctx.mapStore.replaceNeedsMatrixTargets('mine', oreEntries);
+      if (oreEntries.length > 0) {
+        ctx.log("coord", `Needs matrix updated: ${oreEntries.length} ore target(s) written`);
+      }
+
+      // ── Chain efficiency: fleet-wide production health snapshot ──
+      const allNm = ctx.mapStore.getAllNeedsMatrix();
+      const nmWithTargets = allNm.filter(e => e.target_qty > 0);
+      if (nmWithTargets.length > 0) {
+        const satisfied = nmWithTargets.filter(e => e.current_qty >= e.target_qty).length;
+        const efficiencyPct = Math.round((satisfied / nmWithTargets.length) * 100);
+
+        const bottlenecks = nmWithTargets
+          .filter(e => e.current_qty < e.target_qty * 0.5)
+          .sort((a, b) => (b.target_qty - b.current_qty) - (a.target_qty - a.current_qty))
+          .slice(0, 3);
+
+        ctx.log("coord", `Chain efficiency: ${efficiencyPct}% (${satisfied}/${nmWithTargets.length} targets met)`);
+        if (bottlenecks.length > 0) {
+          const bnList = bottlenecks.map(e => {
+            const name = ctx.catalogStore.resolveItemName(e.item_id);
+            return `${name} ${e.current_qty}/${e.target_qty}`;
+          }).join(", ");
+          ctx.log("coord", `⚠ Bottlenecks: ${bnList}`);
+        }
       }
     }
 

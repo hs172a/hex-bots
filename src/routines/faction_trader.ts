@@ -19,6 +19,7 @@ import {
   detectAndRecoverFromDeath,
   maxItemsForCargo,
   readSettings,
+  getReservedForGoals,
   sleep,
 } from "./common.js";
 
@@ -46,7 +47,7 @@ function getFactionTraderSettings(username?: string): {
     homeStation: (botOverrides.homeStation as string)
       || (t.homeStation as string)
       || (general.factionStorageStation as string) || "",
-    fuelCostPerJump: (t.fuelCostPerJump as number) || 50,
+    fuelCostPerJump: (t.fuelCostPerJump as number) || 300, // v0.188.0: physics-based fuel
     refuelThreshold: (t.refuelThreshold as number) || 50,
     repairThreshold: (t.repairThreshold as number) || 40,
     minSellPrice: (t.minSellPrice as number) || 0,
@@ -337,7 +338,10 @@ export const factionTraderRoutine: Routine = async function* (ctx: RoutineContex
           continue;
         }
 
-        let wQty = Math.min(remaining, maxItemsForCargo(freeSpace, route.itemId));
+        const ftReserved1 = bot.poi ? getReservedForGoals(bot.poi) : new Map<string, number>();
+        const ftSurplus1 = (bot.factionStorage.find(i => i.itemId === route.itemId)?.quantity ?? 0) - (ftReserved1.get(route.itemId) ?? 0);
+        if (ftSurplus1 <= 0) break;
+        let wQty = Math.min(remaining, maxItemsForCargo(freeSpace, route.itemId), ftSurplus1);
         if (wQty <= 0) break;
         let wResp = await bot.exec("faction_withdraw_items", { item_id: route.itemId, quantity: wQty });
         if (wResp.error && wResp.error.message.includes("cargo_full")) {
@@ -423,6 +427,10 @@ export const factionTraderRoutine: Routine = async function* (ctx: RoutineContex
         continue;
       }
 
+      const ftReserved2 = bot.poi ? getReservedForGoals(bot.poi) : new Map<string, number>();
+      const ftSurplus2 = (bot.factionStorage.find(i => i.itemId === route.itemId)?.quantity ?? 0) - (ftReserved2.get(route.itemId) ?? 0);
+      if (ftSurplus2 <= 0) continue;
+      qty = Math.min(qty, ftSurplus2);
       let wResp = await bot.exec("faction_withdraw_items", { item_id: route.itemId, quantity: qty });
       if (wResp.error && wResp.error.message.includes("cargo_full")) {
         qty = Math.max(1, Math.floor(qty / 2));

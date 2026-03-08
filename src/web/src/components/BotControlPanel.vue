@@ -91,6 +91,53 @@
             </div>
           </div>
 
+          <!-- Quick Travel: POI shortcuts within the current system -->
+          <div v-if="otherSystemPois.length > 0" class="col-span-2 bg-[#0d1117] border border-space-border rounded p-1.5">
+            <div class="text-[11px] text-space-text-dim font-semibold mb-1 flex items-center justify-between">
+              <span>🚀 Quick Travel</span>
+              <span v-if="currentBot.docked" class="text-amber-400 text-[10px]">⚠ Undock first</span>
+            </div>
+            <div class="grid grid-cols-4 gap-1">
+              <button
+                v-for="poi in otherSystemPois"
+                :key="poi.id || poi.poi_id"
+                @click="execCommand('travel', { target_poi: poi.id || poi.poi_id })"
+                :disabled="commandRunning || !!currentBot.docked"
+                class="text-[11px] py-0.5 px-1.5 bg-space-accent/10 hover:bg-space-accent/20 disabled:opacity-40 text-space-accent border border-space-accent/20 rounded transition-colors flex items-center gap-1"
+                :title="`Travel to ${poi.name} (${poi.type})`"
+              >
+                <span class="shrink-0">{{ getPoiIcon(poi.type) }}</span>
+                <span class="truncate">{{ poi.name }}</span>
+              </button>
+            </div>
+          </div>
+
+          <!-- Jump to Connected Systems -->
+          <div v-if="connectedSystems.length > 0" class="col-span-2 bg-[#0d1117] border border-space-border rounded p-1.5">
+            <div class="text-[11px] text-space-text-dim font-semibold mb-1 flex items-center justify-between">
+              <span>🌀 Jump Gates</span>
+              <span v-if="currentBot.docked" class="text-amber-400 text-[10px]">⚠ Undock first</span>
+            </div>
+            <div class="grid grid-cols-4 gap-1">
+              <button
+                v-for="sys in connectedSystems"
+                :key="sys.system_id"
+                @click="execCommand('jump', { target_system: sys.system_id })"
+                :disabled="commandRunning || !!currentBot.docked || !hasEnoughFuelForJump(sys.distance)"
+                class="text-[11px] py-0.5 px-1.5 bg-purple-900/20 hover:bg-purple-900/40 disabled:opacity-40 text-purple-300 border border-purple-800/30 rounded transition-colors flex items-center justify-between gap-1"
+                :title="`${sys.name}\nDistance: ${sys.distance || '?'} ly\nFuel: ${Math.ceil((sys.distance || 0) / 100)}⚡`"
+              >
+                <span class="flex items-center gap-1 truncate min-w-0">
+                  <span class="shrink-0">🌀</span>
+                  <span class="truncate">{{ sys.name }}</span>
+                </span>
+                <span class="text-[10px] shrink-0" :class="hasEnoughFuelForJump(sys.distance) ? 'text-space-text-dim' : 'text-red-400'">
+                  {{ Math.ceil((sys.distance || 0) / 100) }}⚡
+                </span>
+              </button>
+            </div>
+          </div>
+
           <!-- Dock/Undock / Mine/Scan / Refuel/Repair -->
           <div class="flex gap-2 items-center">
             <label class="text-xs text-space-text-dim w-18"></label>
@@ -205,6 +252,46 @@
             <button @click="execBuyOrder" :disabled="!buyOrderItem || buyOrderPrice <= 0" class="btn text-xs px-3 py-1 border-space-cyan/50 text-space-cyan disabled:opacity-40">Order</button>
           </div>
 
+          <!-- Open Orders (modify_order / cancel_order) -->
+          <div v-if="openOrders.length > 0" class="col-span-2 bg-[#0d1117] border border-space-border rounded p-1.5">
+            <div class="flex items-center justify-between mb-1.5">
+              <span class="text-[11px] font-semibold text-space-text-dim uppercase">📋 Open Orders ({{ openOrders.length }})</span>
+              <button @click="execCommand('view_orders')" class="btn text-[10px] px-1.5 py-0 leading-4">🔄</button>
+            </div>
+            <div class="space-y-1">
+              <div v-for="order in openOrders" :key="order.order_id" class="flex items-center gap-1.5 text-[11px]">
+                <span class="px-1 py-0 rounded text-[10px] font-bold shrink-0 leading-4" :class="order.type === 'sell' ? 'bg-red-900/40 text-red-300' : 'bg-green-900/40 text-green-300'">
+                  {{ order.type === 'sell' ? 'S' : 'B' }}
+                </span>
+                <span class="flex-1 truncate text-space-text">{{ order.item_name || order.item_id }}</span>
+                <span class="text-space-text-dim shrink-0">{{ order.quantity }}x</span>
+                <template v-if="modifyOrderId === order.order_id">
+                  <input
+                    v-model.number="modifyNewPrice"
+                    type="number" min="1"
+                    class="input text-[11px] w-20 !p-0.5 scrollbar-dark"
+                    @keyup.enter="submitModifyOrder(order.order_id)"
+                    @keyup.escape="modifyOrderId = ''"
+                  />
+                  <button @click="submitModifyOrder(order.order_id)" class="btn btn-primary text-[10px] px-1.5 py-0 leading-4">✓</button>
+                  <button @click="modifyOrderId = ''" class="btn text-[10px] px-1.5 py-0 leading-4 text-space-text-dim">✕</button>
+                </template>
+                <template v-else>
+                  <button
+                    @click="startModifyOrder(order)"
+                    class="text-space-cyan font-mono text-[11px] hover:underline shrink-0"
+                    title="Click to modify price"
+                  >₡{{ order.price }}</button>
+                  <button
+                    @click="execCancelOrder(order.order_id)"
+                    class="text-[11px] px-1 py-0 text-red-400 hover:text-red-300 shrink-0 leading-4"
+                    title="Cancel order"
+                  >✕</button>
+                </template>
+              </div>
+            </div>
+          </div>
+
           <!-- Deposit -->
           <div class="flex gap-2 items-center">
             <label class="text-xs text-space-text-dim w-18">Deposit</label>
@@ -278,6 +365,7 @@
             <button @click="execCommand('view_storage')" class="btn text-xs px-2 py-1">🏠 Storage</button>
             <button @click="execCommand('view_faction_storage')" class="btn text-xs px-2 py-1">🛡 F.Storage</button>
             <button @click="execCommand('view_market')" class="btn text-xs px-2 py-1">💰 Market</button>
+            <button @click="execCommand('view_orders')" class="btn text-xs px-2 py-1">📋 Orders</button>
             <button @click="execCommand('get_system')" class="btn text-xs px-2 py-1">🌌 System</button>
             <button @click="execCommand('get_nearby')" class="btn text-xs px-2 py-1">👁 Nearby</button>
             <button @click="refreshPublicCatalog" class="btn text-xs px-2 py-1">🔄 Catalog</button>
@@ -401,8 +489,12 @@ const reloadAmmo = ref('');
 
 // Data state
 const systemPois = ref<any[]>([]);
+const systemConnections = ref<any[]>([]);
 const nearbyPlayers = ref<any[]>([]);
 const marketItems = ref<any[]>([]);
+const openOrders = ref<any[]>([]);
+const modifyOrderId = ref('');
+const modifyNewPrice = ref(0);
 const recipes = ref<any[]>([]);
 let lastCatalogType = '';
 
@@ -434,6 +526,33 @@ const weaponModules = computed(() => {
 const ammoItems = computed(() => {
   return inventory.value.filter((i: any) => (i.itemId || '').includes('ammo') || (i.itemId || '').includes('rounds') || (i.name || '').toLowerCase().includes('ammo'));
 });
+
+const currentFuel = computed(() => currentBot.value.fuel ?? 0);
+
+const otherSystemPois = computed(() => {
+  const currentPoi = currentBot.value.poi;
+  return systemPois.value.filter((p: any) => (p.id || p.poi_id) !== currentPoi).slice(0, 9);
+});
+
+const connectedSystems = computed(() =>
+  systemConnections.value.filter((c: any) => c && typeof c === 'object' && c.system_id)
+);
+
+function hasEnoughFuelForJump(distance: number): boolean {
+  return currentFuel.value >= Math.ceil((distance || 0) / 100);
+}
+
+function getPoiIcon(type?: string): string {
+  const t = (type || '').toLowerCase();
+  if (t.includes('planet')) return '🪐';
+  if (t.includes('star') || t.includes('sun')) return '⭐';
+  if (t.includes('station') || t.includes('base')) return '🛰️';
+  if (t.includes('asteroid')) return '☄️';
+  if (t.includes('gas') || t.includes('cloud')) return '☁️';
+  if (t.includes('moon')) return '🌙';
+  if (t.includes('gate') || t.includes('jump')) return '🌀';
+  return '📍';
+}
 
 watch(buyOrderItem, (itemId) => {
   if (!itemId) { buyOrderPrice.value = 0; return; }
@@ -618,7 +737,7 @@ function pushDetailLines(command: string, data: any, username: string): void {
       break;
     }
     case 'view_market': {
-      const items: any[] = data.items || data.summary || data.market || data.listings || [];
+      const items: any[] = data.items || data.summary || data.market || data.listings || (Array.isArray(data) ? data : []);
       const cats = data.available_categories ? ` [${(data.available_categories as string[]).join(', ')}]` : '';
       push(`market (${items.length} items)${cats}:`);
       for (const item of items.slice(0, 20)) {
@@ -627,6 +746,16 @@ function pushDetailLines(command: string, data: any, username: string): void {
         push(`  ${item.name || item.item_id}: buy ₡${buyP} sell ₡${sellP}`);
       }
       if (items.length > 20) push(`  ...and ${items.length - 20} more`);
+      break;
+    }
+    case 'view_orders': {
+      const raw: any[] = (data.orders || []).concat(data.buy_orders || []).concat(data.sell_orders || []);
+      const orders = raw.length ? raw : (Array.isArray(data) ? data : []);
+      push(`open orders (${orders.length}):`);
+      for (const o of orders) {
+        const t = ((o.type || o.order_type || 'sell') as string).toUpperCase();
+        push(`  [${t}] ${o.item_name || o.item_id} ×${o.quantity ?? o.remaining_quantity} @ ₡${o.price ?? o.price_each}`);
+      }
       break;
     }
     default:
@@ -710,14 +839,30 @@ function processExecResult(command: string, data: any) {
       break;
     }
     case 'get_system': {
-      const pois = data.system?.pois || data.pois || data.points_of_interest || [];
+      const sys = data.system || data;
+      const pois = sys.pois || data.pois || data.points_of_interest || [];
       if (pois.length > 0) systemPois.value = pois;
+      const conns = sys.connections || data.connections || [];
+      if (conns.length > 0) systemConnections.value = conns;
       break;
     }
     case 'get_nearby': {
       const nearby = data.nearby || [];
       const pirates = (data.pirates || []).map((p: any) => ({ ...p, _pirate: true }));
       nearbyPlayers.value = [...nearby, ...pirates];
+      break;
+    }
+    case 'view_orders': {
+      const raw: any[] = (data.orders || []).concat(data.buy_orders || []).concat(data.sell_orders || []);
+      const orders = raw.length ? raw : (Array.isArray(data) ? data : []);
+      openOrders.value = orders.map((o: any) => ({
+        order_id: o.order_id || o.id,
+        type: o.type || o.order_type || 'sell',
+        item_id: o.item_id,
+        item_name: o.item_name || o.name || o.item_id,
+        quantity: o.quantity ?? o.remaining_quantity ?? 0,
+        price: o.price ?? o.price_each ?? o.price_per_unit ?? 0,
+      }));
       break;
     }
     case 'view_market': {
@@ -800,6 +945,25 @@ const craftableRecipes = computed(() => {
 const selectedRecipeInfo = computed(() =>
   craftRecipe.value ? recipes.value.find(r => r.id === craftRecipe.value) ?? null : null
 );
+
+// Order management
+function startModifyOrder(order: any) {
+  modifyOrderId.value = order.order_id;
+  modifyNewPrice.value = order.price;
+}
+
+function submitModifyOrder(orderId: string) {
+  if (!modifyNewPrice.value || modifyNewPrice.value < 1) return;
+  execCommand('modify_order', { order_id: orderId, new_price: modifyNewPrice.value });
+  const order = openOrders.value.find((o: any) => o.order_id === orderId);
+  if (order) order.price = modifyNewPrice.value;
+  modifyOrderId.value = '';
+}
+
+function execCancelOrder(orderId: string) {
+  execCommand('cancel_order', { order_id: orderId });
+  openOrders.value = openOrders.value.filter((o: any) => o.order_id !== orderId);
+}
 
 // Travel
 async function execTravel() {

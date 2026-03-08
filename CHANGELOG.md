@@ -5,6 +5,135 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [2.4.5] - 2026-03-08
+
+### Added
+
+#### Bot Control Panel — Jump Gates & Open Orders UI (`src/web/src/components/BotControlPanel.vue`)
+
+- **Jump Gates section**: after pressing `🌌 System`, a 4-col grid appears listing connected systems; each button shows the system name and fuel cost (`N⚡`); button is red and disabled when fuel is insufficient or bot is docked
+- **Open Orders panel**: appears after pressing `📋 Orders`; lists all open buy/sell orders; clicking the price shows an inline input to modify it via `modify_order`; `✕` cancels the order via `cancel_order`; `🔄` refresh button; duplicate handling for `view_orders` in `processExecResult`
+- **`📋 Orders` button** added to Status Commands row
+- New script refs: `systemConnections`, `openOrders`, `modifyOrderId`, `modifyNewPrice`
+- New computed: `otherSystemPois`, `connectedSystems`, `currentFuel`
+- New helpers: `hasEnoughFuelForJump(distance)`, `getPoiIcon(type)`, `startModifyOrder`, `submitModifyOrder`, `execCancelOrder`
+
+#### `modify_order` API integration (`src/api.ts`)
+
+- Added `modify_order` to `ACTION_COMMANDS` (rate-limit counted) and `MUTATION_INVALIDATIONS` (invalidates order cache)
+
+### Fixed
+
+#### Trader sold cargo for 0 cr (`src/routines/trader.ts`)
+
+- **Root cause**: `best_sell` field (= other players' sell-side order book) was used as fallback for `buy_price` in the `cargoMarketBuyable` filter; the station accepted the `sell` command at 0 cr
+- **Fix 1**: removed `|| (l.best_sell as number)` from all 3 buy-price filters — now strictly `buy_price > 0`
+- **Fix 2**: before selling, items in cargo that the current market won't buy (`buy_price = 0`) are automatically deposited to faction storage (fallback: personal storage) instead of being sold for 0 cr
+
+#### ZodError: `constraints` is null when saving goals (`src/types/config.ts`)
+
+- **Root cause**: `GoalSchema.constraints` used `.optional()` which rejects `null`; the DB stores `constraints = NULL` for goals without constraints
+- **Fix**: changed to `.nullish().transform(v => v ?? undefined)` — accepts both `null` and `undefined`
+
+#### Miner dead loop — "No minable POI found" spinning indefinitely (`src/routines/miner.ts`)
+
+- Added `noMinablePOIStreak` counter: after **3** consecutive "no minable POI" cycles, miner returns (yielding to SmartSelector) instead of waiting 30s and retrying forever
+- Counter resets to 0 on any successful `beltPoi` resolution
+
+#### SmartSelector trader → trader → trader dead loop (`src/routines/smart_selector.ts`)
+
+- **Root cause**: trader score (170) consistently beat miner (120); after trader returned due to `noRouteStreak >= 3`, SmartSelector immediately re-selected trader
+- **Fix**: added **trader cooldown** (8 min / 75 pts max), same pattern as existing miner cooldown — immediately after trader completes, penalty ≈ 75 pts reduces score to ~95, allowing miner (120) to win next cycle; penalty decays linearly over 8 minutes
+
+#### Commission Ship UI — wrong costs and missing requirements (`src/web/src/views/ShipyardView.vue`)
+
+- **Root cause**: quote panel read `total_cost || cost` (both `undefined`) → showed "0 cr"; read `commissionQuote.materials` (field doesn't exist in API) → showed nothing
+- **Fix**:
+  - Costs now use correct fields: `credits_only_total` / `provide_materials_total` (with `material_cost` breakdown), each showing `✓`/`✗` affordability indicator
+  - "Your credits" line shows `player_credits` from response
+  - Shipyard tier check: shows `tier_here / req tier_required` with `✓`/`✗`
+  - Issues block appears when `can_commission === false` (red warning panel with reason list)
+  - Build materials grid uses `build_materials[]` and shows `you_have/needed` with green/red coloring using `botBuildMats`
+  - Commission button disabled (with tooltip) when `can_commission === false`
+
+---
+
+## [2.4.0] - 2026-03-07
+
+### Added
+
+#### Needs Matrix — fleet-wide production target system
+
+A persistent SQLite-backed coordination layer that replaces scattered in-memory signals with a single source of truth for "what does the fleet need right now?". All bots on all VMs share the same picture of demand vs. reality.
+
+- **`src/data/needs-matrix-db.ts`** — new `NeedsMatrixDb` class:
+  - Schema: `item_id` (PK), `item_name`, `category`, `target_qty`, `current_qty`, `source` (`mine`|`buy`|`craft`), `priority` (0–100), `updated_target_at`, `updated_current_at`, `updated_by`
+  - `setTarget(itemId, …)` — coordinator sets individual targets
+  - `replaceTargetsBySource(source, entries[])` — atomic bulk-replace: upserts new entries, zeroes stale entries no longer in the batch
+  - `updateCurrent(itemId, qty, bot)` — called after every `view_faction_storage` (canonical sync)
+  - `adjustCurrent(itemId, delta, bot)` — optimistic ±delta after `faction_deposit/withdraw_items`; clamps to zero
+  - `getAll()`, `getBySource(source)`, `getTopDeficits(source, limit)`, `getItem(itemId)`, `pruneStale(maxAgeDays)`
+- **DB migration V8** (`src/data/database.ts`): creates `needs_matrix` table with `idx_nm_source` and `idx_nm_deficit` indexes; `CURRENT_SCHEMA_VERSION` bumped to 8
+- **`src/mapstore.ts`** — 10 new delegate methods: `connectToNeedsMatrixDb`, `setNeedsMatrixTarget`, `replaceNeedsMatrixTargets`, `updateNeedsMatrixCurrent`, `adjustNeedsMatrixCurrent`, `getAllNeedsMatrix`, `getNeedsMatrixBySource`, `getTopNeedsMatrixDeficits`, `getNeedsMatrixItem`, and private `_needsMatrixDb` field
+- **`src/botmanager.ts`** — wiring:
+  - Instantiates `NeedsMatrixDb` after DB is ready; wires to `mapStore` and `swarmcoord`
+  - After `view_faction_storage`: iterates raw items and calls `mapStore.updateNeedsMatrixCurrent(itemId, qty, botName)`
+  - After `faction_deposit/withdraw_items`: calls `mapStore.adjustNeedsMatrixCurrent(itemId, delta, botName)`
+- **`src/web/server.ts`** — `/api/needs-matrix` REST endpoint with optional `?source=mine|buy|craft` and `?deficits=1` filters
+
+#### Role Protocols — quota-driven role switching
+
+- **Coordinator (`src/routines/coordinator.ts`)**:
+  - After computing `oreQuotas`: writes to `needs_matrix` via `replaceNeedsMatrixTargets('mine', …)` with proportional priority scores
+  - After finalising `craftLimits`: writes profitable recipe outputs via `replaceNeedsMatrixTargets('craft', …)` with profit-based priority
+  - **Chain efficiency metric**: logs `Chain efficiency: X% (N/M targets met)` and lists up to 3 bottleneck items (items below 50% of target), sorted by absolute deficit
+- **Miner (`src/routines/miner.ts`)** — three-tier ore target selection:
+  1. Needs Matrix (fresh < 2 h): picks the top-deficit ore that has an ore-belt location in the known map
+  2. Settings-based `oreQuotas` (fallback when coordinator has not yet written NM)
+  3. Swarm demand signal (`getMostNeededItem`) as final fallback
+- **SmartSelector (`src/routines/smart_selector.ts`)**:
+  - `scoreMiner()` now consults the Needs Matrix (fresh < 2 h):
+    - All ore targets met → returns score `1` (miner will not win candidate selection)
+    - Active deficits → applies a `0.5–1.5×` priority multiplier based on worst deficit percentage
+  - `buildCandidates()`: when all NM ore targets satisfied, adds `+20` to explorer score ("pivot to exploration")
+
+#### swarmcoord persistence bridge (`src/swarmcoord.ts`)
+
+- New `connectNeedsMatrixDb(db: NeedsMatrixDb)` export — called once in `botmanager.ts` at startup
+- `broadcastMaterialNeed()` now also writes a `source='buy'` target to the Needs Matrix (positive quantities only) so craft material demands survive restarts and are visible to bots on other VMs via DataSync
+- Import: `import type { NeedsMatrixDb } from "./data/needs-matrix-db.js"`
+
+#### Tests
+
+- **`src/__tests__/needs-matrix.test.ts`** — 59 tests across 9 groups:
+  - `NeedsMatrixDb: setTarget` — insert, upsert, timestamp, default priority
+  - `NeedsMatrixDb: replaceTargetsBySource` — bulk upsert, stale-zeroing, cross-source isolation
+  - `NeedsMatrixDb: updateCurrent` — stub creation, non-destructive update, sequential overwrites
+  - `NeedsMatrixDb: adjustCurrent` — positive/negative delta, zero-clamp, no-op on missing row
+  - `NeedsMatrixDb: getAll / getBySource / getTopDeficits / getItem` — all query helpers
+  - `NeedsMatrixDb: pruneStale` — TTL removal, retention within window, default 7-day cutoff
+  - `swarmcoord: NeedsMatrixDb persistence bridge` — broadcast→NM write, zero guard, priority value
+  - `miner: ore target selection priority logic` — NM-first, fallback, stale detection, belt filter
+  - `smart_selector: quota-aware miner scoring logic` — saturation→score=1, multiplier math, stale fallback, explorer bonus trigger
+  - `coordinator: chain efficiency calculation` — efficiency %, bottleneck filter/sort/cap, zero-target exclusion
+
+### Fixed
+
+#### Gatherer deposit destination (`src/routines/gatherer.ts`)
+
+- **Root cause**: `depositAllToTargets` always called `deposit_items` (personal storage), so materials gathered for `build` goals were inaccessible to other bots in the faction
+- **Fix**: deposit destination is now driven by `goal_type`:
+  - `'build'` (default) → `faction_deposit_items` so any faction member can access the materials; gracefully falls back to `deposit_items` on `faction_storage` API error
+  - `'craft'` → `deposit_items` (crafter withdraws from personal storage directly)
+- `DeliveryTask` interface: added `goal_type?: 'build' | 'craft'` field, propagated from `GatherGoal` in `buildDeliveryPlan`
+
+#### Gatherer stale faction storage cache (`src/routines/gatherer.ts`)
+
+- **Root cause**: `buildDeliveryPlan` trusted cached faction storage DB entries regardless of age; a snapshot from >30 min ago could suppress demand for items the crafter had already withdrawn, leaving gathering goals perpetually unfulfilled
+- **Fix**: introduced a 30-minute freshness guard (`FACTION_DB_MAX_AGE_MS = 30 * 60 * 1000`) on the DB cache check; stale entries are ignored with a `⏰` log message so live demand is re-evaluated correctly
+
+---
+
 ## [2.2.0] - 2026-03-06
 
 ### Added

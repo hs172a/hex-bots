@@ -1,12 +1,18 @@
 # Hex Bots Orchestrator
 
-> **Fork of [spacemolt_botrunner](https://github.com/humbrol2/spacemolt_botrunner).** Replaces the vanilla-JS frontend with a full **Vue 3 SPA** and adds extensive automation, multi-VM orchestration, and AI features.
+> **Originally forked from [spacemolt_botrunner](https://github.com/humbrol2/spacemolt_botrunner)**, but has since diverged completely — the frontend, backend architecture, automation engine, and data layer share little with the original beyond the SpaceMolt API integration.
 >
 > **Repository:** https://github.com/hs172a/hex-bots
 
-A multi-VM bot fleet orchestrator for [SpaceMolt](https://www.spacemolt.com). Run bots across multiple machines, monitor and control the entire fleet from a single reactive dashboard, share game knowledge between VMs, and get AI-powered routine suggestions.
+A multi-VM autonomous bot fleet for [SpaceMolt](https://www.spacemolt.com). Bots coordinate as a single production organism — miners respond to real-time ore deficits, gatherers deliver to faction storage, crafters consume what is there, and the coordinator monitors chain efficiency and switches miners to exploration when all quotas are met. The whole fleet is controlled from one reactive Vue 3 dashboard.
 
-![Interface](https://img.shields.io/badge/interface-vue3_spa-blue) ![Runtime](https://img.shields.io/badge/runtime-bun-black) ![Deps](https://img.shields.io/badge/deps-zero_runtime-green) ![Version](https://img.shields.io/badge/version-1.9.x-purple)
+![Interface](https://img.shields.io/badge/interface-vue3_spa-blue) ![Runtime](https://img.shields.io/badge/runtime-bun-black) ![Deps](https://img.shields.io/badge/deps-zero_runtime-green) ![Version](https://img.shields.io/badge/version-2.4.1-purple)
+
+---
+
+## Credits & Attributions
+
+Ship artwork displayed in the Bot Profile → Ship tab and Shipyard is sourced from the **SpaceMolt** project assets at [github.com/SpaceMolt/www](https://github.com/SpaceMolt/www). These images are the property of the SpaceMolt project / their respective authors and are used here solely for identification purposes within the context of playing SpaceMolt. No ownership or authorship of these assets is claimed.
 
 ---
 
@@ -20,9 +26,9 @@ The simplest setup — one machine runs bots, the backend, and the Vue SPA all t
 
 ```
 ┌─ Single VM ──────────────────────────────────────┐
-│  bun start                                        │
-│  ├── botmanager.ts   — discovers and runs bots    │
-│  ├── WebServer       — WebSocket + HTTP on :3210  │
+│  bun start                                       │
+│  ├── botmanager.ts   — discovers and runs bots   │
+│  ├── WebServer       — WebSocket + HTTP on :3210 │
 │  └── Vue SPA         — served at /               │
 └──────────────────────────────────────────────────┘
 ```
@@ -32,7 +38,7 @@ The simplest setup — one machine runs bots, the backend, and the Vue SPA all t
 When bots run on multiple machines (e.g., cloud VMs, home machines), a single **master VM** with a public IP serves the Vue SPA for the entire fleet. Client VMs connect **outward** to the master — no reverse tunnels needed.
 
 ```
-┌─ MASTER VM (public IP) ─────────────────────────────┐
+┌─ MASTER VM (public IP) ──────────────────────────────┐
 │  [hub] mode = "master"                               │
 │  ├── Vue SPA served for all VMs                      │
 │  ├── ProxyHub at /hub — WebSocket proxy              │
@@ -44,7 +50,7 @@ When bots run on multiple machines (e.g., cloud VMs, home machines), a single **
          ▲ WebSocket (ws://master-ip:3210/hub)
          │  client connects OUT → no reverse tunnel
          │
-┌─ CLIENT VM (any NAT / home machine) ────────────────┐
+┌─ CLIENT VM (any NAT / home machine) ─────────────────┐
 │  [hub] mode = "client"                               │
 │  [server] serve_ui = false                           │
 │  ├── Own bots + botmanager                           │
@@ -59,16 +65,16 @@ Configure in `config.toml` — see `config.toml.example` for full reference and 
 All VMs share one galaxy map, market data, and pirate positions via an HTTP sync API on the master. Client VMs forward master's sync port through an SSH tunnel.
 
 ```
-┌─ MASTER VM ─────────────────────────────────────────┐
+┌─ MASTER VM ──────────────────────────────────────────┐
 │  [datasync] mode = "master", port = 4001             │
 │  Exposes /sync/* HTTP endpoints (SSH-tunnel only)    │
 └──────────────────────────────────────────────────────┘
          ▲ SSH forward tunnel (client → master:4001)
          │
-┌─ CLIENT VM ─────────────────────────────────────────┐
+┌─ CLIENT VM ──────────────────────────────────────────┐
 │  [datasync] mode = "client"                          │
 │  master_url = "http://127.0.0.1:4001"                │
-│  Pulls map/topology every 5 min; pushes market/       │
+│  Pulls map/topology every 5 min; pushes market/      │
 │  pirate data every 60 s                              │
 └──────────────────────────────────────────────────────┘
 ```
@@ -92,6 +98,55 @@ Suggestion scoring factors: base routine score, goal strategy weights, supply ch
 
 ---
 
+## Needs Matrix & Role Protocols
+
+The **Needs Matrix** is the fleet's shared production ledger — a SQLite table (`needs_matrix`) that every bot on every VM can read and that the coordinator writes to every cycle.
+
+```
+Coordinator (every cycle)
+  ├── computeOreQuotas()  → replaceNeedsMatrixTargets('mine',  [...])
+  └── computeCraftLimits() → replaceNeedsMatrixTargets('craft', [...])
+
+botmanager (every view_faction_storage)
+  └── updateNeedsMatrixCurrent(itemId, qty, bot)
+
+botmanager (every faction_deposit/withdraw)
+  └── adjustNeedsMatrixCurrent(itemId, ±delta, bot)
+
+swarmcoord.broadcastMaterialNeed()
+  └── setTarget(itemId, ..., source='buy')   ← cross-VM persistence
+```
+
+### Reading the matrix
+
+| Role | Reads from | Logic |
+|------|-----------|-------|
+| **Miner** | `getTopNeedsMatrixDeficits('mine')` | Picks highest-deficit ore with a mapped ore-belt; falls back to `settings.oreQuotas` if NM is stale (>2 h) |
+| **SmartSelector** | `getNeedsMatrixBySource('mine')` | Returns score=1 (miner can't win) when all targets are met; boosts explorer +20 pts as "pivot" signal; scales miner score by 0.5–1.5× based on deficit urgency |
+| **Gatherer** | (indirectly via goal_type) | `build` goals deposit to faction storage; `craft` goals deposit to personal storage |
+
+### Chain efficiency
+
+The coordinator logs a fleet health snapshot every cycle:
+
+```
+Chain efficiency: 67% (4/6 targets met)
+⚠ Bottlenecks: Iron Ore 12/500, Copper Ore 0/200
+```
+
+Items below 50% of their target are listed as bottlenecks, sorted by absolute deficit.
+
+### REST endpoint
+
+```
+GET /api/needs-matrix                 → all entries
+GET /api/needs-matrix?source=mine     → ore targets only
+GET /api/needs-matrix?deficits=1      → only items short of target
+GET /api/needs-matrix?source=craft&deficits=1
+```
+
+---
+
 ## Features at a Glance
 
 - **Unified Fleet Dashboard** — all bots from all VMs in one table with live credits, fuel, hull, cargo, ₡/hr
@@ -105,6 +160,8 @@ Suggestion scoring factors: base routine score, goal strategy weights, supply ch
 - **Commander tab** — six sub-tabs: Advisory scoring, Goals (Gather Goals + Craft Planner + Fleet Goals), Missions browser, Stats, Action Log, AI Agent
   - **Missions** — three-tab browser (Active / Available / Completed) with live objective progress, embedded in Commander
   - **Goals** — Gather Goals shows all queued goals per bot; Craft Planner appends to goal queue; Gatherer routine distributes materials across bots with non-overlapping component claims
+- **Needs Matrix** — SQLite-persisted fleet production targets (`needs_matrix` table): coordinator writes ore/craft targets each cycle; every `view_faction_storage` updates current quantities; miners, gatherers, and SmartSelector all read from it for live demand-driven decisions
+- **Role Protocols** — bots switch roles based on real demand: miners pivot to explorer when all ore quotas are met; SmartSelector applies a 0.5–1.5× urgency multiplier to miner score based on worst deficit; chain efficiency % logged each coordinator cycle with top-3 bottleneck list
 - **Stats View** — unified fleet statistics aggregated from all VMs (no pool splitting)
 - **Rate-limit protection** — IP blocking with live header countdown
 - **Catalog caching** — 24 h SQLite cache, zero repeated catalog API calls
@@ -242,16 +299,16 @@ Tab order: **Control · Ship · Facility · Insurance · Combat · Profile · St
 
 | Routine | Description |
 |---------|-------------|
-| **Miner** | Mines ore at asteroid belts. Anti-collision via claim registry; configurable target ore, per-bot ore quotas, cargo threshold, faction donate %; home system navigation. Waits at belt for ore respawn instead of returning empty. |
-| **Explorer** | Jumps system to system, visits every POI, surveys resources. Builds the galaxy map. |
+| **Miner** | Mines ore at asteroid belts. **Needs Matrix integration**: reads `getTopNeedsMatrixDeficits('mine')` first (fresh < 2 h) — picks highest-deficit ore with a mapped belt; falls back to `settings.oreQuotas`, then swarm demand signal. Anti-collision via claim registry; cargo threshold; home system navigation; belt respawn waiting. |
+| **Explorer** | Jumps system to system, visits every POI, surveys resources. Builds the galaxy map. Gets a SmartSelector +20 bonus when all ore quotas are met. |
 | **Crafter** | Crafts to configured stock limits. Auto-crafts prerequisites. Falls back to XP-grinding when skill-blocked. **autoCraft mode**: ranks all craftable recipes by profit margin (volume-weighted market prices, owned items cost 0), crafts top N most profitable. BOM summary log each cycle. |
-| **Coordinator** | Analyses cross-station market demand. Auto-adjusts miner ore quotas and crafter craft limits. |
+| **Coordinator** | Analyses cross-station market demand. Auto-adjusts miner ore quotas and crafter craft limits. **Publishes both to `needs_matrix`** each cycle so all bots see live targets. Logs chain efficiency % and bottleneck items. |
 | **Fuel Rescue** | Monitors fleet for stranded bots (low fuel), delivers fuel cells or credits. |
 | **Salvager** | Loots wrecks, tows to salvage yard, scraps or sells while docked. |
 | **Trader** | Finds price spreads between stations, buys low / sells high. Insurance before runs, mission handling at every dock. |
 | **Gas Harvester** | Harvests gas clouds and nebulae, deposits to faction or station storage. |
 | **Ice Harvester** | Harvests ice fields, deposits to faction or station storage. |
-| **Gatherer** | Collects build materials for a faction facility. Goal assigned from Station → Build tab. |
+| **Gatherer** | Collects build and craft materials for fleet goals. `goal_type='build'` deposits to **faction storage** (accessible to all bots); `goal_type='craft'` deposits to **personal storage**. Staleness guard: faction storage DB cache > 30 min is ignored to prevent false demand suppression. Non-overlapping component claims via swarmcoord. |
 | **Faction Trader** | Runs faction sell routes, deposits to faction storage. Returns home when empty. |
 | **Cleanup** | Consolidates scattered station storage to a home base. |
 | **Hunter** | Autonomous pirate patrol with BFS navigation, combat stances (fire/brace/flee), faction alert response within configurable jump range. |
@@ -266,7 +323,7 @@ Tab order: **Control · Ship · Facility · Insurance · Combat · Profile · St
 | **AI Commander** | Fleet-level LLM reads all bot statuses and issues `start`/`stop`/`exec` decisions every N seconds. Run on a dedicated "HQ" bot. |
 | **Facility Manager** | Monitors owned facilities; alerts on rent expiration; auto-renews by docking and toggling off/on; applies faction facility upgrades when configured. |
 | **Trade Broker** | Intercepts P2P trade notifications; auto-accepts offers matching `acceptItems` list or `minAcceptCredits`; auto-declines others; optionally redistributes surplus to faction members at the same station. |
-| **SmartSelector** | Rule-based orchestrator: scores all routines each cycle. Adjustments: miner POI-awareness, crafter profit-awareness, `get_nearby` enemy penalty (hostile players reduce passive-routine scores, boost hunter), ship module awareness (combat/mining/cargo modules boost matching routines), faction intel threat/trade signals. Explorer uses `search_systems` to find unexplored targets when local connections exhausted. |
+| **SmartSelector** | Rule-based orchestrator: scores all routines each cycle. **Needs Matrix integration**: `scoreMiner()` returns 1 when all ore targets are met (quota saturation); applies 0.5–1.5× urgency multiplier on active deficits; explorer gets +20 when all quotas satisfied. Also: miner POI-awareness, crafter profit-awareness, `get_nearby` enemy penalty, ship module awareness, faction intel signals. |
 
 ### Common routine features
 All mining/travel routines also include:
@@ -358,30 +415,45 @@ src/
   botmanager.ts        Entry point — discovers bots, starts web server, WebActions
   bot.ts               Bot class — login, exec, status caching, routine runner
   api.ts               SpaceMolt REST client (v1/v2) — session mgmt, rate-limit, cache
-  miningclaims.ts      Shared claim registry for anti-collision between miners
+  swarmcoord.ts        Inter-bot coordination — station/trade/demand claims + NM bridge
+  miningclaims.ts      Anti-collision claim registry for miners
+  mapstore.ts          Galaxy map — persistence, BFS pathfinding, faction storage, needs matrix
+  catalogstore.ts      Game catalog cache — 24 h SQLite persistence
+  publicCatalog.ts     Public ship & station catalog (no auth)
   httpcache.ts         Process-level HTTP cache (ETag + Cache-Control aware)
   apilogger.ts         Optional file logging for API requests/responses
   session.ts           Credential persistence
   ui.ts                Log routing (bot → web server → browser)
-  catalogstore.ts      Game catalog cache — 24 h SQLite persistence
-  publicCatalog.ts     Public ship & station catalog (no auth)
-  mapstore.ts          Galaxy map — persistence, BFS pathfinding, price queries
   schema.ts            JSON schema for settings validation
+  datasync.ts          DataSyncServer/DataSyncClient — cross-VM knowledge sync
+  proxyhub.ts          ProxyHub — WebSocket proxy for multi-VM UI aggregation
+  sshtunnels.ts        SSH tunnel manager
+  data/
+    database.ts        SQLite schema + migrations (V1–V8)
+    needs-matrix-db.ts NeedsMatrixDb — fleet production targets + faction storage reality
+    faction-storage-db.ts FactionStorageDb — faction storage snapshots + buildings
+    market-prices-store.ts Market price history
+    catalog-db.ts      Catalog SQLite cache
+    session-store.ts   Bot sessions (migrated from files)
+    goals-store.ts     Persistent gather + fleet goals
+    training-logger.ts LLM training log writer
+    retention.ts       Log retention manager
   types/
     game.ts            Complete SpaceMolt game type definitions
-    config.ts          Routine config type definitions
+    config.ts          Routine config type definitions (Zod schemas)
   routines/
     common.ts          Shared utilities — dock, refuel, navigate, scavenge, deposit
-    miner.ts           Miner — anti-collision, ore quotas, faction donate, respawn-wait
-    explorer.ts        Explorer
-    crafter.ts         Crafter — catalog cache, prerequisite crafting, XP grind
-    coordinator.ts     Coordinator — global market fetch, auto-adjust quotas
+    miner.ts           Miner — NM-first ore selection, ore quotas, belt respawn-wait
+    explorer.ts        Explorer — search_systems routing when local map exhausted
+    crafter.ts         Crafter — catalog cache, prerequisite crafting, autoCraft mode
+    coordinator.ts     Coordinator — market analysis, NM ore/craft targets, chain efficiency
+    gatherer.ts        Gatherer — goal_type-aware deposit, staleness-guarded cache check
+    smart_selector.ts  SmartSelector — NM quota saturation scoring, role pivot
     rescue.ts          Fuel Rescue
     salvager.ts        Salvager
     trader.ts          Station-to-station trader
     gas_harvester.ts   Gas cloud / nebula harvesting
     ice_harvester.ts   Ice field harvesting
-    gatherer.ts        Build material collection
     faction_trader.ts  Faction sell routes + return-home
     hunter.ts          PvP/PvE patrol — combat alerts, BFS navigation
     cleanup.ts         Consolidate scattered station storage
@@ -394,38 +466,55 @@ src/
     ai.ts              In-process LLM agent (OpenAI-compatible)
     pi_commander.ts    PI-agent subprocess wrapper (commander.ts → pi-ai)
     ai_commander.ts    Fleet-level LLM orchestrator
+    facility_manager.ts Personal facility monitoring + auto-renew
+    trade_broker.ts    P2P trade offer automation
+  commander/
+    advisory-commander.ts Scoring brain — evaluates every 3 min, ADVISORY ONLY
+    economy-engine.ts  Economy snapshot — deficits, surpluses, supply/demand
+    strategies.ts      Goal-based strategy weight profiles
+    types.ts           FleetSummary, EconomySnapshot types
+  __tests__/
+    needs-matrix.test.ts   59 tests — NeedsMatrixDb, role protocols, chain efficiency
+    swarmcoord.test.ts     Station/trade/material demand claims
+    gather-goal.test.ts    Gatherer goal progress + demand cooperation
+    mapstore.test.ts       MapStore — faction storage, BFS, price queries
+    regression.test.ts     Cross-cutting regression tests
+    publiccatalog.test.ts  Public catalog parsing
+    training-logger.test.ts Training logger
   web/
-    server.ts          Bun HTTP + WebSocket server
+    server.ts          Bun HTTP + WebSocket server; REST endpoints incl. /api/needs-matrix
     src/               Vue 3 SPA (Vite + TailwindCSS + Pinia)
       views/
         DashboardView.vue    Fleet table, auto-scroll logs, fleet stats bar
         BotProfile.vue       Bot profile — sidebar + 10 tabs
         MarketView.vue       Market overview + My Orders
         ShipyardView.vue     Fleet, showroom, commission, modules
-        MissionsView.vue     Three-tab mission browser
-        FactionView.vue      Faction: members, storage, facilities, diplomacy, missions, intel
-        SettingsView.vue     Grouped settings (21 routines)
-        MapView.vue          Interactive galaxy map
-        StatsView.vue        Per-bot stats + faction activity log
+        MissionsView.vue     Three-tab mission browser (embedded in Commander)
+        FactionView.vue      Faction: members, storage, all-storages, buildings, diplomacy, intel
+        SettingsView.vue     Grouped settings (25 routines + hub + general)
+        MapView.vue          Interactive galaxy map + faction buildings overlay
+        StatsView.vue        Unified fleet stats from all VMs
         ActionLogView.vue    Per-bot action history
-        CommanderView.vue    AI Commander control panel
+        CommanderView.vue    Advisory + Goals + Missions + Stats + Action Log + AI Agent
       components/
         BotControlPanel.vue  Manual control — full log, craft filter, LDT, exec lock
-        BotStationPanel.vue  Station info + facilities (mode='facility' → Mine+Build only)
+        BotStationPanel.vue  Station info + facilities
         BotShipPanel.vue     Ship stats, modules, install/uninstall
-        CaptainsLogPanel.vue Captain's log (list/view/add)
-        BotProfilePanel.vue  Player profile — status, anonymous, colors, home base
-        CombatPanel.vue      Combat — nearby scan, attack, stance, advance/retreat
+        GalaxyMapCanvas.vue  Canvas galaxy map — faction buildings markers
+        CaptainsLogPanel.vue Captain's log
+        BotProfilePanel.vue  Player profile — status, colors, home base
+        CombatPanel.vue      Combat — nearby scan, attack, stance
         InsurancePanel.vue   Ship insurance
         NotesPanel.vue       In-game note documents
         SocialPanel.vue      Trades + send_gift
       composables/
         useDashboardLogs.ts  Broadcast log parsing and categorisation
-        useMissions.ts       Mission state composable
+        useMissions.ts       Mission state composable (MAX_AVAILABLE_DISPLAY = 60)
+        recipeTree.ts        Recipe dependency tree analyzer
       stores/
-        botStore.ts          Pinia store — bots, catalog, settings, sendExec, ₡/hr
+        botStore.ts          Pinia store — bots, catalog, settings, faction storage, ₡/hr
 data/
-  db.sqlite            SQLite — settings, catalog, map, sessions, logs, stats
+  db.sqlite            SQLite — all persistent data (schema V8+)
   api-logs/            API request/response logs (opt-in)
 sessions/
   <username>/

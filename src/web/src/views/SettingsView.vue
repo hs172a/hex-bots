@@ -550,8 +550,12 @@ remote_port  = 4001   # master's DataSync HTTP port</pre>
           <input type="number" v-model.number="traderForm.maxCargoValue" min="0" max="1000000" class="input text-sm w-24" />
         </div>
         <div class="setting-row">
-          <div><div class="text-sm text-space-text">Fuel Cost Per Jump</div><div class="text-xs text-space-text-dim mt-0.5">Estimated fuel cost per jump for profit calc.</div></div>
-          <input type="number" v-model.number="traderForm.fuelCostPerJump" min="0" max="1000" class="input text-sm w-24" />
+          <div><div class="text-sm text-space-text">Fuel Cost Per Jump</div><div class="text-xs text-space-text-dim mt-0.5">Credits spent on fuel per jump. v0.188: physics-based fuel — set 200–2000 for loaded traders.</div></div>
+          <input type="number" v-model.number="traderForm.fuelCostPerJump" min="0" max="5000" class="input text-sm w-24" />
+        </div>
+        <div class="setting-row">
+          <div><div class="text-sm text-space-text">Max Route Jumps</div><div class="text-xs text-space-text-dim mt-0.5">Skip routes farther than this many jumps. Keep low (4–8) to avoid fuel losses on long hauls.</div></div>
+          <input type="number" v-model.number="traderForm.maxJumps" min="1" max="30" class="input text-sm w-24" />
         </div>
         <div class="setting-row">
           <div><div class="text-sm text-space-text">Home System</div><div class="text-xs text-space-text-dim mt-0.5">Fallback system between trades. Empty = stay.</div></div>
@@ -1492,7 +1496,8 @@ const coordForm = ref({
 const traderForm = ref({
   minProfitPerUnit: 10,
   maxCargoValue: 0,
-  fuelCostPerJump: 50,
+  fuelCostPerJump: 300, // v0.188.0: physics-based fuel — was 50
+  maxJumps: 6,
   homeSystem: '',
   refuelThreshold: 50,
   repairThreshold: 40,
@@ -1775,7 +1780,8 @@ function initForms(s: Record<string, any>) {
     const t = s.trader;
     traderForm.value.minProfitPerUnit = t.minProfitPerUnit ?? 10;
     traderForm.value.maxCargoValue = t.maxCargoValue ?? 0;
-    traderForm.value.fuelCostPerJump = t.fuelCostPerJump ?? 50;
+    traderForm.value.fuelCostPerJump = t.fuelCostPerJump ?? 300;
+    traderForm.value.maxJumps = t.maxJumps ?? 6;
     traderForm.value.homeSystem = t.homeSystem ?? '';
     traderForm.value.refuelThreshold = t.refuelThreshold ?? 50;
     traderForm.value.repairThreshold = t.repairThreshold ?? 40;

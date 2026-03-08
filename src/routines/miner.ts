@@ -288,13 +288,10 @@ async function handleCargoFromResponse(
     if (mode === "sell") {
       const sellResp = await bot.exec("sell", { item_id: itemId, quantity });
       if (!sellResp.error) {
-        // Update credits from sale result
-        if (sellResp.result && typeof sellResp.result === 'object') {
-          const result = sellResp.result as any;
-          if (result.total_earned !== undefined) {
-            bot.credits += result.total_earned;
-          }
-        }
+        const r = sellResp.result as any;
+        // quantity_sold=0 means no buyers — treat as failure so fallback deposit is used
+        if ((r?.quantity_sold ?? 1) === 0) return false;
+        if (r?.total_earned !== undefined) bot.credits += r.total_earned;
         return true;
       }
       ctx.log("trade", `Sell failed for ${displayName}: ${sellResp.error.message}`);
@@ -481,6 +478,7 @@ export const minerRoutineV2: Routine = async function* (ctx: RoutineContext) {
       await ensureDocked(ctx);
       const unloaded = await handleCargoFromResponse(ctx, nonFuelCargo, settings0);
       if (unloaded.length > 0) {
+        await bot.refreshCargo(); // sync bot.cargo so mine loop starts with correct fill level
         ctx.log("mining", `Startup: deposited ${unloaded.join(", ")} — cargo clear for mining`);
       } else {
         ctx.log("error", `Startup: failed to deposit cargo — will retry in main loop`);
@@ -488,6 +486,8 @@ export const minerRoutineV2: Routine = async function* (ctx: RoutineContext) {
       await bot.refreshCargo();
     }
   }
+
+  let noMinablePOIStreak = 0;
 
   while (bot.state === "running") {
     // ── Death recovery ──
@@ -504,22 +504,53 @@ export const minerRoutineV2: Routine = async function* (ctx: RoutineContext) {
     let targetOre = settings.targetOre;
     const miningSystem = settings.system || "";
 
-    // ── Ore quotas: pick ore with biggest deficit in faction storage ──
-    if (Object.keys(settings.oreQuotas).length > 0) {
-      await bot.refreshFactionStorage();
-      const pick = pickTargetOre(settings.oreQuotas, bot.factionStorage, ctx.mapStore, ctx.catalogStore);
-      if (pick.oreId) {
-        targetOre = pick.oreId;
-        const oreName = ctx.catalogStore.resolveItemName(pick.oreId);
-        ctx.log("mining", `Quota pick: ${oreName} (${pick.current}/${pick.target}, deficit ${pick.deficit})`);
-      } else if (pick.target > 0) {
+    // ── Ore target selection (priority order) ──────────────────────────
+    // 1. Needs Matrix (coordinator-written, persistent, cross-VM)
+    //    Fresh = updated_target_at within last 2 hours.
+    const NEEDS_MATRIX_MAX_AGE_MS = 2 * 60 * 60 * 1000;
+    const nmDeficits = ctx.mapStore.getTopNeedsMatrixDeficits('mine', 20);
+    const nmFresh = nmDeficits.length > 0 &&
+      (Date.now() - new Date(nmDeficits[0].updated_target_at).getTime()) <= NEEDS_MATRIX_MAX_AGE_MS;
+
+    if (nmFresh) {
+      // Find the top-deficit ore that actually has a known ore-belt location
+      let picked = false;
+      for (const entry of nmDeficits) {
+        const locs = ctx.mapStore.findOreLocations(entry.item_id);
+        const hasOreBelt = locs.some((loc: { systemId: string; poiId: string }) => {
+          const sys = ctx.mapStore.getSystem(loc.systemId);
+          const poi = sys?.pois.find((p: any) => p.id === loc.poiId);
+          return poi ? isOreBeltPoi(poi.type) : false;
+        });
+        if (!hasOreBelt) continue;
+        targetOre = entry.item_id;
+        const oreName = ctx.catalogStore.resolveItemName(entry.item_id);
+        const deficit = entry.target_qty - entry.current_qty;
+        ctx.log("mining", `Needs matrix: ${oreName} (${entry.current_qty}/${entry.target_qty}, deficit ${deficit})`);
+        picked = true;
+        break;
+      }
+      if (!picked && nmDeficits.length > 0) {
         targetOre = "";
-        ctx.log("mining", "All ore quotas met — mining locally");
+        ctx.log("mining", "Needs matrix: all ore targets met — mining locally");
+      }
+    } else {
+      // 2. Settings-based oreQuotas (fallback when coordinator hasn't written needs_matrix yet)
+      if (Object.keys(settings.oreQuotas).length > 0) {
+        await bot.refreshFactionStorage();
+        const pick = pickTargetOre(settings.oreQuotas, bot.factionStorage, ctx.mapStore, ctx.catalogStore);
+        if (pick.oreId) {
+          targetOre = pick.oreId;
+          const oreName = ctx.catalogStore.resolveItemName(pick.oreId);
+          ctx.log("mining", `Quota pick: ${oreName} (${pick.current}/${pick.target}, deficit ${pick.deficit})`);
+        } else if (pick.target > 0) {
+          targetOre = "";
+          ctx.log("mining", "All ore quotas met — mining locally");
+        }
       }
     }
 
-    // Swarm demand override: if another bot (crafter) needs a specific ore and we haven't
-    // already chosen one via quotas, honour the highest-demand signal.
+    // 3. Swarm demand override (in-process crafter signal, same VM only)
     if (!targetOre) {
       const mostNeeded = getMostNeededItem();
       if (mostNeeded) {
@@ -680,10 +711,16 @@ export const minerRoutineV2: Routine = async function* (ctx: RoutineContext) {
     }
 
     if (!beltPoi) {
-      ctx.log("error", "No minable POI found in this system — waiting 30s before retry");
+      noMinablePOIStreak++;
+      if (noMinablePOIStreak >= 3) {
+        ctx.log("error", `No minable POI found ${noMinablePOIStreak}x in a row — yielding to SmartSelector`);
+        return;
+      }
+      ctx.log("error", `No minable POI found (${noMinablePOIStreak}/3) — waiting 30s before retry`);
       await sleep(30000);
       continue;
     }
+    noMinablePOIStreak = 0;
 
     // ── Travel to asteroid belt ──
     yield "travel_to_belt";

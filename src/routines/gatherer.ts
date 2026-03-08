@@ -105,6 +105,8 @@ interface DeliveryTask {
   target_poi: string;
   target_system: string;
   gift_target?: string;
+  /** Inherited from GatherGoal — controls which storage type receives the deposit. */
+  goal_type?: 'build' | 'craft';
   item_id: string;
   item_name: string;
   /** How many units this courier is responsible for. */
@@ -248,13 +250,18 @@ function findCheapestBuySource(itemId: string, ms: MapStore): MarketSource | nul
   return best;
 }
 
-/** Find a known minable POI for an item (by recorded ores_found). */
-function findMineSource(itemId: string, ms: MapStore): { system_id: string; poi_id: string; poi_name: string } | null {
+/** Find a known minable POI for an item (by recorded ores_found), skipping POI types the bot can't mine. */
+function findMineSource(
+  itemId: string,
+  ms: MapStore,
+  ctx: RoutineContext,
+): { system_id: string; poi_id: string; poi_name: string } | null {
   for (const sysId of ms.getAllSystemIds()) {
     const sys = ms.getSystem(sysId);
     if (!sys) continue;
     for (const poi of sys.pois) {
       if (!isMinablePoi(poi.type)) continue;
+      if (!canMinePoiType(ctx.bot, poi.type)) continue;
       const ore = poi.ores_found.find(o => o.item_id === itemId);
       if (ore) return { system_id: sysId, poi_id: poi.id, poi_name: poi.name };
     }
@@ -395,10 +402,34 @@ async function buyItem(
 
 // ── Mining ────────────────────────────────────────────────────
 
-/** Find a minable POI in the current system. */
+/**
+ * Check if the bot's fitted modules support mining the given POI type.
+ * Ice fields require an ice harvester; gas clouds/nebulae require a gas harvester.
+ * Falls back gracefully when shipModules is not yet loaded.
+ */
+function canMinePoiType(bot: RoutineContext["bot"], poiType: string): boolean {
+  const t = poiType.toLowerCase();
+  if (t.includes("ice")) {
+    if (bot.shipModules.length === 0) return false; // modules not loaded — assume no harvester
+    return bot.shipModules.some(m => {
+      const mId = ((m.type as string) || (m.id as string) || (m.name as string) || "").toLowerCase();
+      return mId.includes("ice") || (((m as unknown) as Record<string, unknown>).ice_harvest_strength as number ?? 0) > 0;
+    });
+  }
+  if (t.includes("gas") || t.includes("nebula") || t.includes("cloud")) {
+    if (bot.shipModules.length === 0) return false;
+    return bot.shipModules.some(m => {
+      const mId = ((m.type as string) || (m.id as string) || (m.name as string) || "").toLowerCase();
+      return mId.includes("gas") || (((m as unknown) as Record<string, unknown>).gas_harvest_strength as number ?? 0) > 0;
+    });
+  }
+  return true; // standard asteroid/ore belt — any mining laser works
+}
+
+/** Find a minable POI in the current system that this bot can actually mine. */
 async function findLocalMinePOI(ctx: RoutineContext): Promise<{ id: string; name: string } | null> {
   const { pois } = await getSystemInfo(ctx);
-  const mineable = pois.find(p => isMinablePoi(p.type));
+  const mineable = pois.find(p => isMinablePoi(p.type) && canMinePoiType(ctx.bot, p.type));
   return mineable ? { id: mineable.id, name: mineable.name } : null;
 }
 
@@ -433,6 +464,12 @@ async function mineItem(
       if (msg.includes("depleted") || msg.includes("no_resource") || msg.includes("exhausted")) {
         ctx.log("mine", `Deposit depleted`);
         break;
+      }
+      // Wrong harvester module (ice/gas field) — bail immediately, no point retrying
+      if (msg.includes("ice harvester") || msg.includes("gas harvester") ||
+          msg.includes("harvester module") || msg.includes("specialized module")) {
+        ctx.log("error", `${itemName}: requires a specialized harvester module — cannot mine here`);
+        return -2;
       }
       failures++;
       if (failures >= MAX_FAILURES) {
@@ -514,11 +551,19 @@ async function buildDeliveryPlan(
         }
       }
       // 2. Faction storage DB cache for the target POI (any bot may have seen it previously)
+      // Only trust cached data if it was updated within the last 30 minutes to avoid
+      // stale snapshots suppressing demand for items already consumed by the crafter.
+      const FACTION_DB_MAX_AGE_MS = 30 * 60 * 1000;
       const facDbItems = ctx.mapStore.getFactionStorageItemsForPoi(station.poi);
-      const facDbQty = facDbItems.find((i: any) => i.item_id === mat.item_id)?.quantity ?? 0;
-      if (facDbQty > 0 && facDbQty > alreadyPresent) {
-        ctx.log("system", `  🗄️  ${facDbQty}x ${mat.item_name} in faction storage DB at ${goal.target_name} — reducing demand`);
-        alreadyPresent = facDbQty;
+      const facDbEntry = facDbItems.find((i: any) => i.item_id === mat.item_id);
+      if (facDbEntry && (facDbEntry.quantity ?? 0) > 0 && facDbEntry.quantity > alreadyPresent) {
+        const ageMs = Date.now() - new Date(facDbEntry.updated_at).getTime();
+        if (ageMs <= FACTION_DB_MAX_AGE_MS) {
+          ctx.log("system", `  🗄️  ${facDbEntry.quantity}x ${mat.item_name} in faction storage DB at ${goal.target_name} — reducing demand`);
+          alreadyPresent = facDbEntry.quantity;
+        } else {
+          ctx.log("system", `  ⏰ Faction storage cache for ${goal.target_name} is ${Math.round(ageMs / 60000)}min stale — ignoring (will verify on delivery)`);
+        }
       }
 
       // Subtract already-claimed quantity by other bots for this goal+item
@@ -536,7 +581,7 @@ async function buildDeliveryPlan(
       }
 
       const buySource = findCheapestBuySource(mat.item_id, ctx.mapStore) ?? undefined;
-      const minePoi = !buySource ? (findMineSource(mat.item_id, ctx.mapStore) ?? undefined) : undefined;
+      const minePoi = !buySource ? (findMineSource(mat.item_id, ctx.mapStore, ctx) ?? undefined) : undefined;
 
       if (buySource) {
         ctx.log("system", `  ✓ ${toAcquire}x ${mat.item_name} → buy @ ${buySource.poi_name} (${buySource.price} cr) → ${goal.target_name}`);
@@ -553,6 +598,7 @@ async function buildDeliveryPlan(
         target_poi: station.poi,
         target_system: station.system,
         gift_target: goal.gift_target,
+        goal_type: goal.goal_type,
         item_id: mat.item_id,
         item_name: mat.item_name,
         quantity: toAcquire,
@@ -624,13 +670,34 @@ async function depositAllToTargets(
           releaseGatherClaim(bot.username, task.item_id, task.goalId);
         } else ctx.log("error", `Gift failed for ${task.item_name}: ${r.error.message}`);
       } else {
-        const r = await bot.exec("deposit_items", { item_id: task.item_id, quantity: inv.quantity });
-        if (!r.error) {
+        // 'build' goals (default) → faction storage so any bot can access the materials.
+        // 'craft' goals → personal station storage (crafter withdraws from both sources).
+        const useFaction = (task.goal_type ?? 'build') !== 'craft';
+        let depositOk = false;
+        let depositErrMsg = "";
+        if (useFaction) {
+          const rf = await bot.exec("faction_deposit_items", { item_id: task.item_id, quantity: inv.quantity });
+          if (!rf.error) {
+            depositOk = true;
+          } else {
+            ctx.log("warn", `Faction deposit failed for ${task.item_name} (${rf.error.message}) — falling back to personal storage`);
+            const rp = await bot.exec("deposit_items", { item_id: task.item_id, quantity: inv.quantity });
+            depositOk = !rp.error;
+            depositErrMsg = rp.error?.message ?? rf.error.message;
+          }
+        } else {
+          const rp = await bot.exec("deposit_items", { item_id: task.item_id, quantity: inv.quantity });
+          depositOk = !rp.error;
+          depositErrMsg = rp.error?.message ?? "";
+        }
+        if (depositOk) {
           ctx.log("trade", `Deposited ${inv.quantity}x ${task.item_name} → ${task.target_name}`);
           totalDeposited += inv.quantity;
           releaseGatherClaim(bot.username, task.item_id, task.goalId);
           clearMaterialNeed(bot.username, task.item_id);
-        } else ctx.log("error", `Deposit failed for ${task.item_name}: ${r.error.message}`);
+        } else {
+          ctx.log("error", `Deposit failed for ${task.item_name}: ${depositErrMsg}`);
+        }
       }
     }
     await bot.refreshCargo();
@@ -726,7 +793,7 @@ export const gathererRoutine: Routine = async function* (ctx: RoutineContext) {
       const task = pending[0];
       const stillNeed = task.quantity - task.acquired;
 
-      // ── 'search': probe market first, then mine, then skip ────────────
+      // ── 'search': probe market first, then specific mine, then skip ──────
       if (task.source === 'search') {
         const found = findCheapestBuySource(task.item_id, ctx.mapStore);
         if (found) {
@@ -734,13 +801,16 @@ export const gathererRoutine: Routine = async function* (ctx: RoutineContext) {
           task.source = 'buy';
           task.buySource = found;
         } else {
-          const local = await findLocalMinePOI(ctx);
-          if (local) {
-            ctx.log("system", `Found mine for ${task.item_name}: ${local.name} — switching to mine`);
+          // Use item-specific mine lookup — only picks POIs where this item was
+          // actually recorded in ores_found, and only if bot has the right module.
+          // Avoids blind "mine at local belt" which yields wrong items (e.g. Heat Sink).
+          const specific = findMineSource(task.item_id, ctx.mapStore, ctx);
+          if (specific) {
+            ctx.log("system", `Found mine for ${task.item_name}: ${specific.poi_name} — switching to mine`);
             task.source = 'mine';
-            task.minePoi = { system_id: bot.system, poi_id: local.id, poi_name: local.name };
+            task.minePoi = specific;
           } else {
-            ctx.log("error", `No source for ${task.item_name} — skipping (will retry next pass)`);
+            ctx.log("error", `${task.item_name}: no market or recorded mine source — may need salvager or crafter routine`);
             task.skipped = true;
           }
         }
@@ -835,6 +905,10 @@ export const gathererRoutine: Routine = async function* (ctx: RoutineContext) {
           // POI yielded a different resource — this item cannot be mined (likely craft-only)
           ctx.log("error", `${task.item_name} is not obtainable by mining — skipping task (check if it requires crafting)`);
           task.skipped = true;
+        } else if (mined === -2) {
+          // POI requires ice/gas harvester module that this bot does not have
+          ctx.log("error", `${task.item_name}: mine POI requires a specialized harvester — skipping task (assign to ice_harvester/gas_harvester bot)`);
+          task.skipped = true;
         } else if (mined === 0) {
           ctx.log("warn", `Mine depleted for ${task.item_name} — reverting to search`);
           task.minePoi = undefined;
@@ -893,3 +967,25 @@ export const gathererRoutine: Routine = async function* (ctx: RoutineContext) {
 
   ctx.log("system", "=== Gatherer routine finished ===");
 };
+
+/**
+ * Score the gatherer routine for SmartSelector.
+ * Returns 0 when no fleet goals have pending materials, higher when more work exists.
+ * Follows the same pattern as scoreCrafter() in crafter.ts.
+ */
+export function scoreGatherer(ctx: RoutineContext): number {
+  const goals = getAllGoalsAcrossFleet();
+  if (goals.length === 0) return 0;
+
+  let pendingMaterials = 0;
+  for (const { goal } of goals) {
+    if (!goal.materials?.length) continue;
+    // Goals where this bot is the crafter are handled by the crafter routine, not gatherer
+    if (goal.crafter_bot === ctx.bot.username) continue;
+    pendingMaterials += goal.materials.length;
+  }
+
+  if (pendingMaterials === 0) return 0;
+  // Base 25 + 2 per pending material type, capped at 55
+  return Math.min(55, 25 + pendingMaterials * 2);
+}

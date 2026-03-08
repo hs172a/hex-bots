@@ -59,7 +59,7 @@ export const GoalSchema = z.object({
     maxRiskLevel: z.number().int().min(0).max(4).optional(),
     regionLock: z.array(z.string()).optional(),
     budgetLimit: z.number().optional(),
-  }).optional(),
+  }).nullish().transform(v => v ?? undefined),
 });
 
 export type Goal = z.infer<typeof GoalSchema>;

@@ -4,6 +4,8 @@ import { cachedFetch } from "./httpcache.js";
 import type { Database } from "bun:sqlite";
 import { FactionStorageDb } from "./data/faction-storage-db.js";
 import type { FactionStorageEntry, FactionBuildingEntry } from "./data/faction-storage-db.js";
+import { NeedsMatrixDb } from "./data/needs-matrix-db.js";
+import type { NeedsMatrixEntry } from "./data/needs-matrix-db.js";
 
 // ── Data model ──────────────────────────────────────────────
 
@@ -132,6 +134,7 @@ export class MapStore {
   private saveTimer: ReturnType<typeof setTimeout> | null = null;
   private _db: Database | null = null;
   private _factionStorageDb: FactionStorageDb | null = null;
+  private _needsMatrixDb: NeedsMatrixDb | null = null;
   /** Memoized BFS routes. Cleared when map topology changes. */
   private routeCache = new Map<string, string[] | null>();
 
@@ -1212,6 +1215,11 @@ export class MapStore {
     this._factionStorageDb = db;
   }
 
+  /** Connect the needs matrix DB (called once after database is ready). */
+  connectToNeedsMatrixDb(db: NeedsMatrixDb): void {
+    this._needsMatrixDb = db;
+  }
+
   /**
    * Optional live provider: called when DB is empty to return in-memory bot faction storage.
    * Wired by botmanager so the All Storages tab shows data immediately even before DB is populated.
@@ -1294,6 +1302,61 @@ export class MapStore {
   /** Return faction buildings in a specific system. */
   getFactionBuildingsInSystem(systemId: string): FactionBuildingEntry[] {
     return this._factionStorageDb?.getBuildingsInSystem(systemId) ?? [];
+  }
+
+  // ── Needs Matrix ─────────────────────────────────────────────
+
+  /** Set or update the coordinator's target for an item. */
+  setNeedsMatrixTarget(
+    itemId: string,
+    itemName: string,
+    category: string,
+    targetQty: number,
+    source: 'mine' | 'buy' | 'craft',
+    priority = 50,
+  ): void {
+    this._needsMatrixDb?.setTarget(itemId, itemName, category, targetQty, source, priority);
+  }
+
+  /**
+   * Bulk-replace all coordinator targets for a given source type.
+   * Called by coordinator after computing oreQuotas / craft needs.
+   */
+  replaceNeedsMatrixTargets(
+    source: 'mine' | 'buy' | 'craft',
+    entries: Array<{ itemId: string; itemName: string; category: string; targetQty: number; priority?: number }>,
+  ): void {
+    this._needsMatrixDb?.replaceTargetsBySource(source, entries);
+  }
+
+  /** Update current qty from a faction storage snapshot (called after view_faction_storage). */
+  updateNeedsMatrixCurrent(itemId: string, currentQty: number, updatedBy: string): void {
+    this._needsMatrixDb?.updateCurrent(itemId, currentQty, updatedBy);
+  }
+
+  /** Optimistic ±delta after faction_deposit/withdraw. */
+  adjustNeedsMatrixCurrent(itemId: string, delta: number, updatedBy: string): void {
+    this._needsMatrixDb?.adjustCurrent(itemId, delta, updatedBy);
+  }
+
+  /** All needs matrix entries sorted by deficit descending. */
+  getAllNeedsMatrix(): NeedsMatrixEntry[] {
+    return this._needsMatrixDb?.getAll() ?? [];
+  }
+
+  /** Needs matrix entries for a specific source, sorted by deficit. */
+  getNeedsMatrixBySource(source: 'mine' | 'buy' | 'craft'): NeedsMatrixEntry[] {
+    return this._needsMatrixDb?.getBySource(source) ?? [];
+  }
+
+  /** Top N items with a positive deficit for the given source. */
+  getTopNeedsMatrixDeficits(source: 'mine' | 'buy' | 'craft', limit = 10): NeedsMatrixEntry[] {
+    return this._needsMatrixDb?.getTopDeficits(source, limit) ?? [];
+  }
+
+  /** Single needs matrix entry for a given item_id. */
+  getNeedsMatrixItem(itemId: string): NeedsMatrixEntry | null {
+    return this._needsMatrixDb?.getItem(itemId) ?? null;
   }
 
   applyFastPatches(patches: FastPatch[]): void {
