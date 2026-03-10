@@ -1,5 +1,5 @@
 <template>
-  <div class="flex-1 flex flex-col gap-2 pt-2 px-0 overflow-hidden">
+  <div class="flex-1 flex flex-row gap-2 pt-2 px-0 overflow-hidden">
     <!-- Manual Control Panel -->
     <div class="card py-2 px-2 flex flex-col flex-1 overflow-hidden">
       <div class="py-1 px-0 border-b border-space-border bg-space-card">
@@ -56,6 +56,7 @@
             <div v-if="ldRoute.length > 0" class="bg-[#0d1117] border border-space-border rounded p-1 space-y-2 text-[11px]">
               <div class="flex items-center gap-1">
                 <span class="text-xs font-semibold text-space-text-bright shrink-0">Route: {{ ldRoute.length }} jumps</span>
+                <span class="text-[11px] text-space-text-dim shrink-0">~{{ Math.round(ldRoute.length * jumpTimeSec / 60) }}min · {{ jumpFuelCost * ldRoute.length }}⚡</span>
                 <span class="text-[11px] text-space-accent flex-1 truncate text-right">→ {{ ldRoute[ldRoute.length - 1]?.name || ldRoute[ldRoute.length - 1]?.system_id || '' }}</span>
                 <button @click="ldRoute = []; ldRouteError = ''" class="text-[11px] text-space-text-dim hover:text-space-red shrink-0 ml-1">✕</button>
               </div>
@@ -123,16 +124,16 @@
                 v-for="sys in connectedSystems"
                 :key="sys.system_id"
                 @click="execCommand('jump', { target_system: sys.system_id })"
-                :disabled="commandRunning || !!currentBot.docked || !hasEnoughFuelForJump(sys.distance)"
+                :disabled="commandRunning || !!currentBot.docked || !hasEnoughFuelForJump()"
                 class="text-[11px] py-0.5 px-1.5 bg-purple-900/20 hover:bg-purple-900/40 disabled:opacity-40 text-purple-300 border border-purple-800/30 rounded transition-colors flex items-center justify-between gap-1"
-                :title="`${sys.name}\nDistance: ${sys.distance || '?'} ly\nFuel: ${Math.ceil((sys.distance || 0) / 100)}⚡`"
+                :title="`${sys.name}\nJ.Fuel: ${jumpFuelCost}⚡ | ${jumpTicks} ticks | ${jumpTimeSec}s`"
               >
                 <span class="flex items-center gap-1 truncate min-w-0">
                   <span class="shrink-0">🌀</span>
                   <span class="truncate">{{ sys.name }}</span>
                 </span>
-                <span class="text-[10px] shrink-0" :class="hasEnoughFuelForJump(sys.distance) ? 'text-space-text-dim' : 'text-red-400'">
-                  {{ Math.ceil((sys.distance || 0) / 100) }}⚡
+                <span class="text-[10px] shrink-0" :class="hasEnoughFuelForJump() ? 'text-space-text-dim' : 'text-red-400'">
+                  {{ jumpFuelCost }}⚡
                 </span>
               </button>
             </div>
@@ -402,7 +403,7 @@
     </div>
 
     <!-- Activity Log -->
-    <div class="card py-2 px-2 flex flex-col h-60">
+    <div class="card py-2 px-2 flex flex-col w-1/4 shrink-0">
       <div class="flex py-1 px-0 items-center justify-between border-b border-space-border bg-space-card">
         <div class="flex items-center gap-2">
           <h3 class="text-xs font-semibold text-space-text-dim uppercase">Activity Log</h3>
@@ -443,6 +444,7 @@ import { useBotStore } from '../stores/botStore';
 const props = defineProps<{ bot: any }>();
 const emit = defineEmits<{
   (e: 'notif', text: string, type: 'success' | 'warn' | 'error'): void;
+  (e: 'ldStatusChange', traveling: boolean): void;
 }>();
 
 const botStore = useBotStore();
@@ -538,8 +540,27 @@ const connectedSystems = computed(() =>
   systemConnections.value.filter((c: any) => c && typeof c === 'object' && c.system_id)
 );
 
-function hasEnoughFuelForJump(distance: number): boolean {
-  return currentFuel.value >= Math.ceil((distance || 0) / 100);
+/** Ship catalog entry resolved by shipClassId */
+const shipCatalogEntry = computed(() => {
+  const classId = (currentBot.value as any)?.shipClassId;
+  if (!classId || !botStore.publicShips?.length) return null;
+  return (botStore.publicShips as any[]).find(s => s.id === classId || s.class === classId || s.ship_class === classId) ?? null;
+});
+/** Speed tier of the ship (1–6). Default 1 for unknown ships. */
+const shipSpeed = computed(() => (shipCatalogEntry.value as any)?.base_speed ?? 1);
+/** Tier of the ship (0–5). Default 1 for T0/unknown. */
+const shipTier = computed(() => (shipCatalogEntry.value as any)?.tier ?? 1);
+/** Fuel units consumed per jump: ceil(max(1,tier)^1.5 * speed) */
+const jumpFuelCost = computed(() => Math.ceil(Math.pow(Math.max(1, shipTier.value), 1.5) * shipSpeed.value));
+/** Time per jump in seconds: max(1, 7 - speed) * 10s per tick */
+const jumpTimeSec = computed(() => Math.max(1, 7 - shipSpeed.value) * 10);
+/** Ticks per jump */
+const jumpTicks = computed(() => Math.max(1, 7 - shipSpeed.value));
+/** Max possible jumps with current fuel */
+const maxJumpsNow = computed(() => jumpFuelCost.value > 0 ? Math.floor(currentFuel.value / jumpFuelCost.value) : 0);
+
+function hasEnoughFuelForJump(): boolean {
+  return currentFuel.value >= jumpFuelCost.value;
 }
 
 function getPoiIcon(type?: string): string {
@@ -620,6 +641,7 @@ function scrollToBottom() {
   });
 }
 watch(() => botLogs.value.length, scrollToBottom);
+watch(ldRelocating, (val) => emit('ldStatusChange', val));
 defineExpose({ scrollToBottom, ldRelocating });
 
 const knownSystems = computed(() => {
@@ -758,9 +780,42 @@ function pushDetailLines(command: string, data: any, username: string): void {
       }
       break;
     }
+    case 'dock': {
+      const sc = data.station_condition as any;
+      if (sc) push(`station: ${sc.condition_text || sc.condition || 'OK'} (${sc.satisfaction_pct ?? '?'}% services)`);
+      if (data.storage_credits != null || data.storage_items != null)
+        push(`storage: ${data.storage_items ?? 0} item types, ₡${(data.storage_credits as number ?? 0).toLocaleString()}`);
+      if ((data.stored_ships_count as number) > 0) push(`stored ships: ${data.stored_ships_count}`);
+      if ((data.trade_fills_count as number) > 0) {
+        push(`trade fills: ${data.trade_fills_count}`);
+        for (const f of (data.trade_fills as any[] || []).slice(0, 5)) {
+          const t = ((f.type || '') as string).replace('_filled', '').toUpperCase();
+          push(`  [${t}] ${f.item_name || f.item_id} ×${f.quantity} @ ₡${f.price_each ?? f.price_per_unit ?? '?'} = ₡${f.total ?? '?'}`);
+        }
+      }
+      if (data.open_orders_count != null) push(`open orders: ${data.open_orders_count}${data.open_orders_truncated ? ' (truncated)' : ''}`);
+      if (data.unread_chat && typeof data.unread_chat === 'object') {
+        const unread = Object.entries(data.unread_chat as Record<string, number>)
+          .filter(([, v]) => v > 0).map(([k, v]) => `${k}:${v}`).join(', ');
+        if (unread) push(`unread chat: ${unread}`);
+      }
+      if (data.story) {
+        const s = data.story as string;
+        push(`story: ${s.slice(0, 160)}${s.length > 160 ? '…' : ''}`);
+      }
+      break;
+    }
     default:
       if (data && typeof data === 'object') {
-        const skip = new Set(['notifications', 'session']);
+        const skip = new Set([
+          'notifications', 'session',
+          // dock fields — already handled in 'dock' case above, exclude from generic fallback
+          'open_orders', 'open_orders_count', 'open_orders_truncated',
+          'trade_fills', 'trade_fills_count',
+          'station_condition', 'storage_credits', 'storage_items',
+          'stored_ships', 'stored_ships_count',
+          'story', 'unread_chat', 'unread_chat_note',
+        ]);
         for (const [k, v] of Object.entries(data)) {
           if (skip.has(k)) continue;
           push(`${k}: ${typeof v === 'object' ? JSON.stringify(v) : v}`);
@@ -1076,13 +1131,13 @@ async function ldDoRelocationStep() {
       return;
     }
     // Transient errors (fuel, docked, action_pending) — retry same hop after delay
-    ldTimer = setTimeout(() => ldDoRelocationStep(), 15000);
+    ldTimer = setTimeout(() => ldDoRelocationStep(), Math.max(jumpTimeSec.value * 1000, 15000));
     return;
   }
 
   ldProgress.value++;
   if (ldProgress.value < route.length && ldRelocating.value) {
-    ldTimer = setTimeout(() => ldDoRelocationStep(), 12000);
+    ldTimer = setTimeout(() => ldDoRelocationStep(), jumpTimeSec.value * 1000 + 2000);
   } else {
     ldRelocating.value = false;
     ldAutoDock();

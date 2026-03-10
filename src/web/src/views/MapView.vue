@@ -81,13 +81,13 @@
           <!-- Connections -->
           <div v-if="sys.connections?.length" class="flex flex-wrap gap-1 items-center mb-3 text-xs">
             <span class="font-semibold text-space-text-dim uppercase text-[11px] tracking-wider mr-1">Connections</span>
-            <span v-for="c in sys.connections" :key="c.system_id || c.id" class="px-2 py-0.5 rounded-full bg-[#21262d] text-space-text text-xs">
+            <span v-for="c in [...(sys.connections || [])].sort((a, b) => (a.system_name || a.system_id || a.id || '').localeCompare(b.system_name || b.system_id || b.id || ''))" :key="c.system_id || c.id" class="px-2 py-0.5 rounded-full bg-[#21262d] text-space-text text-xs">
               {{ c.system_name || c.system_id || c.id }}
             </span>
           </div>
 
-          <!-- POIs -->
-          <div v-for="poi in sys.pois" :key="poi.id" class="bg-space-bg border border-[#21262d] rounded-md p-2.5 mb-2 last:mb-0">
+          <!-- POIs (sorted alphabetically by name) -->
+          <div v-for="poi in [...(sys.pois || [])].sort((a, b) => (a.name || a.id || '').localeCompare(b.name || b.id || ''))" :key="poi.id" class="bg-space-bg border border-[#21262d] rounded-md p-2.5 mb-2 last:mb-0">
             <div class="flex items-center gap-2 mb-1">
               <span class="text-sm font-semibold text-space-text">{{ poi.name || poi.id }}</span>
               <span class="text-[11px] px-1.5 py-0.5 rounded-lg bg-[#21262d] text-space-text-dim">{{ poi.type }}</span>
@@ -97,7 +97,7 @@
             <div v-if="poi.ores_found?.length" class="mt-1.5">
               <div class="text-[11px] font-semibold text-space-text-dim uppercase tracking-wider mb-1">Resources Mined</div>
               <div class="flex flex-wrap gap-1">
-                <span v-for="ore in poi.ores_found" :key="ore.item_id" class="text-[11px] px-1.5 py-0.5 rounded-lg bg-[#0d2818] text-space-green">
+                <span v-for="ore in [...poi.ores_found].sort((a,b) => (a.name||'').localeCompare(b.name||''))" :key="ore.item_id" class="text-[11px] px-1.5 py-0.5 rounded-lg bg-[#0d2818] text-space-green">
                   {{ ore.name }} x{{ ore.total_mined }}
                 </span>
               </div>

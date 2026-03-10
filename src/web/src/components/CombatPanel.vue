@@ -59,6 +59,10 @@
     <div class="card py-2 px-3">
       <h4 class="text-xs font-semibold text-space-text-dim uppercase mb-2">Stance</h4>
       <div class="flex gap-2 flex-wrap">
+        <button @click="setStance('evade')" 
+          class="btn text-xs px-3 py-1.5 transition-colors"
+          :class="currentStance === 'evade' ? 'bg-cyan-700/60 text-cyan-200 border-cyan-600/50' : 'btn-secondary'"
+          title="Evade: no damage dealt, 50% damage taken, costs fuel">🌀 Evade</button>
         <button @click="setStance('fire')"
           class="btn text-xs px-3 py-1.5 transition-colors"
           :class="currentStance === 'fire' ? 'bg-red-700/60 text-red-200 border-red-600/50' : 'btn-secondary'"
@@ -73,6 +77,7 @@
           title="Flee: auto-retreat">💨 Flee</button>
         <button @click="doAdvance" class="btn btn-secondary text-xs px-3 py-1.5" title="Advance one combat zone">⬆️ Advance</button>
         <button @click="doRetreat" class="btn text-xs px-3 py-1.5 bg-orange-900/40 text-orange-300 border-orange-700/40 hover:bg-orange-900/70" title="Retreat from battle">↩️ Retreat</button>
+        <button @click="doEngage" class="btn btn-secondary text-xs px-3 py-1.5" title="Join an existing battle in this system">⚔️ Engage</button>
       </div>
     </div>
 
@@ -191,7 +196,7 @@ const nearby = ref<NearbyEntity[]>([]);
 const scanningId = ref<string | null>(null);
 const attackingId = ref<string | null>(null);
 const scanResult = ref<Record<string, unknown> | null>(null);
-const currentStance = ref<'fire' | 'brace' | 'flee'>('fire');
+const currentStance = ref<'fire' | 'evade' | 'brace' | 'flee'>('fire');
 const reloadWeapon = ref('');
 const reloadAmmo = ref('');
 
@@ -200,8 +205,9 @@ const hullPct = computed(() => currentBot.value.maxHull > 0 ? Math.round((curren
 const shieldPct = computed(() => currentBot.value.maxShield > 0 ? Math.round((currentBot.value.shield / currentBot.value.maxShield) * 100) : 0);
 
 const weaponMods = computed(() => {
-  const inv = (currentBot.value as any).modules || [];
-  return inv.filter((m: any) => m.ammo_type || m.slot_type === 'weapon' || (m.damage != null && m.damage > 0));
+  const inv = (currentBot.value as any).shipModules || (currentBot.value as any).modules || [];
+  return (Array.isArray(inv) ? inv : Object.values(inv as Record<string, unknown>))
+    .filter((m: any) => m.ammo_type || m.slot_type === 'weapon' || (m.damage != null && m.damage > 0));
 });
 
 const ammoItems = computed(() => {
@@ -276,8 +282,13 @@ async function doAttack(entity: NearbyEntity) {
   }
 }
 
-async function setStance(stance: 'fire' | 'brace' | 'flee') {
-  const r = await execCmd('stance', { stance });
+async function doEngage() {
+  const r = await execCmd('battle', { action: 'engage' });
+  emit('notif', r.ok ? 'Joined battle' : (r.error || 'Failed to join battle'), r.ok ? 'success' : 'error');
+}
+
+async function setStance(stance: 'fire' | 'evade' | 'brace' | 'flee') {
+  const r = await execCmd('battle', { action: 'stance', id: stance });
   if (r.ok) {
     currentStance.value = stance;
     emit('notif', `Stance set to ${stance}`, 'success');
@@ -287,12 +298,12 @@ async function setStance(stance: 'fire' | 'brace' | 'flee') {
 }
 
 async function doAdvance() {
-  const r = await execCmd('advance');
+  const r = await execCmd('battle', { action: 'advance' });
   emit('notif', r.ok ? 'Advanced one zone' : (r.error || 'Failed to advance'), r.ok ? 'success' : 'error');
 }
 
 async function doRetreat() {
-  const r = await execCmd('retreat');
+  const r = await execCmd('battle', { action: 'retreat' });
   emit('notif', r.ok ? 'Retreating from battle' : (r.error || 'Failed to retreat'), r.ok ? 'warn' : 'error');
 }
 

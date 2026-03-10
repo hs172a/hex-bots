@@ -7,7 +7,7 @@ import { Database } from "bun:sqlite";
 import { mkdirSync } from "fs";
 
 const DB_PATH = "data/hex-bots.db";
-const CURRENT_SCHEMA_VERSION = 8;
+const CURRENT_SCHEMA_VERSION = 10;
 
 export function createDatabase(): Database {
   mkdirSync("data", { recursive: true });
@@ -44,6 +44,8 @@ function applyMigrations(db: Database, fromVersion: number): void {
     if (fromVersion < 6) migrateV6(db);
     if (fromVersion < 7) migrateV7(db);
     if (fromVersion < 8) migrateV8(db);
+    if (fromVersion < 9) migrateV9(db);
+    if (fromVersion < 10) migrateV10(db);
 
     // Update schema version
     db.run("DELETE FROM schema_version");
@@ -381,6 +383,55 @@ function migrateV8(db: Database): void {
   `);
   db.run("CREATE INDEX IF NOT EXISTS idx_nm_source ON needs_matrix(source)");
   db.run("CREATE INDEX IF NOT EXISTS idx_nm_deficit ON needs_matrix(target_qty, current_qty)");
+}
+
+function migrateV9(db: Database): void {
+  // ── Resource deposits (surveyed POI resources from mining/exploration) ──
+  db.run(`
+    CREATE TABLE IF NOT EXISTS resource_deposits (
+      poi_id        TEXT NOT NULL,
+      system_id     TEXT NOT NULL DEFAULT '',
+      system_name   TEXT NOT NULL DEFAULT '',
+      poi_name      TEXT NOT NULL DEFAULT '',
+      poi_type      TEXT NOT NULL DEFAULT '',
+      resource_id   TEXT NOT NULL,
+      resource_name TEXT NOT NULL DEFAULT '',
+      category      TEXT NOT NULL DEFAULT 'ore',
+      remaining     INTEGER NOT NULL DEFAULT 0,
+      quality       REAL NOT NULL DEFAULT 0,
+      depletion_pct REAL NOT NULL DEFAULT 0,
+      last_seen_at  TEXT NOT NULL DEFAULT (datetime('now')),
+      last_seen_by  TEXT NOT NULL DEFAULT '',
+      PRIMARY KEY (poi_id, resource_id)
+    )
+  `);
+  db.run("CREATE INDEX IF NOT EXISTS idx_rd_system   ON resource_deposits(system_id)");
+  db.run("CREATE INDEX IF NOT EXISTS idx_rd_resource ON resource_deposits(resource_id)");
+  db.run("CREATE INDEX IF NOT EXISTS idx_rd_category ON resource_deposits(category)");
+  db.run("CREATE INDEX IF NOT EXISTS idx_rd_remain   ON resource_deposits(resource_id, remaining DESC)");
+}
+
+function migrateV10(db: Database): void {
+  // ── Wormholes (temporary one-way rifts connecting distant systems) ──
+  db.run(`
+    CREATE TABLE IF NOT EXISTS wormholes (
+      entrance_poi_id      TEXT PRIMARY KEY,
+      entrance_system_id   TEXT NOT NULL DEFAULT '',
+      entrance_system_name TEXT NOT NULL DEFAULT '',
+      exit_system_id       TEXT NOT NULL DEFAULT '',
+      exit_system_name     TEXT NOT NULL DEFAULT '',
+      exit_poi_id          TEXT NOT NULL DEFAULT '',
+      status               TEXT NOT NULL DEFAULT 'active',
+      discovered_at        TEXT NOT NULL DEFAULT (datetime('now')),
+      discovered_by        TEXT NOT NULL DEFAULT '',
+      last_seen_at         TEXT NOT NULL DEFAULT (datetime('now')),
+      expires_estimated_at TEXT,
+      collapse_seen_at     TEXT
+    )
+  `);
+  db.run("CREATE INDEX IF NOT EXISTS idx_wh_entrance_sys ON wormholes(entrance_system_id)");
+  db.run("CREATE INDEX IF NOT EXISTS idx_wh_exit_sys     ON wormholes(exit_system_id)");
+  db.run("CREATE INDEX IF NOT EXISTS idx_wh_status       ON wormholes(status)");
 }
 
 // ── CacheHelper ──

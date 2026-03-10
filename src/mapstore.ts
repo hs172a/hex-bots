@@ -6,6 +6,10 @@ import { FactionStorageDb } from "./data/faction-storage-db.js";
 import type { FactionStorageEntry, FactionBuildingEntry } from "./data/faction-storage-db.js";
 import { NeedsMatrixDb } from "./data/needs-matrix-db.js";
 import type { NeedsMatrixEntry } from "./data/needs-matrix-db.js";
+import { DepositsDb } from "./data/deposits-db.js";
+import type { DepositRecord } from "./data/deposits-db.js";
+import { WormholesDb } from "./data/wormholes-db.js";
+import type { WormholeEntry } from "./data/wormholes-db.js";
 
 // ── Data model ──────────────────────────────────────────────
 
@@ -135,6 +139,8 @@ export class MapStore {
   private _db: Database | null = null;
   private _factionStorageDb: FactionStorageDb | null = null;
   private _needsMatrixDb: NeedsMatrixDb | null = null;
+  private _depositsDb: DepositsDb | null = null;
+  private _wormholesDb: WormholesDb | null = null;
   /** Memoized BFS routes. Cleared when map topology changes. */
   private routeCache = new Map<string, string[] | null>();
 
@@ -839,12 +845,23 @@ export class MapStore {
     return results;
   }
 
-  /** BFS pathfinding between two systems using known connections. Returns system IDs in order, or null if no path. */
+  /** BFS pathfinding between two systems using known connections + active wormholes. Returns system IDs in order, or null if no path. */
   findRoute(fromSystemId: string, toSystemId: string): string[] | null {
     if (fromSystemId === toSystemId) return [fromSystemId];
 
     const cacheKey = `${fromSystemId}→${toSystemId}`;
     if (this.routeCache.has(cacheKey)) return this.routeCache.get(cacheKey)!;
+
+    // Build wormhole edge index: entranceSystemId → {exitSystemId, entrancePoiId}
+    const wormholeEdges = new Map<string, Array<{ exitSystem: string; poiId: string }>>();
+    if (this._wormholesDb) {
+      for (const wh of this._wormholesDb.getActive()) {
+        if (!wh.entrance_system_id || !wh.exit_system_id) continue;
+        const list = wormholeEdges.get(wh.entrance_system_id) ?? [];
+        list.push({ exitSystem: wh.exit_system_id, poiId: wh.entrance_poi_id });
+        wormholeEdges.set(wh.entrance_system_id, list);
+      }
+    }
 
     const visited = new Set<string>([fromSystemId]);
     const queue: Array<{ id: string; path: string[] }> = [
@@ -856,13 +873,23 @@ export class MapStore {
       const current = queue.shift()!;
       const conns = this.data.systems[current.id]?.connections ?? [];
 
+      // Regular hyperspace connections
       for (const conn of conns) {
         const nextId = conn.system_id;
         if (!nextId || visited.has(nextId)) continue;
-
         const newPath = [...current.path, nextId];
         if (nextId === toSystemId) { result = newPath; break; }
+        visited.add(nextId);
+        queue.push({ id: nextId, path: newPath });
+      }
+      if (result) break;
 
+      // Wormhole shortcuts (one-way)
+      for (const wh of (wormholeEdges.get(current.id) ?? [])) {
+        const nextId = wh.exitSystem;
+        if (!nextId || visited.has(nextId)) continue;
+        const newPath = [...current.path, nextId];
+        if (nextId === toSystemId) { result = newPath; break; }
         visited.add(nextId);
         queue.push({ id: nextId, path: newPath });
       }
@@ -871,6 +898,60 @@ export class MapStore {
 
     this.routeCache.set(cacheKey, result);
     return result;
+  }
+
+  /**
+   * Detailed route with per-hop metadata. Each hop includes the target system
+   * and, if the jump uses a wormhole, the entrance POI ID to travel to first.
+   * Returns null if no route found.
+   */
+  findDetailedRoute(
+    fromSystemId: string,
+    toSystemId: string,
+  ): Array<{ systemId: string; wormholeEntrancePoi?: string }> | null {
+    if (fromSystemId === toSystemId) return [{ systemId: fromSystemId }];
+
+    // Build wormhole edge index
+    const wormholeEdges = new Map<string, Array<{ exitSystem: string; poiId: string }>>();
+    if (this._wormholesDb) {
+      for (const wh of this._wormholesDb.getActive()) {
+        if (!wh.entrance_system_id || !wh.exit_system_id) continue;
+        const list = wormholeEdges.get(wh.entrance_system_id) ?? [];
+        list.push({ exitSystem: wh.exit_system_id, poiId: wh.entrance_poi_id });
+        wormholeEdges.set(wh.entrance_system_id, list);
+      }
+    }
+
+    type HopMeta = { systemId: string; wormholeEntrancePoi?: string };
+    const visited = new Set<string>([fromSystemId]);
+    const queue: Array<{ id: string; path: HopMeta[] }> = [
+      { id: fromSystemId, path: [{ systemId: fromSystemId }] },
+    ];
+
+    while (queue.length > 0) {
+      const current = queue.shift()!;
+      const conns = this.data.systems[current.id]?.connections ?? [];
+
+      for (const conn of conns) {
+        const nextId = conn.system_id;
+        if (!nextId || visited.has(nextId)) continue;
+        const newPath = [...current.path, { systemId: nextId }];
+        if (nextId === toSystemId) return newPath;
+        visited.add(nextId);
+        queue.push({ id: nextId, path: newPath });
+      }
+
+      for (const wh of (wormholeEdges.get(current.id) ?? [])) {
+        const nextId = wh.exitSystem;
+        if (!nextId || visited.has(nextId)) continue;
+        const newPath = [...current.path, { systemId: nextId, wormholeEntrancePoi: wh.poiId }];
+        if (nextId === toSystemId) return newPath;
+        visited.add(nextId);
+        queue.push({ id: nextId, path: newPath });
+      }
+    }
+
+    return null;
   }
 
   /** Get all unique ores found across all systems. Returns [{item_id, name}]. */
@@ -1220,6 +1301,131 @@ export class MapStore {
     this._needsMatrixDb = db;
   }
 
+  /** Connect the deposits DB (called once after database is ready). */
+  connectToDepositsDb(db: DepositsDb): void {
+    this._depositsDb = db;
+  }
+
+  /** Connect the wormholes DB (called once after database is ready). */
+  connectToWormholesDb(db: WormholesDb): void {
+    this._wormholesDb = db;
+    this.routeCache.clear(); // wormholes change routing
+  }
+
+  // ── Wormholes DB delegates ──────────────────────────────────────────
+
+  /** Upsert a wormhole record (discovered via survey_system / get_poi). Clears route cache. */
+  upsertWormhole(entry: Parameters<WormholesDb["upsert"]>[0]): void {
+    this._wormholesDb?.upsert(entry);
+    this.routeCache.clear();
+  }
+
+  /** Mark a wormhole as collapsed (remnant stage). Clears route cache. */
+  markWormholeCollapsed(entrancePoiId: string): void {
+    this._wormholesDb?.markCollapsed(entrancePoiId);
+    this.routeCache.clear();
+  }
+
+  /** Mark a wormhole as seen (confirms still active). */
+  markWormholeSeen(entrancePoiId: string): void {
+    this._wormholesDb?.markSeen(entrancePoiId);
+  }
+
+  /** All active (non-collapsed) wormholes. */
+  getActiveWormholes(): WormholeEntry[] {
+    return this._wormholesDb?.getActive() ?? [];
+  }
+
+  /** All wormholes including collapsed remnants. */
+  getAllWormholes(): WormholeEntry[] {
+    return this._wormholesDb?.getAll() ?? [];
+  }
+
+  /** Wormholes whose entrance is in the given system. */
+  getWormholesBySystem(systemId: string): WormholeEntry[] {
+    return this._wormholesDb?.getBySystem(systemId) ?? [];
+  }
+
+  /** Single wormhole by entrance POI ID. */
+  getWormhole(entrancePoiId: string): WormholeEntry | null {
+    return this._wormholesDb?.get(entrancePoiId) ?? null;
+  }
+
+  /** Prune old/stale wormhole records. */
+  pruneWormholes(collapsedHours = 12, maxAgeDays = 6): void {
+    this._wormholesDb?.pruneOld(collapsedHours, maxAgeDays);
+  }
+
+  // ── Resource Deposits DB delegates ────────────────────────────────
+
+  /**
+   * Update deposit records for a POI from raw API resource data.
+   * Called by miner / gas_harvester / ice_harvester / explorer after a get_poi or survey_system.
+   */
+  updateDeposits(
+    poiId: string,
+    systemId: string,
+    systemName: string,
+    poiName: string,
+    poiType: string,
+    resources: Array<Record<string, unknown>>,
+    by: string,
+  ): void {
+    if (!this._depositsDb || resources.length === 0) return;
+    const now = new Date().toISOString();
+    const records: DepositRecord[] = resources.map(r => {
+      const resourceId = (r.resource_id as string) || (r.id as string) || (r.ore_id as string) || "";
+      const resourceName = (r.name as string) || (r.resource_name as string) || resourceId;
+      const raw = resourceId.toLowerCase();
+      const category =
+        raw.includes("gas") || raw.includes("helium") || raw.includes("hydrogen") ? "gas"
+        : raw.includes("ice") || raw.includes("water") ? "ice"
+        : raw.includes("crystal") ? "crystal"
+        : "ore";
+      return {
+        poi_id: poiId,
+        system_id: systemId,
+        system_name: systemName,
+        poi_name: poiName,
+        poi_type: poiType,
+        resource_id: resourceId,
+        resource_name: resourceName,
+        category,
+        remaining: (r.remaining as number) ?? (r.quantity as number) ?? 0,
+        quality: (r.quality as number) ?? (r.richness as number) ?? 0,
+        depletion_pct: (r.depletion_percent as number) ?? (r.depletion as number) ?? 0,
+        last_seen_at: now,
+        last_seen_by: by,
+      };
+    }).filter(r => r.resource_id);
+    this._depositsDb.upsertBatch(records);
+  }
+
+  /** All deposits for a system. */
+  getDepositsInSystem(systemId: string): DepositRecord[] {
+    return this._depositsDb?.getBySystem(systemId) ?? [];
+  }
+
+  /** All known deposits. */
+  getAllDeposits(): DepositRecord[] {
+    return this._depositsDb?.getAll() ?? [];
+  }
+
+  /** Find best deposit for a resource (optionally prefer a system). */
+  findBestDeposit(resourceId: string, preferSystemId?: string): DepositRecord | null {
+    return this._depositsDb?.findBest(resourceId, preferSystemId) ?? null;
+  }
+
+  /** Systems that have at least one non-depleted deposit (for map markers). */
+  getSystemsWithDeposits(): Array<{ system_id: string; system_name: string; count: number }> {
+    return this._depositsDb?.getSystemsWithDeposits() ?? [];
+  }
+
+  /** Summary grouped by poi+category for map overlay. */
+  getDepositsSummary() {
+    return this._depositsDb?.getSummaryBySystem() ?? [];
+  }
+
   /**
    * Optional live provider: called when DB is empty to return in-memory bot faction storage.
    * Wired by botmanager so the All Storages tab shows data immediately even before DB is populated.
@@ -1292,6 +1498,40 @@ export class MapStore {
   /** Upsert faction building records (from facility { action:'list' } response). */
   updateFactionBuildings(buildings: Parameters<FactionStorageDb['updateBuildings']>[0]): void {
     this._factionStorageDb?.updateBuildings(buildings);
+  }
+
+  /**
+   * Faction storage facility types that determine per-item storage capacity.
+   * A higher-level storage facility raises the per-item cap above the default 100k.
+   */
+  private static readonly STORAGE_FACILITY_TYPES = new Set([
+    'faction_lockbox', 'faction_warehouse', 'faction_depot',
+  ]);
+
+  /** Per-item faction storage cap (units) by facility level. */
+  private static readonly FACTION_STORAGE_CAPS: Record<number, number> = {
+    1: 100_000,
+    2: 200_000,
+    3: 300_000,
+    4: 500_000,
+  };
+
+  /**
+   * Return the per-item faction storage cap at a given POI.
+   * Looks up the storage-type facility installed there and maps its level to a cap.
+   * Falls back to 100,000 (L1 default) when no DB data is available.
+   */
+  getFactionStorageCapPerItem(poiId: string): number {
+    if (!this._factionStorageDb) return 100_000;
+    const buildings = this._factionStorageDb.getBuildingsForPoi(poiId);
+    let maxLevel = 1;
+    for (const b of buildings) {
+      const isStorage =
+        MapStore.STORAGE_FACILITY_TYPES.has(b.facility_type) ||
+        b.faction_service?.toLowerCase().includes('storage');
+      if (isStorage && b.level > maxLevel) maxLevel = b.level;
+    }
+    return MapStore.FACTION_STORAGE_CAPS[maxLevel] ?? 500_000;
   }
 
   /** Return all known faction buildings. */

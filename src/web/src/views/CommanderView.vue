@@ -240,14 +240,14 @@
             <label class="text-[10px] text-purple-300">Crafter bot</label>
             <select v-model="craftPlan.crafterBot" class="input w-full mt-0.5 text-xs">
               <option value="">— select crafter —</option>
-              <option v-for="b in botStore.bots" :key="b.username" :value="b.username">{{ b.username }}</option>
+              <option v-for="b in botStore.sortedBots" :key="b.username" :value="b.username">{{ b.username }}</option>
             </select>
           </div>
           <div v-else class="flex-1 min-w-32">
             <label class="text-[10px] text-space-text-dim">Gatherer bot</label>
             <select v-model="craftPlan.botName" class="input w-full mt-0.5 text-xs">
               <option value="">— select gatherer —</option>
-              <option v-for="b in botStore.bots" :key="b.username" :value="b.username">{{ b.username }}</option>
+              <option v-for="b in botStore.sortedBots" :key="b.username" :value="b.username">{{ b.username }}</option>
             </select>
           </div>
           <button @click="analyzeCraftPlan" :disabled="!craftPlan.itemId" class="btn btn-primary px-2 py-1.5 text-xs self-end">Analyze</button>
@@ -267,7 +267,7 @@
             <label class="text-[10px] text-space-yellow">Crafter bot (materials delivered here)</label>
             <select v-model="craftPlan.crafterBot" class="input w-full mt-0.5 text-xs">
               <option value="">— select crafter —</option>
-              <option v-for="b in botStore.bots" :key="b.username" :value="b.username">{{ b.username }}</option>
+              <option v-for="b in botStore.sortedBots" :key="b.username" :value="b.username">{{ b.username }}</option>
             </select>
           </div>
           <!-- crafter type: gatherer is optional (any gatherer will pick up) -->
@@ -275,7 +275,7 @@
             <label class="text-[10px] text-space-text-dim">Gatherer bot (optional — blank = any)</label>
             <select v-model="craftPlan.botName" class="input w-full mt-0.5 text-xs">
               <option value="">— any available gatherer —</option>
-              <option v-for="b in botStore.bots" :key="b.username" :value="b.username">{{ b.username }}</option>
+              <option v-for="b in botStore.sortedBots" :key="b.username" :value="b.username">{{ b.username }}</option>
             </select>
           </div>
           <div class="flex-1 min-w-32">
@@ -402,6 +402,187 @@
   <!-- Action Log Tab -->
   <ActionLogView v-else-if="activeTab === 'log'" />
 
+  <!-- Logs Tab (Activity + System + Broadcast) -->
+  <div v-else-if="activeTab === 'logs'" class="flex-1 flex flex-row gap-2 p-2 overflow-hidden min-h-0">
+
+    <!-- Activity Log -->
+    <div class="card flex-1 min-w-0 flex flex-col overflow-hidden py-2 px-2">
+      <div class="flex items-center justify-between pb-1.5 border-b border-space-border shrink-0">
+        <span class="text-xs font-semibold text-space-text-dim uppercase tracking-wider">Activity Log</span>
+        <select v-model="activityBotFilter" class="input text-[11px] py-0 h-5 pl-1 max-w-[100px]">
+          <option value="">All bots</option>
+          <option v-for="b in botStore.sortedBots" :key="b.username" :value="b.username">{{ b.username }}</option>
+        </select>
+      </div>
+      <div ref="cmdActivityRef" class="flex-1 overflow-auto mt-1 pr-0.5 font-mono scrollbar-dark space-y-px">
+        <div v-for="(entry, idx) in filteredActivityLogs" :key="idx" class="leading-snug text-[11px] whitespace-pre-wrap">
+          <template v-if="entry.parsed">
+            <span class="text-[#555d6b]">{{ entry.parsed.time }}</span>
+            <span :class="botUsernameColor(entry.parsed.username)"> [{{ entry.parsed.username }}]</span>
+            <span :class="categoryColor(entry.parsed.category)">[{{ entry.parsed.category }}] </span>
+            <span class="text-space-text"> {{ entry.parsed.message }}</span>
+          </template>
+          <span v-else class="text-space-text-dim">{{ entry.raw }}</span>
+        </div>
+        <div v-if="filteredActivityLogs.length === 0" class="text-space-text-dim text-[11px] italic py-1">No entries</div>
+      </div>
+    </div>
+
+    <!-- System Messages -->
+    <div class="card flex-1 min-w-0 flex flex-col overflow-hidden py-2 px-2">
+      <div class="flex items-center gap-1 pb-1.5 border-b border-space-border shrink-0">
+        <span class="text-xs font-semibold text-space-text-dim uppercase tracking-wider flex-1">System Messages</span>
+        <select v-model="systemBotFilter" class="input text-[11px] py-0 h-5 pl-1 max-w-[90px]">
+          <option value="">All bots</option>
+          <option v-for="b in botStore.sortedBots" :key="b.username" :value="b.username">{{ b.username }}</option>
+        </select>
+        <select v-model="systemCatFilter" class="input text-[11px] py-0 h-5 pl-1 max-w-[70px]">
+          <option value="">All</option>
+          <option value="error">error</option>
+          <option value="system">system</option>
+          <option value="warn">warn</option>
+        </select>
+      </div>
+      <div ref="cmdSystemRef" class="flex-1 overflow-auto mt-1 pr-0.5 font-mono scrollbar-dark space-y-px">
+        <div v-for="(entry, idx) in filteredSystemLogs" :key="idx" class="leading-snug text-[11px] whitespace-pre-wrap">
+          <template v-if="entry.parsed">
+            <span class="text-[#555d6b]">{{ entry.parsed.time }}</span>
+            <span :class="botUsernameColor(entry.parsed.username)"> [{{ entry.parsed.username }}]</span>
+            <span :class="categoryColor(entry.parsed.category)">[{{ entry.parsed.category }}] </span>
+            <span :class="msgColor(entry.parsed.category)"> {{ entry.parsed.message }}</span>
+          </template>
+          <span v-else :class="plainSystemColor(entry.raw)" class="text-[11px]">{{ entry.raw }}</span>
+        </div>
+        <div v-if="filteredSystemLogs.length === 0" class="text-space-text-dim text-[11px] italic py-1">No entries</div>
+      </div>
+    </div>
+
+    <!-- Broadcast / Chat -->
+    <div class="card flex-1 min-w-0 flex flex-col overflow-hidden py-2 px-2">
+      <div class="flex items-center justify-between pb-1.5 border-b border-space-border shrink-0">
+        <span class="text-xs font-semibold text-space-text-dim uppercase tracking-wider">Broadcast / Chat</span>
+        <span class="text-[11px] text-space-text-dim">{{ botStore.broadcastLogs.length }} msgs</span>
+      </div>
+      <div ref="cmdBroadcastRef" class="flex-1 overflow-auto mt-1 pr-0.5 font-mono scrollbar-dark">
+        <template v-for="(group, idx) in groupedBroadcastLogs" :key="idx">
+          <div v-if="group.entry.type === 'market'" class="rounded border px-1 py-0.5 my-1 text-[11px]"
+            :class="group.entry.titleType === 'shortage' ? 'border-orange-800/50 bg-orange-950/20' : group.entry.titleType === 'surplus' ? 'border-green-800/50 bg-green-950/20' : 'border-space-border bg-[#0d1117]'">
+            <div class="flex items-center gap-1.5 mb-1">
+              <span v-if="group.entry.time" class="text-[#555d6b] shrink-0">{{ group.entry.time }}</span>
+              <span class="font-semibold text-space-yellow">{{ group.entry.sender }}</span>
+              <span class="px-1 py-0 rounded text-[11px] font-bold uppercase"
+                :class="group.entry.titleType === 'shortage' ? 'bg-orange-900/60 text-orange-300' : group.entry.titleType === 'surplus' ? 'bg-green-900/60 text-green-300' : 'bg-[#21262d] text-space-text-dim'">
+                {{ group.entry.title }}</span>
+            </div>
+            <div v-if="group.entry.items?.length" class="flex flex-wrap gap-1">
+              <span v-for="item in group.entry.items" :key="item.name"
+                class="inline-flex items-center gap-1 px-1 py-0.5 rounded bg-[#161b22] border border-[#30363d] text-[11px]">
+                <span class="text-space-text">{{ item.name }}</span>
+                <span class="text-space-yellow font-semibold">{{ item.price }}cr</span>
+                <span :class="item.multiplier >= 3 ? 'text-red-400' : item.multiplier >= 2 ? 'text-orange-400' : 'text-yellow-500'">×{{ item.multiplier }}</span>
+              </span>
+            </div>
+          </div>
+          <div v-else class="py-0.5 leading-tight">
+            <div class="flex items-center gap-1.5">
+              <span class="text-[10px] font-semibold uppercase tracking-widest"
+                :class="group.entry.type === 'alert' ? 'text-red-500' : group.entry.type === 'combat' ? 'text-orange-400' : group.entry.type === 'forum' ? 'text-purple-400' : 'text-space-text-dim'">
+                {{ group.entry.type === 'simple' || group.entry.type === 'header' ? (group.entry.tag || 'CHAT') : group.entry.type.toUpperCase() }}
+              </span>
+              <span class="text-[#555d6b] text-[11px]">{{ group.entry.time }}</span>
+              <span v-if="group.count > 1" class="text-[10px] px-1 rounded bg-[#21262d] text-space-text-dim font-mono">×{{ group.count }}</span>
+            </div>
+            <div class="text-[11px] leading-snug">
+              <span v-if="group.entry.type === 'alert'" class="text-red-300">{{ group.entry.message || group.entry.raw }}</span>
+              <span v-else-if="group.entry.type === 'combat'" class="text-orange-200">⚔ <span class="font-semibold">{{ group.entry.pirate }}</span></span>
+              <span v-else class="text-space-cyan">{{ group.entry.message || group.entry.raw }}</span>
+            </div>
+          </div>
+        </template>
+        <div v-if="groupedBroadcastLogs.length === 0" class="text-space-text-dim text-[11px] italic py-1">No messages</div>
+      </div>
+    </div>
+
+  </div>
+
+  <!-- Fleet Analytics Tab -->
+  <div v-else-if="activeTab === 'fleet'" class="flex-1 flex flex-col gap-2 p-2 overflow-auto scrollbar-dark">
+
+    <!-- KPI cards -->
+    <div class="grid grid-cols-4 gap-2">
+      <div class="card py-2 px-3">
+        <div class="text-[10px] text-space-text-dim uppercase font-semibold">Total Bots</div>
+        <div class="text-2xl font-bold text-space-text-bright mt-0.5">{{ botStore.bots.length }}</div>
+      </div>
+      <div class="card py-2 px-3">
+        <div class="text-[10px] text-green-400 uppercase font-semibold">Running</div>
+        <div class="text-2xl font-bold text-green-400 mt-0.5">{{ fleetStats.byState['running'] ?? 0 }}</div>
+      </div>
+      <div class="card py-2 px-3">
+        <div class="text-[10px] text-space-text-dim uppercase font-semibold">Idle / Stopped</div>
+        <div class="text-2xl font-bold text-space-text-dim mt-0.5">{{ (fleetStats.byState['idle'] ?? 0) + (fleetStats.byState['stopped'] ?? 0) }}</div>
+      </div>
+      <div class="card py-2 px-3">
+        <div class="text-[10px] text-space-yellow uppercase font-semibold">Fleet cr/hr</div>
+        <div class="text-2xl font-bold mt-0.5" :class="totalCrHr >= 0 ? 'text-space-green' : 'text-space-red'">{{ totalCrHr >= 0 ? '+' : '' }}{{ totalCrHr.toLocaleString() }}</div>
+      </div>
+    </div>
+
+    <!-- Three analytics panels -->
+    <div class="grid grid-cols-3 gap-2 flex-1 min-h-0">
+
+      <!-- Routine distribution -->
+      <div class="card py-2 px-3 flex flex-col overflow-hidden">
+        <div class="text-xs font-semibold text-space-text-dim uppercase mb-2">Active Routines</div>
+        <div v-if="Object.keys(fleetStats.byRoutine).length === 0" class="text-[11px] text-space-text-dim italic">No active bots</div>
+        <div class="flex-1 overflow-auto scrollbar-dark space-y-1.5">
+          <div v-for="(count, routine) in sortedRoutines" :key="routine" class="flex items-center gap-2">
+            <span class="text-[11px] text-space-text w-36 truncate">{{ routine }}</span>
+            <div class="flex-1 h-1.5 bg-[#21262d] rounded-full overflow-hidden">
+              <div class="h-full bg-space-accent rounded-full transition-all" :style="{ width: (count / Math.max(1, botStore.bots.length) * 100) + '%' }"></div>
+            </div>
+            <span class="text-[11px] text-space-accent w-5 text-right font-mono">{{ count }}</span>
+          </div>
+        </div>
+      </div>
+
+      <!-- cr/hr leaderboard -->
+      <div class="card py-2 px-3 flex flex-col overflow-hidden">
+        <div class="text-xs font-semibold text-space-text-dim uppercase mb-2">Credits / Hour</div>
+        <div class="flex-1 overflow-auto scrollbar-dark">
+          <div v-for="bot in sortedBotsByCredits" :key="bot.username"
+            class="flex items-center justify-between text-[11px] py-0.5 border-b border-space-border/20">
+            <span class="text-space-text truncate mr-2">{{ bot.username }}</span>
+            <div class="flex items-center gap-2 shrink-0">
+              <span class="text-space-text-dim font-mono text-[10px]">₡{{ bot.credits.toLocaleString() }}</span>
+              <span class="font-mono w-20 text-right"
+                :class="bot.crPerHr > 0 ? 'text-space-green' : bot.crPerHr < 0 ? 'text-space-red' : 'text-space-text-dim'">
+                {{ bot.crPerHr > 0 ? '+' : '' }}{{ bot.crPerHr.toLocaleString() }}
+              </span>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Health warnings -->
+      <div class="card py-2 px-3 flex flex-col overflow-hidden">
+        <div class="text-xs font-semibold text-space-text-dim uppercase mb-2">⚠ Fleet Health</div>
+        <div v-if="fleetStats.warnings.length === 0" class="text-[11px] text-space-green">✓ All bots healthy</div>
+        <div class="flex-1 overflow-auto scrollbar-dark space-y-1">
+          <div v-for="w in fleetStats.warnings" :key="w.username + w.type"
+            class="flex items-center justify-between text-[11px] bg-[#0d1117] border rounded px-2 py-1"
+            :class="w.type === 'hull' ? 'border-red-800/40' : 'border-orange-800/40'">
+            <span class="text-space-text truncate mr-2">{{ w.username }}</span>
+            <span :class="w.type === 'hull' ? 'text-red-400' : 'text-orange-400'" class="shrink-0 font-medium">
+              {{ w.type === 'hull' ? '❤️' : '⛽' }} {{ w.value }}%
+            </span>
+          </div>
+        </div>
+      </div>
+
+    </div>
+  </div>
+
   <!-- AI Agent Tab -->
   <div v-else-if="activeTab === 'agent'" class="flex-1 flex flex-col gap-2 p-2 overflow-auto scrollbar-dark">
     <!-- Bot Selector -->
@@ -409,7 +590,7 @@
       <div class="flex items-center gap-2 flex-wrap">
         <span class="text-xs font-semibold text-space-text-dim uppercase">Bot</span>
         <select v-model="agentBot" class="input text-xs min-w-36">
-          <option v-for="b in botStore.bots" :key="b.username" :value="b.username">{{ b.username }}</option>
+          <option v-for="b in botStore.sortedBots" :key="b.username" :value="b.username">{{ b.username }}</option>
         </select>
         <span v-if="agentBotStatus" class="px-2 py-0.5 text-[11px] rounded"
           :class="agentBotStatus === 'running' ? 'bg-green-900/40 text-green-300' : 'bg-[#21262d] text-space-text-dim'">{{ agentBotStatus }}</span>
@@ -468,8 +649,9 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, reactive, watch, onMounted, onUnmounted } from 'vue'
+import { ref, computed, reactive, watch, onMounted, onUnmounted, nextTick } from 'vue'
 import { useBotStore } from '../stores/botStore'
+import { useDashboardLogs, categoryColor, msgColor, plainSystemColor } from '../composables/useDashboardLogs'
 import StatsView from './StatsView.vue'
 import ActionLogView from './ActionLogView.vue'
 import MissionsView from './MissionsView.vue'
@@ -518,6 +700,8 @@ const TABS = [
   { id: 'missions', label: '🏹 Missions'  },
   { id: 'stats',    label: '📈 Stats'     },
   { id: 'log',      label: '📜 Action Log' },
+  { id: 'logs',     label: '📋 Logs'      },
+  { id: 'fleet',    label: '🚀 Fleet'     },
   { id: 'agent',    label: '🤖 AI Agent'  },
 ] as const
 type TabId = typeof TABS[number]['id']
@@ -542,6 +726,48 @@ const goalTypes = [
   'faction_operations',
   'custom',
 ]
+
+// ── Logs tab ─────────────────────────────────────────────────────
+const { activityBotFilter, systemBotFilter, systemCatFilter, botUsernameColor, filteredActivityLogs, filteredSystemLogs, groupedBroadcastLogs } = useDashboardLogs()
+const cmdActivityRef  = ref<HTMLElement | null>(null)
+const cmdSystemRef    = ref<HTMLElement | null>(null)
+const cmdBroadcastRef = ref<HTMLElement | null>(null)
+watch(() => filteredActivityLogs.value.length,  () => nextTick(() => { if (cmdActivityRef.value)  cmdActivityRef.value.scrollTop  = cmdActivityRef.value.scrollHeight }))
+watch(() => filteredSystemLogs.value.length,    () => nextTick(() => { if (cmdSystemRef.value)    cmdSystemRef.value.scrollTop    = cmdSystemRef.value.scrollHeight }))
+watch(() => groupedBroadcastLogs.value.length,  () => nextTick(() => { if (cmdBroadcastRef.value) cmdBroadcastRef.value.scrollTop = cmdBroadcastRef.value.scrollHeight }))
+
+// ── Fleet Analytics ──────────────────────────────────────────────
+const fleetStats = computed(() => {
+  const byState: Record<string, number> = {}
+  const byRoutine: Record<string, number> = {}
+  const warnings: { username: string; type: 'hull' | 'fuel'; value: number }[] = []
+  for (const bot of botStore.bots) {
+    const st = (bot as any).state || 'unknown'
+    byState[st] = (byState[st] || 0) + 1
+    const rout = (bot as any).routine || ''
+    if (rout) byRoutine[rout] = (byRoutine[rout] || 0) + 1
+    const hull = (bot as any).hull ?? 0;  const maxHull = (bot as any).maxHull ?? 0
+    const fuel = (bot as any).fuel ?? 0;  const maxFuel = (bot as any).maxFuel ?? 0
+    if (maxHull > 0 && hull / maxHull < 0.5) warnings.push({ username: bot.username, type: 'hull', value: Math.round(hull / maxHull * 100) })
+    if (maxFuel > 0 && fuel / maxFuel < 0.25) warnings.push({ username: bot.username, type: 'fuel', value: Math.round(fuel / maxFuel * 100) })
+  }
+  return { byState, byRoutine, warnings }
+})
+const sortedRoutines = computed(() => {
+  const entries = Object.entries(fleetStats.value.byRoutine) as [string, number][]
+  entries.sort((a, b) => b[1] - a[1])
+  return Object.fromEntries(entries)
+})
+const totalCrHr = computed(() =>
+  Object.values(botStore.botCreditsPerHour as Record<string, number>).reduce((s, v) => s + v, 0)
+)
+const sortedBotsByCredits = computed(() =>
+  [...botStore.bots].map(b => ({
+    username: b.username,
+    crPerHr: (botStore.botCreditsPerHour as Record<string, number>)[b.username] ?? 0,
+    credits: (b as any).credits ?? 0,
+  })).sort((a, b) => b.crPerHr - a.crPerHr)
+)
 
 let pollTimer: ReturnType<typeof setInterval> | null = null
 
@@ -825,6 +1051,7 @@ function createCraftGatherGoal() {
   }
   if (craftPlan.goalType !== 'build' && craftPlan.crafterBot) newGoal.crafter_bot = craftPlan.crafterBot
   if (craftPlan.giftTarget.trim()) newGoal.gift_target = craftPlan.giftTarget.trim()
+  if (craftPlanResult.value?.recipe_id) newGoal.recipe_id = craftPlanResult.value.recipe_id
   // Warn only when both poi+system are empty AND no target_bot for dynamic resolution
   if (!newGoal.target_poi && !newGoal.target_system) {
     const ok = confirm(`⚠ Could not resolve station for '${targetBotName}' (not docked and no homePoI set).\nStation will be resolved dynamically at delivery time.\n\nCreate goal anyway?`)

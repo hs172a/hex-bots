@@ -436,8 +436,44 @@ async function* executeObjective(
       const needed = obj.quantity - obj.current;
       ctx.log("info", `${obj.type}: need ${needed}x ${obj.targetName || obj.target} (${obj.current}/${obj.quantity})`);
 
-      // Try buying first (not for pure mine objectives unless preferBuying)
-      if (settings.preferBuying && obj.type !== "mine") {
+      // ── Helper: navigate to delivery destination and dock to trigger server-side delivery ──
+      const deliverToDestination = async (): Promise<boolean> => {
+        const destSystem = obj.targetSystem;
+        const destPoi = obj.targetPoi;
+        if (!destSystem && !destPoi) return false; // no delivery target known — can't deliver
+        if (destSystem && bot.system !== destSystem) {
+          await ensureUndocked(ctx);
+          ctx.log("info", `Traveling to delivery destination: ${destSystem}`);
+          await navigateToSystem(ctx, destSystem, { fuelThresholdPct: settings.refuelThreshold, hullThresholdPct: 30 });
+          if (bot.system !== destSystem) return false; // navigation failed
+        }
+        if (destPoi && bot.poi !== destPoi) {
+          await ensureUndocked(ctx);
+          const tResp = await bot.exec("travel", { target_poi: destPoi });
+          if (tResp.error) return false;
+          await bot.refreshStatus();
+        }
+        await ensureDocked(ctx);
+        await syncMissionProgress(ctx, missionId, objectives);
+        if (obj.current >= obj.quantity) { obj.complete = true; }
+        return true;
+      };
+
+      // ── Step 0: Already have items in cargo from a previous attempt → deliver immediately ──
+      await bot.refreshCargo();
+      const alreadyInCargo = bot.inventory.find(i => i.itemId === obj.target)?.quantity ?? 0;
+      if (alreadyInCargo >= needed) {
+        ctx.log("info", `Already have ${alreadyInCargo}x ${obj.targetName || obj.target} in cargo — delivering`);
+        await deliverToDestination();
+        return;
+      }
+
+      // ── Step 1: Try buying ──
+      // Track stations that returned item_not_available so we don't retry them.
+      if (!(obj as any)._buyFailedPois) (obj as any)._buyFailedPois = new Set<string>();
+      const buyFailedPois = (obj as any)._buyFailedPois as Set<string>;
+
+      if (settings.preferBuying && obj.type !== "mine" && !buyFailedPois.has(bot.poi ?? "")) {
         yield "try_buy";
         await ensureDocked(ctx);
         // Use item_id param to get full order book depth for this specific item
@@ -447,46 +483,67 @@ async function* executeObjective(
           const entries = (Array.isArray(mkt) ? mkt : (mkt.market as unknown[]) || (mkt.items as unknown[])) as Array<Record<string, unknown>>;
           const entry = (entries || []).find(e => (e.item_id as string) === obj.target) || (entries?.[0] as Record<string, unknown> | undefined);
           if (entry) {
+            // Only use actual sell orders — never fall back to best_buy (that's a buyer bid, not an ask price)
             const sellOrders = ((entry.sell_orders as Array<Record<string, unknown>>) || [])
+              .filter(o => (o.quantity as number) > 0)
               .sort((a, b) => (a.price as number) - (b.price as number));
-            // Fallback for compact summary: best_buy = best price we can buy at
-            const cheapestPrice = sellOrders[0]?.price as number || (entry.best_buy as number) || (entry.sell_price as number) || 0;
-            const cheapestQty = (sellOrders[0]?.quantity as number) || (entry.quantity as number) || obj.quantity;
-            const cheapest = cheapestPrice > 0 ? { price: cheapestPrice, quantity: cheapestQty } : null;
-            if (cheapest) {
-              const unitPrice = cheapest.price as number;
+            const cheapestSell = sellOrders[0] ?? null;
+            // Also accept a simple sell_price field when no order book is present
+            const fallbackPrice = (entry.sell_price as number) > 0 ? (entry.sell_price as number) : 0;
+            const unitPrice = cheapestSell ? (cheapestSell.price as number) : fallbackPrice;
+            const unitQty   = cheapestSell ? (cheapestSell.quantity as number) : (entry.quantity as number) || obj.quantity;
+            if (unitPrice > 0) {
               if (!settings.maxBuyPrice || unitPrice <= settings.maxBuyPrice) {
-                const canBuy = Math.min(
-                  needed,
-                  (cheapest.quantity as number) || needed,
-                  Math.floor(bot.credits / unitPrice),
-                );
+                const canBuy = Math.min(needed, unitQty || needed, Math.floor(bot.credits / unitPrice));
                 if (canBuy > 0) {
                   const buyResp = await bot.exec("buy", { item_id: obj.target, quantity: canBuy, max_price: unitPrice });
                   if (!buyResp.error) {
                     ctx.log("info", `Bought ${canBuy}x ${obj.targetName || obj.target} @ ${unitPrice}cr`);
-                    await syncMissionProgress(ctx, missionId, objectives);
-                    if (obj.current >= obj.quantity) { obj.complete = true; return; }
+                    await bot.refreshCargo();
+                    const nowInCargo = bot.inventory.find(i => i.itemId === obj.target)?.quantity ?? 0;
+                    if (nowInCargo >= needed) {
+                      await deliverToDestination();
+                      return;
+                    }
+                  } else {
+                    const errMsg = (buyResp.error?.message || "").toLowerCase();
+                    if (errMsg.includes("item_not_available") || errMsg.includes("no one is selling") || errMsg.includes("not available")) {
+                      ctx.log("info", `${obj.targetName || obj.target} not available at this station — blacklisting for this objective`);
+                      buyFailedPois.add(bot.poi ?? "");
+                    }
                   }
                 }
               }
+            } else {
+              // Market exists but has no sell orders — blacklist this station
+              ctx.log("info", `No sell orders for ${obj.targetName || obj.target} at this station`);
+              buyFailedPois.add(bot.poi ?? "");
             }
           }
         }
       }
 
-      // Mine the resource
-      if (settings.preferMining) {
+      // ── Step 2: Mine the resource ──
+      if (settings.preferMining && !(obj as any)._skipMining) {
         yield "mine_resource";
         await ensureUndocked(ctx);
 
-        // Navigate to mining POI
+        // Navigate to the correct POI type for this resource
+        const isGasRes  = /gas|hydrogen|helium|methane|noble/.test(obj.target);
+        const isIceRes  = /ice|frost|cryo/.test(obj.target);
+        const allowedPoiTypes = isGasRes
+          ? ["gas_cloud"]
+          : isIceRes
+          ? ["ice_field"]
+          : ["asteroid_belt", "asteroid_field", "mining"];
+
         const { pois } = await getSystemInfo(ctx);
-        const miningPoi = pois.find(p =>
-          p.type === "asteroid_belt" || p.type === "asteroid_field" ||
-          p.type === "gas_cloud" || p.type === "ice_field" || p.type === "mining"
-        );
-        if (miningPoi && bot.poi !== miningPoi.id) {
+        const miningPoi = pois.find(p => allowedPoiTypes.includes(p.type));
+        if (!miningPoi) {
+          ctx.log("warn", `No ${allowedPoiTypes[0]} POI in current system — cannot mine ${obj.target}`);
+          return;
+        }
+        if (bot.poi !== miningPoi.id) {
           const tResp = await bot.exec("travel", { target_poi: miningPoi.id });
           if (tResp.error) { ctx.log("warn", `Travel to mining POI failed: ${tResp.error.message}`); return; }
           await bot.refreshStatus();
@@ -502,6 +559,10 @@ async function* executeObjective(
           } else if (msg.includes("cooldown")) {
             const wait = ((mineResp.error as Record<string, unknown>).wait_seconds as number) || 3;
             await sleep(wait * 1000);
+          } else if (msg.includes("module") || msg.includes("harvester") || msg.includes("equipment") || msg.includes("collector")) {
+            // Permanent equipment mismatch — mark obj so we never retry mining for it
+            ctx.log("error", `Mine error (wrong equipment): ${mineResp.error.message}`);
+            (obj as any)._skipMining = true;
           } else {
             ctx.log("warn", `Mine error: ${mineResp.error.message}`);
           }
@@ -521,9 +582,13 @@ async function* executeObjective(
             if (isCorrect) {
               obj.current += qty;
               ctx.log("info", `Mined ${qty}x ${r.resource_name || minedId} (${obj.current}/${obj.quantity})`);
-              if (obj.current >= obj.quantity) obj.complete = true;
+              if (obj.current >= obj.quantity) {
+                await deliverToDestination();
+              }
             } else {
               ctx.log("info", `Mined ${qty}x ${r.resource_name || minedId} — wrong resource, need ${obj.target}`);
+              // Wrong resource — this mine attempt is wasted. The outer loop's attempt counter
+              // will escalate to abandonment after MAX_OBJ_ATTEMPTS.
             }
           }
         }
@@ -990,7 +1055,7 @@ export const missionRunnerRoutine: Routine = async function* (ctx: RoutineContex
     // ── Execute objectives loop ──
     yield "execute_mission";
     let missionFailed = false;
-    const MAX_OBJ_ATTEMPTS = 15; // per-objective attempt limit
+    const MAX_OBJ_ATTEMPTS = 8; // per-objective attempt limit
     const objAttempts = new Map<number, number>(); // objective index → attempt count
 
     while (bot.state === "running") {

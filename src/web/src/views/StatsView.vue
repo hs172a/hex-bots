@@ -1,26 +1,26 @@
 <template>
-  <div class="flex-1 flex flex-col gap-4 p-4 overflow-hidden">
+  <div class="flex-1 flex flex-col gap-2 p-2 overflow-hidden">
     <!-- Stats Header -->
-    <div class="flex items-center gap-4 flex-wrap">
+    <div class="flex items-center gap-2 flex-wrap">
       <h3 class="text-sm font-semibold text-space-text-bright">Fleet Statistics</h3>
       <div class="inline-flex border border-space-border rounded-md overflow-hidden">
         <button 
           v-for="p in periods" :key="p.id"
           @click="statsPeriod = p.id"
-          class="px-4 py-1.5 text-xs font-medium border-r border-space-border last:border-r-0 transition-colors"
+          class="px-2 py-1.5 text-xs font-medium border-r border-space-border last:border-r-0 transition-colors"
           :class="statsPeriod === p.id ? 'bg-space-accent text-white' : 'bg-space-card text-space-text-dim hover:text-space-text hover:bg-space-row-hover'"
         >{{ p.label }}</button>
       </div>
       <button
         @click="botStore.fetchAllPoolsStats()"
         :disabled="botStore.allPoolsLoading"
-        class="ml-auto btn btn-secondary px-3 py-1 text-xs"
+        class="ml-auto btn btn-secondary px-2 py-1 text-xs"
         title="Refresh stats from all pools"
       >{{ botStore.allPoolsLoading ? '⏳ Loading…' : '🔄 Refresh' }}</button>
     </div>
 
     <!-- Fleet Totals -->
-    <div class="flex gap-4 px-4 py-2 bg-space-card border border-space-border rounded-lg">
+    <div class="flex gap-2 px-2 py-2 bg-space-card border border-space-border rounded-lg">
       <span class="text-xs font-semibold text-space-text-dim uppercase self-center mr-2">Totals</span>
       <div class="flex flex-col items-center min-w-20">
         <span class="text-xl font-bold text-space-text-bright">{{ fmt(fleetTotals.mined) }}</span>
@@ -46,21 +46,21 @@
 
     <!-- Mission Analytics -->
     <div class="bg-space-card border border-space-border rounded-lg">
-      <div class="px-3 py-2 border-b border-space-border flex items-center justify-between">
+      <div class="px-2 py-2 border-b border-space-border flex items-center justify-between">
         <span class="text-xs font-semibold text-space-text-dim uppercase">🎯 Mission Analytics</span>
-        <div class="flex items-center gap-3">
+        <div class="flex items-center gap-2">
           <span v-if="missionLastLoaded" class="text-[11px] text-space-text-dim">Updated {{ missionLastLoaded }}</span>
-          <button @click="loadMissionStats" :disabled="missionLoading" class="btn btn-secondary px-3 py-0.5 text-xs">
+          <button @click="loadMissionStats" :disabled="missionLoading" class="btn btn-secondary px-2 py-0.5 text-xs">
             {{ missionLoading ? '⏳' : '🔄 Load' }}
           </button>
         </div>
       </div>
-      <div v-if="!missionDataLoaded" class="px-4 py-3 text-xs text-space-text-dim italic">
+      <div v-if="!missionDataLoaded" class="px-2 py-3 text-xs text-space-text-dim italic">
         Click Load to fetch mission history from the game API.
       </div>
       <div v-else class="p-3">
         <!-- Fleet totals row -->
-        <div class="flex gap-4 flex-wrap mb-3">
+        <div class="flex gap-2 flex-wrap mb-3">
           <div class="flex flex-col items-center min-w-16">
             <span class="text-lg font-bold text-space-text-bright">{{ missionTotals.count }}</span>
             <span class="text-[11px] text-space-text-dim">Completed</span>
@@ -105,14 +105,14 @@
 
     <!-- Credits/hr row -->
     <div class="bg-space-card border border-space-border rounded-lg">
-      <div class="px-3 py-2 border-b border-space-border flex items-center justify-between">
+      <div class="px-2 py-2 border-b border-space-border flex items-center justify-between">
         <span class="text-xs font-semibold text-space-text-dim uppercase">💰 Credits / Hour (rolling 1h)</span>
         <span class="text-[11px] text-space-text-dim">Live — updates with each bot status</span>
       </div>
-      <div class="p-3 flex flex-wrap gap-3">
+      <div class="p-3 flex flex-wrap gap-2">
         <div v-if="botStore.bots.length === 0" class="text-xs text-space-text-dim italic">No bots running.</div>
-        <div v-for="b in botStore.bots" :key="b.username"
-          class="flex flex-col items-center min-w-[100px] bg-space-bg border border-space-border rounded-md px-3 py-2">
+        <div v-for="b in botStore.sortedBots" :key="b.username"
+          class="flex flex-col items-center min-w-[100px] bg-space-bg border border-space-border rounded-md px-2 py-2">
           <span class="text-xs text-space-text-dim truncate max-w-[90px]" :title="b.username">{{ b.username }}</span>
           <span class="text-lg font-bold" :class="creditsPerHrClass(b.username)">
             {{ fmtCreditsHr(botStore.botCreditsPerHour[b.username] ?? 0) }}
@@ -124,37 +124,37 @@
     </div>
 
     <!-- Per-Bot Breakdown + Faction Activity -->
-    <div class="flex gap-4 flex-1 min-h-0 overflow-hidden">
+    <div class="flex gap-2 flex-1 min-h-0 overflow-hidden">
       <!-- Per-Bot Table -->
       <div class="flex-1 bg-space-card border border-space-border rounded-lg flex flex-col overflow-hidden">
-        <div class="px-3 py-2 border-b border-space-border flex items-center gap-2">
+        <div class="px-2 py-2 border-b border-space-border flex items-center gap-2">
           <span class="text-xs font-semibold text-space-text-dim uppercase">Per-Bot Breakdown</span>
           </div>
         <div class="flex-1 overflow-auto scrollbar-dark">
           <table class="w-full text-sm">
             <thead class="sticky top-0 bg-space-card">
               <tr class="text-left text-xs text-space-text-dim uppercase border-b border-space-border">
-                <th class="py-1.5 px-3">Bot</th>
-                <th class="py-1.5 px-3 text-right">Mined</th>
-                <th class="py-1.5 px-3 text-right">Crafted</th>
-                <th class="py-1.5 px-3 text-right">Trades</th>
-                <th class="py-1.5 px-3 text-right">Profit</th>
-                <th class="py-1.5 px-3 text-right">Systems</th>
+                <th class="py-1.5 px-2">Bot</th>
+                <th class="py-1.5 px-2 text-right">Mined</th>
+                <th class="py-1.5 px-2 text-right">Crafted</th>
+                <th class="py-1.5 px-2 text-right">Trades</th>
+                <th class="py-1.5 px-2 text-right">Profit</th>
+                <th class="py-1.5 px-2 text-right">Systems</th>
               </tr>
             </thead>
             <tbody>
               <tr v-if="botRows.length === 0">
-                <td colspan="6" class="px-3 py-6 text-center text-space-text-dim text-xs">
+                <td colspan="6" class="px-2 py-6 text-center text-space-text-dim text-xs">
                   No stats recorded yet. Stats are saved every 60 seconds while bots are running.
                 </td>
               </tr>
               <tr v-for="r in botRows" :key="r.name" class="border-b border-[#21262d] hover:bg-space-row-hover">
-                <td class="px-3 py-1.5 font-medium text-space-text-bright">{{ r.name }}</td>
-                <td class="px-3 py-1.5 text-right">{{ fmt(r.mined) }}</td>
-                <td class="px-3 py-1.5 text-right">{{ fmt(r.crafted) }}</td>
-                <td class="px-3 py-1.5 text-right">{{ fmt(r.trades) }}</td>
-                <td class="px-3 py-1.5 text-right">{{ fmt(r.profit) }}cr</td>
-                <td class="px-3 py-1.5 text-right">{{ fmt(r.systems) }}</td>
+                <td class="px-2 py-1.5 font-medium text-space-text-bright">{{ r.name }}</td>
+                <td class="px-2 py-1.5 text-right">{{ fmt(r.mined) }}</td>
+                <td class="px-2 py-1.5 text-right">{{ fmt(r.crafted) }}</td>
+                <td class="px-2 py-1.5 text-right">{{ fmt(r.trades) }}</td>
+                <td class="px-2 py-1.5 text-right">{{ fmt(r.profit) }}cr</td>
+                <td class="px-2 py-1.5 text-right">{{ fmt(r.systems) }}</td>
               </tr>
             </tbody>
           </table>
@@ -163,7 +163,7 @@
 
       <!-- Faction Activity Log -->
       <div class="flex-1 bg-space-card border border-space-border rounded-lg flex flex-col overflow-hidden">
-        <div class="px-3 py-2 border-b border-space-border flex items-center justify-between">
+        <div class="px-2 py-2 border-b border-space-border flex items-center justify-between">
           <span class="text-xs font-semibold text-space-text-dim uppercase">Faction Activity</span>
           <div class="flex gap-1">
             <button 
@@ -189,14 +189,14 @@
 
     <!-- Skills Breakdown -->
     <div class="bg-space-card border border-space-border rounded-lg">
-      <div class="px-3 py-2 border-b border-space-border flex items-center justify-between">
+      <div class="px-2 py-2 border-b border-space-border flex items-center justify-between">
         <span class="text-xs font-semibold text-space-text-dim uppercase">🎓 Skill Levels</span>
         <span class="text-[11px] text-space-text-dim">From last status update</span>
       </div>
-      <div v-if="botsWithSkills.length === 0" class="px-4 py-3 text-xs text-space-text-dim italic">
+      <div v-if="botsWithSkills.length === 0" class="px-2 py-3 text-xs text-space-text-dim italic">
         No skill data yet — skills load on bot status update.
       </div>
-      <div v-else class="p-3 flex flex-wrap gap-4">
+      <div v-else class="p-3 flex flex-wrap gap-2">
         <div v-for="b in botsWithSkills" :key="b.username" class="flex-1 min-w-[200px]">
           <div class="text-xs font-semibold text-space-text-bright mb-1.5">{{ b.username }}</div>
           <div class="flex flex-wrap gap-1">

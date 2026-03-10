@@ -61,9 +61,9 @@ interface GatherGoal {
   materials: GatherMaterial[];
   /**
    * 'build' (default) — deposit to faction/personal storage at target station.
-   * 'craft' — deliver materials to crafter_bot's station so they can craft.
+   * 'craft' / 'crafter' — deliver materials to crafter_bot's station so they can craft.
    */
-  goal_type?: 'build' | 'craft';
+  goal_type?: 'build' | 'craft' | 'crafter';
   /** Give materials as a gift to this character (send_gift) instead of depositing to storage. */
   gift_target?: string;
   /** For craft goals: bot username that will perform the crafting. */
@@ -106,7 +106,7 @@ interface DeliveryTask {
   target_system: string;
   gift_target?: string;
   /** Inherited from GatherGoal — controls which storage type receives the deposit. */
-  goal_type?: 'build' | 'craft';
+  goal_type?: 'build' | 'craft' | 'crafter';
   item_id: string;
   item_name: string;
   /** How many units this courier is responsible for. */
@@ -671,8 +671,8 @@ async function depositAllToTargets(
         } else ctx.log("error", `Gift failed for ${task.item_name}: ${r.error.message}`);
       } else {
         // 'build' goals (default) → faction storage so any bot can access the materials.
-        // 'craft' goals → personal station storage (crafter withdraws from both sources).
-        const useFaction = (task.goal_type ?? 'build') !== 'craft';
+        // 'craft'/'crafter' goals → personal station storage (crafter withdraws from both sources).
+        const useFaction = task.goal_type !== 'craft' && task.goal_type !== 'crafter';
         let depositOk = false;
         let depositErrMsg = "";
         if (useFaction) {
@@ -706,6 +706,263 @@ async function depositAllToTargets(
   return totalDeposited;
 }
 
+/**
+ * Phase 0 (highest priority): If this bot is assigned as `crafter_bot` on any goal,
+ * attempt to craft those items immediately — before doing any courier work.
+ *
+ * Goals are sorted so fully-funded goals (all materials already in faction storage)
+ * are processed first. This ensures VoltBot2 (or similar) doesn't spend a courier
+ * pass fetching materials for OTHER bots' goals while its own craft goals are ready.
+ *
+ * Returns true when at least one item was crafted.
+ */
+async function craftOwnGoals(
+  ctx: RoutineContext,
+  FUEL_THR: number,
+  HULL_THR: number,
+): Promise<boolean> {
+  const { bot } = ctx;
+
+  const allGoals = getAllGoalsAcrossFleet();
+  const ownCraftGoals = allGoals.filter(({ goal }) =>
+    goal.crafter_bot === bot.username &&
+    (goal.goal_type === "craft" || goal.goal_type === "crafter") &&
+    (goal.materials?.length ?? 0) > 0,
+  );
+  if (ownCraftGoals.length === 0) return false;
+
+  // Load recipes from catalog cache (fetch once if empty)
+  type RawRecipe = Record<string, unknown>;
+  let rawRecipes: RawRecipe[] = Object.values(ctx.catalogStore.getAll().recipes) as RawRecipe[];
+  if (rawRecipes.length === 0) {
+    try {
+      await ctx.catalogStore.fetchAll(ctx.api);
+      rawRecipes = Object.values(ctx.catalogStore.getAll().recipes) as RawRecipe[];
+    } catch { /* proceed with empty */ }
+  }
+  if (rawRecipes.length === 0) return false;
+
+  // Use faction storage DB cache to determine which goals have all materials ready.
+  // Sort: fully-funded goals first so we craft those before doing any courier work.
+  const goalsRanked = ownCraftGoals
+    .map(({ goal }) => {
+      const facDbItems = ctx.mapStore.getFactionStorageItemsForPoi(goal.target_poi);
+      const ready = goal.materials.every(mat => {
+        const entry = facDbItems.find((i: any) => i.item_id === mat.item_id);
+        return entry && (entry.quantity ?? 0) >= mat.quantity_needed;
+      });
+      return { goal, ready };
+    })
+    .sort((a, b) => Number(b.ready) - Number(a.ready));
+
+  let didCraft = false;
+
+  for (const { goal, ready } of goalsRanked) {
+    if (bot.state !== "running") break;
+    if (!ready) {
+      ctx.log("craft", `[CraftOwn] Materials not yet ready for '${goal.target_name}' — courier pass will handle`);
+      continue;
+    }
+
+    // Find the recipe — prefer the explicitly configured recipe_id
+    const recipe = rawRecipes.find(r =>
+      (goal.recipe_id && r.recipe_id === goal.recipe_id) ||
+      r.output_item_id === goal.target_id ||
+      r.recipe_id === goal.target_id ||
+      (goal.target_name && (r.name === goal.target_name || r.output_name === goal.target_name)),
+    ) as (RawRecipe & {
+      recipe_id: string;
+      name?: string;
+      output_item_id?: string;
+      output_name?: string;
+      output_quantity?: number;
+      components?: Array<{ item_id: string; name?: string; quantity: number }>;
+      required_skill?: { id?: string; skill_id?: string; name?: string; skill_name?: string; level: number };
+    }) | undefined;
+
+    if (!recipe?.recipe_id) {
+      ctx.log("warn", `[CraftOwn] No recipe found for '${goal.target_name}' — skipping`);
+      continue;
+    }
+    if (!recipe.components?.length) continue;
+
+    // Skill check
+    if (recipe.required_skill) {
+      const skillId = recipe.required_skill.skill_id ?? recipe.required_skill.id ?? "";
+      const skillName = recipe.required_skill.skill_name ?? recipe.required_skill.name ?? skillId;
+      const required = recipe.required_skill.level ?? 0;
+      const have = bot.getSkillLevel(skillId);
+      if (have < required) {
+        ctx.log("warn", `[CraftOwn] Skill too low for '${recipe.name}': ${skillName} Lv${required} required (have Lv${have}) — skipping`);
+        continue;
+      }
+    }
+
+    // Navigate to target station
+    const station = resolveTargetStation(goal, bot.username, ctx);
+    if (!station) {
+      ctx.log("warn", `[CraftOwn] Cannot resolve station for '${goal.target_name}' — skipping`);
+      continue;
+    }
+
+    const ok = await goToStation(ctx, station.system, station.poi, goal.target_name, FUEL_THR, HULL_THR);
+    if (!ok) continue;
+
+    if (!bot.docked) {
+      const dResp = await bot.exec("dock");
+      if (!dResp.error) bot.docked = true;
+    }
+    if (!bot.docked) continue;
+
+    await bot.refreshFactionStorage();
+
+    // Verify materials are actually present in faction storage now
+    const components = recipe.components;
+    const allAvail = components.every(c => {
+      const entry = bot.factionStorage.find((i: any) => (i.itemId || i.item_id) === c.item_id);
+      return entry && (entry.quantity ?? 0) >= c.quantity;
+    });
+    if (!allAvail) {
+      ctx.log("craft", `[CraftOwn] Materials not confirmed in storage for '${recipe.name}' — deferring`);
+      continue;
+    }
+
+    ctx.log("craft", `[CraftOwn] All materials ready — crafting '${recipe.name}'`);
+
+    // Withdraw components from faction storage into cargo
+    for (const comp of components) {
+      const inCargo = countInCargo(bot, comp.item_id);
+      const need = comp.quantity - inCargo;
+      if (need <= 0) continue;
+      const wResp = await bot.exec("faction_withdraw_items", { item_id: comp.item_id, quantity: need });
+      if (wResp.error) {
+        ctx.log("warn", `[CraftOwn] Withdraw ${need}x ${comp.name ?? comp.item_id} failed: ${wResp.error.message}`);
+      }
+    }
+
+    const craftResp = await bot.exec("craft", { recipe_id: recipe.recipe_id, count: 1 });
+    if (craftResp.error) {
+      ctx.log("error", `[CraftOwn] Craft '${recipe.name}' failed: ${craftResp.error.message}`);
+    } else {
+      ctx.log("craft", `[CraftOwn] Crafted 1x ${recipe.name}`);
+      didCraft = true;
+      // Deposit everything back to faction storage
+      await bot.refreshCargo();
+      for (const item of [...bot.inventory]) {
+        if (item.quantity <= 0) continue;
+        const lower = (item.itemId ?? "").toLowerCase();
+        if (lower.includes("energy_cell")) continue;
+        await bot.exec("faction_deposit_items", { item_id: item.itemId, quantity: item.quantity });
+      }
+    }
+  }
+
+  return didCraft;
+}
+
+/**
+ * Phase 0.5: Execute own build goals whose materials are all available at the target station.
+ * Navigates to the target station, flushes personal storage → faction storage via
+ * collectFromStorage(), then issues `facility { action: 'faction_build' }`.
+ *
+ * @param builtGoalIds — goal IDs already built this run (prevents re-execution on same pass)
+ * Returns true when at least one facility was built.
+ */
+async function executeBuildGoals(
+  ctx: RoutineContext,
+  FUEL_THR: number,
+  HULL_THR: number,
+  builtGoalIds: Set<string>,
+): Promise<boolean> {
+  const { bot } = ctx;
+
+  const allGoals = getAllGoalsAcrossFleet();
+  const ownBuildGoals = allGoals.filter(({ goal, owner_bot }) =>
+    owner_bot === bot.username &&
+    (!goal.goal_type || goal.goal_type === 'build') &&
+    goal.target_id &&
+    (goal.materials?.length ?? 0) > 0 &&
+    !builtGoalIds.has(goal.id),
+  );
+
+  if (ownBuildGoals.length === 0) return false;
+
+  let didBuild = false;
+
+  for (const { goal } of ownBuildGoals) {
+    if (bot.state !== "running") break;
+
+    const station = resolveTargetStation(goal, bot.username, ctx);
+    if (!station) {
+      ctx.log("warn", `[Build] Cannot resolve station for '${goal.target_name}' — skipping`);
+      continue;
+    }
+
+    // Pre-check via faction storage DB cache
+    const facDbItems = ctx.mapStore.getFactionStorageItemsForPoi(station.poi);
+    const allInFacDb = goal.materials.every(mat => {
+      const entry = facDbItems.find((i: any) => i.item_id === mat.item_id);
+      return entry && (entry.quantity ?? 0) >= mat.quantity_needed;
+    });
+
+    // Also accept if bot is already at target station and personal storage has the items
+    const botAtTarget = bot.poi === station.poi;
+    const allInPersonal = botAtTarget && goal.materials.every(
+      mat => countInStorage(bot, mat.item_id) >= mat.quantity_needed,
+    );
+
+    if (!allInFacDb && !allInPersonal) {
+      ctx.log("system", `[Build] Materials not yet confirmed for '${goal.target_name}' — courier pass will handle delivery`);
+      continue;
+    }
+
+    ctx.log("system", `[Build] '${goal.target_name}': materials ready — navigating to build`);
+
+    const ok = await goToStation(ctx, station.system, station.poi, goal.target_name, FUEL_THR, HULL_THR);
+    if (!ok) {
+      ctx.log("warn", `[Build] Cannot reach ${goal.target_name} — skipping`);
+      continue;
+    }
+
+    if (!bot.docked) {
+      const dResp = await bot.exec("dock");
+      if (!dResp.error) bot.docked = true;
+    }
+    if (!bot.docked) continue;
+
+    // Move any items from personal station storage → faction storage
+    await collectFromStorage(ctx);
+
+    // Live-verify faction storage now has everything
+    await bot.refreshFactionStorage();
+    const allVerified = goal.materials.every(mat => {
+      const entry = bot.factionStorage.find((i: any) => (i.itemId || i.item_id) === mat.item_id);
+      return entry && (entry.quantity ?? 0) >= mat.quantity_needed;
+    });
+
+    if (!allVerified) {
+      ctx.log("warn", `[Build] Materials not confirmed in faction storage for '${goal.target_name}' — deferring`);
+      builtGoalIds.add(goal.id); // don't retry this pass
+      continue;
+    }
+
+    ctx.log("system", `[Build] Issuing faction_build for '${goal.target_name}' (type: ${goal.target_id})`);
+    const buildResp = await bot.exec("facility", { action: "faction_build", facility_type: goal.target_id });
+    if (buildResp.error) {
+      ctx.log("error", `[Build] Build '${goal.target_name}' failed: ${buildResp.error.message}`);
+    } else {
+      ctx.log("system", `[Build] '${goal.target_name}' built successfully!`);
+      didBuild = true;
+      const r = buildResp.result as any;
+      const built = r?.facility ?? r?.faction_facility ?? r;
+      if (built?.facility_id) ctx.mapStore.updateFactionBuildings([built]);
+    }
+    builtGoalIds.add(goal.id); // mark whether success or failure — don't retry this run
+  }
+
+  return didBuild;
+}
+
 export const gathererRoutine: Routine = async function* (ctx: RoutineContext) {
   const { bot } = ctx;
   ctx.log("system", "=== Gatherer (courier) started ===");
@@ -730,10 +987,26 @@ export const gathererRoutine: Routine = async function* (ctx: RoutineContext) {
   let passCount = 0;
   const MAX_PASSES = 20;
   let noProgressPasses = 0;
+  // Track goals built this run to prevent re-execution within the same invocation
+  const builtGoalIds = new Set<string>();
 
   while (bot.state === "running" && passCount < MAX_PASSES) {
     passCount++;
     yield `scan_pass_${passCount}`;
+
+    // ── PHASE 0: Craft own assigned goals with ready materials (highest priority) ──
+    yield "craft_own_goals";
+    await craftOwnGoals(ctx, FUEL_THR, HULL_THR);
+
+    // ── PHASE 0.5: Execute own build goals whose materials are all at the target station ──
+    yield "execute_build_goals";
+    const didBuild = await executeBuildGoals(ctx, FUEL_THR, HULL_THR, builtGoalIds);
+
+    // Re-dock and tidy up after any crafting/building before the courier scan
+    if (bot.docked) {
+      await tryRefuel(ctx);
+      await repairShip(ctx);
+    }
 
     // ── PHASE 2: Build multi-goal delivery plan ────────────────────────
 
@@ -744,6 +1017,11 @@ export const gathererRoutine: Routine = async function* (ctx: RoutineContext) {
       if (allGoals.length === 0) {
         ctx.log("system", "No goals configured across fleet — stopping gatherer.");
         break;
+      }
+      if (didBuild) {
+        // Just executed a build — reset counter and re-scan on next pass
+        noProgressPasses = 0;
+        continue;
       }
       noProgressPasses++;
       if (noProgressPasses >= 3) {
@@ -810,7 +1088,7 @@ export const gathererRoutine: Routine = async function* (ctx: RoutineContext) {
             task.source = 'mine';
             task.minePoi = specific;
           } else {
-            ctx.log("error", `${task.item_name}: no market or recorded mine source — may need salvager or crafter routine`);
+            ctx.log("error", `${task.item_name}: no market or recorded mine source...`);
             task.skipped = true;
           }
         }
@@ -822,7 +1100,7 @@ export const gathererRoutine: Routine = async function* (ctx: RoutineContext) {
         let src = task.buySource ?? findCheapestBuySource(task.item_id, ctx.mapStore) ?? undefined;
 
         if (!src) {
-          ctx.log("warn", `No market source for ${task.item_name} — scanning ${15} nearby systems...`);
+          ctx.log("warn", `No market source for ${task.item_name} — scanning ${15}...`);
           const sysIds = ctx.mapStore.getAllSystemIds().slice(0, 15);
           for (const sysId of sysIds) {
             if (bot.state !== "running") break;
@@ -907,7 +1185,7 @@ export const gathererRoutine: Routine = async function* (ctx: RoutineContext) {
           task.skipped = true;
         } else if (mined === -2) {
           // POI requires ice/gas harvester module that this bot does not have
-          ctx.log("error", `${task.item_name}: mine POI requires a specialized harvester — skipping task (assign to ice_harvester/gas_harvester bot)`);
+          ctx.log("error", `${task.item_name}: mine POI requires a specialized harvester`);
           task.skipped = true;
         } else if (mined === 0) {
           ctx.log("warn", `Mine depleted for ${task.item_name} — reverting to search`);
@@ -977,11 +1255,31 @@ export function scoreGatherer(ctx: RoutineContext): number {
   const goals = getAllGoalsAcrossFleet();
   if (goals.length === 0) return 0;
 
+  // Highest priority: own build goals with all materials confirmed in faction storage DB.
+  // This means the build command can execute immediately — no courier work needed.
+  for (const { goal, owner_bot } of goals) {
+    if (owner_bot !== ctx.bot.username) continue;
+    if (goal.goal_type && goal.goal_type !== 'build') continue;
+    if (!goal.target_id || !goal.materials?.length || !goal.target_poi) continue;
+    const facDbItems = ctx.mapStore.getFactionStorageItemsForPoi(goal.target_poi);
+    const allReady = goal.materials.every(mat => {
+      const entry = facDbItems.find((i: any) => i.item_id === mat.item_id);
+      return entry && (entry.quantity ?? 0) >= mat.quantity_needed;
+    });
+    if (allReady) return 90; // Ready to build — beat trader/miner, run immediately
+  }
+
   let pendingMaterials = 0;
-  for (const { goal } of goals) {
+  for (const { goal, owner_bot } of goals) {
     if (!goal.materials?.length) continue;
     // Goals where this bot is the crafter are handled by the crafter routine, not gatherer
     if (goal.crafter_bot === ctx.bot.username) continue;
+    // Own build goals with materials configured: count them so gatherer gets selected
+    // and can verify/transfer materials then execute the build
+    if (owner_bot === ctx.bot.username && (!goal.goal_type || goal.goal_type === 'build') && goal.target_id) {
+      pendingMaterials += goal.materials.length;
+      continue;
+    }
     pendingMaterials += goal.materials.length;
   }
 

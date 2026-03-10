@@ -67,22 +67,22 @@
           <thead class="sticky top-0 bg-space-card border-b border-space-border bg-transparent">
             <tr class="text-left text-xs text-space-text-dim uppercase tracking-wider">
               <th v-if="botStore.vmList.length > 0" class="py-2 px-0 font-semibold">VM</th>
-              <th class="py-2 px-0 font-semibold">Name</th>
+              <th class="py-2 px-0 font-semibold cursor-pointer select-none hover:text-space-text" @click="setDashSort('name')">Name <span class="opacity-60">{{ dashSortIndicator('name') }}</span></th>
               <th class="py-2 px-0 font-semibold">Ship</th>
-              <th class="py-2 px-0 font-semibold">State</th>
-              <th class="py-2 px-0 font-semibold">Credits</th>
-              <th class="py-2 px-0 font-semibold" title="Rolling 1-hour earnings rate">₡/hr</th>
-              <th class="py-2 px-0 font-semibold">Fuel</th>
-              <th class="py-2 px-0 font-semibold">Hull</th>
-              <th class="py-2 px-0 font-semibold">Shield</th>
-              <th class="py-2 px-0 font-semibold">Cargo</th>
-              <th class="py-2 px-0 font-semibold min-w-24">Location</th>
+              <th class="py-2 px-0 font-semibold cursor-pointer select-none hover:text-space-text" @click="setDashSort('state')">State <span class="opacity-60">{{ dashSortIndicator('state') }}</span></th>
+              <th class="py-2 px-0 font-semibold cursor-pointer select-none hover:text-space-text" @click="setDashSort('credits')">Credits <span class="opacity-60">{{ dashSortIndicator('credits') }}</span></th>
+              <th class="py-2 px-0 font-semibold cursor-pointer select-none hover:text-space-text" title="Rolling 1-hour earnings rate" @click="setDashSort('cph')">₡/hr <span class="opacity-60">{{ dashSortIndicator('cph') }}</span></th>
+              <th class="py-2 px-0 font-semibold cursor-pointer select-none hover:text-space-text" @click="setDashSort('fuel')">Fuel <span class="opacity-60">{{ dashSortIndicator('fuel') }}</span></th>
+              <th class="py-2 px-0 font-semibold cursor-pointer select-none hover:text-space-text" @click="setDashSort('hull')">Hull <span class="opacity-60">{{ dashSortIndicator('hull') }}</span></th>
+              <th class="py-2 px-0 font-semibold cursor-pointer select-none hover:text-space-text" @click="setDashSort('shield')">Shield <span class="opacity-60">{{ dashSortIndicator('shield') }}</span></th>
+              <th class="py-2 px-0 font-semibold cursor-pointer select-none hover:text-space-text" @click="setDashSort('cargo')">Cargo <span class="opacity-60">{{ dashSortIndicator('cargo') }}</span></th>
+              <th class="py-2 px-0 font-semibold cursor-pointer select-none hover:text-space-text min-w-24" @click="setDashSort('location')">Location <span class="opacity-60">{{ dashSortIndicator('location') }}</span></th>
               <th class="py-2 px-0 font-semibold">Actions</th>
             </tr>
           </thead>
           <tbody>
             <tr
-              v-for="bot in botStore.bots"
+              v-for="bot in sortedDashBots"
               :key="bot.username"
               class="border-b border-space-border hover:bg-space-row-hover transition-colors cursor-pointer"
               @click="selectBot(bot.username)"
@@ -203,7 +203,7 @@
             <span class="text-xs font-semibold text-space-text-dim uppercase tracking-wider">Activity Log</span>
             <select v-model="activityBotFilter" class="input text-[11px] py-0 h-5 pl-1 max-w-[100px]">
               <option value="">All bots</option>
-              <option v-for="b in botStore.bots" :key="b.username" :value="b.username">{{ b.username }}</option>
+              <option v-for="b in botStore.sortedBots" :key="b.username" :value="b.username">{{ b.username }}</option>
             </select>
           </div>
           <div ref="activityLogRef" class="flex-1 overflow-auto mt-1 pr-0.5 font-mono scrollbar-dark space-y-px">
@@ -332,7 +332,7 @@
             <span class="text-xs font-semibold text-space-text-dim uppercase tracking-wider flex-1">System Messages</span>
             <select v-model="systemBotFilter" class="input text-[11px] py-0 h-5 pl-1 max-w-[90px]">
               <option value="">All bots</option>
-              <option v-for="b in botStore.bots" :key="b.username" :value="b.username">{{ b.username }}</option>
+              <option v-for="b in botStore.sortedBots" :key="b.username" :value="b.username">{{ b.username }}</option>
             </select>
             <select v-model="systemCatFilter" class="input text-[11px] py-0 h-5 pl-1 max-w-[70px]">
               <option value="">All</option>
@@ -366,7 +366,7 @@
     <div class="flex gap-2 p-4 bg-space-card border-t border-space-border">
       <select v-model="selectedChatBot" class="input text-xs px-2 py-1">
         <option value="">Select Bot</option>
-        <option v-for="bot in botStore.bots" :key="bot.username" :value="bot.username">
+        <option v-for="bot in botStore.sortedBots" :key="bot.username" :value="bot.username">
           {{ bot.username }}
         </option>
       </select>
@@ -394,11 +394,21 @@
         <div class="space-y-3">
           <div>
             <label class="block text-xs text-space-text-dim mb-1">Username</label>
-            <input v-model="newBot.username" type="text" class="input w-full" />
+            <input v-model="newBot.username" type="text" class="input w-full" placeholder="Character name" />
           </div>
           <div>
             <label class="block text-xs text-space-text-dim mb-1">Password</label>
             <input v-model="newBot.password" type="password" class="input w-full" />
+          </div>
+          <div v-if="botStore.vmList.length > 1">
+            <label class="block text-xs text-space-text-dim mb-1">Pool / VM</label>
+            <select v-model="newBot.vm" class="input w-full">
+              <option value="">Local (no VM routing)</option>
+              <option v-for="vm in botStore.vmList" :key="vm" :value="vm">
+                {{ vm }}
+                <template v-if="botStore.vmStatuses[vm]"> — {{ botStore.vmStatuses[vm] }}</template>
+              </option>
+            </select>
           </div>
         </div>
         <div class="flex gap-2 mt-6">
@@ -469,7 +479,7 @@ const emit = defineEmits<{
 const botStore = useBotStore();
 const showAddBot = ref(false);
 const showStartBot = ref(false);
-const newBot = ref({ username: '', password: '' });
+const newBot = ref({ username: '', password: '', vm: '' });
 const startBotData = ref({ username: '', routine: 'miner' });
 const selectedChatBot = ref('');
 const chatChannel = ref('system');
@@ -478,6 +488,36 @@ const chatMessage = ref('');
 const availableRoutines = computed(() => 
   botStore.routines.map(r => ({ id: r.id, name: r.name, description: '' }))
 );
+
+const dashSortCol = ref<string>('name');
+const dashSortDir = ref<'asc' | 'desc'>('asc');
+
+function setDashSort(col: string) {
+  if (dashSortCol.value === col) dashSortDir.value = dashSortDir.value === 'asc' ? 'desc' : 'asc';
+  else { dashSortCol.value = col; dashSortDir.value = col === 'credits' || col === 'cph' ? 'desc' : 'asc'; }
+}
+function dashSortIndicator(col: string): string {
+  if (dashSortCol.value !== col) return '';
+  return dashSortDir.value === 'asc' ? '▲' : '▼';
+}
+
+const sortedDashBots = computed(() => {
+  const dir = dashSortDir.value === 'asc' ? 1 : -1;
+  return [...botStore.sortedBots].sort((a, b) => {
+    switch (dashSortCol.value) {
+      case 'name': return dir * a.username.localeCompare(b.username);
+      case 'state': return dir * (a.state || '').localeCompare(b.state || '');
+      case 'credits': return dir * ((a.credits || 0) - (b.credits || 0));
+      case 'cph': return dir * ((botStore.botCreditsPerHour[a.username] || 0) - (botStore.botCreditsPerHour[b.username] || 0));
+      case 'fuel': return dir * (((a.fuel / (a.maxFuel || 1)) - (b.fuel / (b.maxFuel || 1))));
+      case 'hull': return dir * (((a.hull / (a.maxHull || 1)) - (b.hull / (b.maxHull || 1))));
+      case 'shield': return dir * (((a.shield / (a.maxShield || 1)) - (b.shield / (b.maxShield || 1))));
+      case 'cargo': return dir * (((a.cargo / (a.cargoMax || 1)) - (b.cargo / (b.cargoMax || 1))));
+      case 'location': return dir * ((a.location || '').localeCompare(b.location || ''));
+      default: return 0;
+    }
+  });
+});
 
 // s2: Game server stats — pushed from server via WebSocket every 10s (one game tick)
 const gameStats = botStore.gameStats;
@@ -567,11 +607,12 @@ async function stopBot(username: string) {
 
 async function addBot() {
   if (!newBot.value.username || !newBot.value.password) return;
+  const vm = newBot.value.vm || undefined;
   
   try {
-    botStore.addBot(newBot.value.username, newBot.value.password);
+    botStore.addBot(newBot.value.username, newBot.value.password, vm);
     showAddBot.value = false;
-    newBot.value = { username: '', password: '' };
+    newBot.value = { username: '', password: '', vm: '' };
   } catch (err) {
     console.error('Failed to add bot:', err);
   }

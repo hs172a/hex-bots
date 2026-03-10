@@ -531,6 +531,30 @@ export class WebServer {
         if (url.pathname === "/api/faction-buildings") {
           return Response.json(mapStore.getAllFactionBuildings());
         }
+        if (url.pathname === "/api/deposits") {
+          const systemId = url.searchParams.get("system");
+          const resourceId = url.searchParams.get("resource");
+          if (systemId) return Response.json(mapStore.getDepositsInSystem(systemId));
+          if (resourceId) {
+            const best = mapStore.findBestDeposit(resourceId);
+            return Response.json(best ? [best] : []);
+          }
+          return Response.json(mapStore.getAllDeposits());
+        }
+        if (url.pathname === "/api/deposits/summary") {
+          return Response.json(mapStore.getDepositsSummary());
+        }
+        if (url.pathname === "/api/deposits/systems") {
+          return Response.json(mapStore.getSystemsWithDeposits());
+        }
+
+        if (url.pathname === "/api/wormholes") {
+          const systemId = url.searchParams.get("system");
+          const activeOnly = url.searchParams.get("active") !== "0";
+          if (systemId) return Response.json(mapStore.getWormholesBySystem(systemId));
+          return Response.json(activeOnly ? mapStore.getActiveWormholes() : mapStore.getAllWormholes());
+        }
+
         if (url.pathname === "/api/needs-matrix") {
           const source = url.searchParams.get("source") as 'mine' | 'buy' | 'craft' | null;
           const deficitsOnly = url.searchParams.get("deficits") === "1";

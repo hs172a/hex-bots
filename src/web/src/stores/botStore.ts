@@ -67,6 +67,7 @@ export interface BotStatus {
   factionStorage?: CargoItem[];
   factionId?: string;
   tradingRestrictedUntil?: string | null;
+  empireRep?: Record<string, unknown> | null;
   skills?: SkillEntry[];
   playerStats?: PlayerStats;
   marketData?: any[];
@@ -106,6 +107,59 @@ export const useBotStore = defineStore('bots', () => {
   const allPoolsLoading = ref(false);
   // This VM's own pool name, returned by /api/stats/all-pools since v1.8.1
   const myPoolName = ref('');
+
+  // ── Resource deposits DB (surveyed mining/gas/ice POIs) ──
+  interface DepositRecord {
+    poi_id: string; system_id: string; system_name: string; poi_name: string; poi_type: string;
+    resource_id: string; resource_name: string; category: string;
+    remaining: number; quality: number; depletion_pct: number;
+    last_seen_at: string; last_seen_by: string;
+  }
+  interface DepositSummary {
+    system_id: string; system_name: string;
+    poi_id: string; poi_name: string; poi_type: string; category: string;
+    resource_count: number; total_remaining: number; avg_depletion: number; last_seen_at: string;
+  }
+  const deposits = ref<DepositRecord[]>([]);
+  const depositSummary = ref<DepositSummary[]>([]);
+  const depositsLoading = ref(false);
+
+  async function fetchDeposits() {
+    if (depositsLoading.value) return;
+    depositsLoading.value = true;
+    try {
+      const [r1, r2] = await Promise.all([
+        fetch('/api/deposits'),
+        fetch('/api/deposits/summary'),
+      ]);
+      if (r1.ok) deposits.value = await r1.json();
+      if (r2.ok) depositSummary.value = await r2.json();
+    } catch { /* ignore */ } finally {
+      depositsLoading.value = false;
+    }
+  }
+
+  // ── Wormholes DB (active/collapsed spatial rifts) ──
+  interface WormholeEntry {
+    entrance_poi_id: string; entrance_system_id: string; entrance_system_name: string;
+    exit_system_id: string; exit_system_name: string; exit_poi_id: string;
+    status: string; discovered_at: string; discovered_by: string; last_seen_at: string;
+    expires_estimated_at: string | null; collapse_seen_at: string | null;
+  }
+  const wormholes = ref<WormholeEntry[]>([]);
+  const wormholesLoading = ref(false);
+
+  async function fetchWormholes(activeOnly = false) {
+    if (wormholesLoading.value) return;
+    wormholesLoading.value = true;
+    try {
+      const url = activeOnly ? '/api/wormholes?active=1' : '/api/wormholes?active=0';
+      const r = await fetch(url);
+      if (r.ok) wormholes.value = await r.json();
+    } catch { /* ignore */ } finally {
+      wormholesLoading.value = false;
+    }
+  }
 
   // ── Faction storage DB (global across all stations) ──
   const factionStorageItems = ref<Array<{ poi_id: string; system_id: string; system_name: string; poi_name: string; item_id: string; item_name: string; quantity: number; updated_at: string }>>([]); 
@@ -272,6 +326,7 @@ export const useBotStore = defineStore('bots', () => {
 
   // ── Getters ──
   const activeBots = computed(() => bots.value.filter(b => b.state === 'running'));
+  const sortedBots = computed(() => [...bots.value].sort((a, b) => a.username.localeCompare(b.username)));
   const currentBot = computed(() =>
     bots.value.find(b => b.username === selectedBot.value)
   );
@@ -467,12 +522,12 @@ export const useBotStore = defineStore('bots', () => {
     wsSend({ type: 'remove', bot: username, ...(vm ? { vm } : {}) });
   }
 
-  function addBot(username: string, password: string) {
-    wsSend({ type: 'add', username, password });
+  function addBot(username: string, password: string, vm?: string) {
+    wsSend({ type: 'add', username, password, ...(vm ? { vm } : {}) });
   }
 
-  function registerBot(code: string, username: string, empire: string) {
-    wsSend({ type: 'register', registration_code: code, username, empire });
+  function registerBot(code: string, username: string, empire: string, vm?: string) {
+    wsSend({ type: 'register', registration_code: code, username, empire, ...(vm ? { vm } : {}) });
   }
 
   function saveSettings(routine: string, s: Record<string, any>, vm?: string) {
@@ -537,6 +592,7 @@ export const useBotStore = defineStore('bots', () => {
     botLogBuffers,
     // Getters
     activeBots,
+    sortedBots,
     currentBot,
     // Actions
     handleWebSocketMessage,
@@ -566,6 +622,15 @@ export const useBotStore = defineStore('bots', () => {
     catalogName,
     // Game stats (pushed from server every tick)
     gameStats,
+    // Resource deposits DB
+    deposits,
+    depositSummary,
+    depositsLoading,
+    fetchDeposits,
+    // Wormholes DB
+    wormholes,
+    wormholesLoading,
+    fetchWormholes,
     // Faction storage DB
     factionStorageItems,
     factionBuildings,

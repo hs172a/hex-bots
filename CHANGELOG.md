@@ -5,6 +5,69 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [2.5.2] - 2026-03-10
+
+### Added
+
+#### Gatherer: Phase 0.5 — `executeBuildGoals` (`src/routines/gatherer.ts`)
+- New `executeBuildGoals()` phase runs **before** the courier delivery scan each pass.
+- Finds all `goal_type='build'` goals owned by the running bot where all materials are present (faction storage DB cache OR personal storage at the target station).
+- Navigates to the target station, flushes personal storage → faction storage via `collectFromStorage()`, live-verifies faction storage, then issues `facility { action: 'faction_build', facility_type: goal.target_id }`.
+- `builtGoalIds` set prevents re-attempting the same build within one invocation.
+- When a build fires, `noProgressPasses` resets so the outer loop re-scans goals immediately instead of counting it as a no-progress pass.
+- Fixes: bot with all build materials in storage was saying "No actionable tasks" and exiting without executing the build.
+
+#### Gatherer: updated `scoreGatherer()` scoring (`src/routines/gatherer.ts`)
+- Returns **90** when own build goals have all materials confirmed in faction storage DB → SmartSelector selects gatherer immediately before miner/trader.
+- Own `goal_type='build'` goals with materials configured now count toward `pendingMaterials` so the gatherer stays selected while materials are still being gathered.
+
+#### SmartSelector: sticky-gatherer loop (`src/routines/smart_selector.ts`)
+- After gatherer completes, SmartSelector checks `scoreGatherer(ctx)` and re-runs gatherer immediately if score > 0, **without re-evaluating** other candidates.
+- Prevents the bot from switching to miner/trader mid-delivery or while a build is pending.
+- Loop exits only when all fleet goals and own build goals are fully resolved (score returns 0).
+
+#### Faction storage capacity cap checks (`src/routines/common.ts`, `miner.ts`, `smart_selector.ts`)
+- All `faction_deposit_items` paths now pre-check the per-item cap before withdrawing from personal storage, eliminating the withdraw→fail→put-back dead loop.
+- `storage_cap_exceeded` errors are caught and handled gracefully: items fall back to personal station storage with a `⛔` log instead of an error.
+- `transferStationToFaction`: refreshes faction storage once upfront; tracks `capReachedItems` set to skip capped items across all passes; breaks the pass loop early when all remaining items are capped.
+- `depositNonFuelCargo`: same cap pre-check + graceful `storage_cap_exceeded` handling.
+- `miner.ts` `handleCargoFromResponse`: cap pre-check in faction mode — returns false (uses fallback) instead of silently failing.
+- `smart_selector.ts` cargo-flush loop: cap pre-check before faction deposit.
+
+#### Faction storage cap lookup (`src/mapstore.ts`, `src/data/faction-storage-db.ts`)
+- New `MapStore.getFactionStorageCapPerItem(poiId)` method: queries `faction_buildings` for the highest-level storage facility at the POI (`faction_lockbox`, `faction_warehouse`, `faction_depot`, or any with `faction_service` containing "storage") and returns the corresponding cap: L1=100k, L2=200k, L3=300k, L4+=500k.
+- New `FactionStorageDb.getBuildingsForPoi(poiId)` query method.
+- `botmanager.ts`: persists `faction_build` API response to `faction_buildings` DB immediately after a successful bot build, so the storage level is known without waiting for the next `facility list` call.
+
+---
+
+## [2.5.1] - 2026-03-08
+
+### Fixed
+
+#### Mission runner deliver dead loop (`src/routines/mission_runner.ts`)
+- **Root cause**: after buying items the bot called `syncMissionProgress()` (which returns 0 because items are still in cargo, not yet delivered), then fell through to mine — causing a perpetual buy→wrong-resource-mine→buy loop.
+- **Fix**: added `deliverToDestination()` helper that navigates to `obj.targetSystem`/`obj.targetPoi` and docks, triggering server-side delivery. Called immediately after buy AND after mine when correct resource is in hand. Also added "Step 0" cargo pre-check — if items already in cargo from a previous attempt, skip acquisition entirely and deliver directly.
+- `MAX_OBJ_ATTEMPTS` reduced `15 → 8` to abandon faster when an objective is truly stuck.
+
+#### Trader → SmartSelector dead loop (`src/routines/trader.ts`, `smart_selector.ts`)
+- **Root cause**: trader exits after 3× no-route streak but SmartSelector immediately re-selects it because score 49 (after normal cooldown) still beats miner 30 and explorer 16.
+- **Fix**: `lastNoRouteExitMs` module-level timestamp exported from `trader.ts`, set on every 3×-no-route exit. `buildCandidates()` imports it and applies a 15-min blackout penalty (up to -120 pts) on top of the existing 8-min cooldown. At t=0 after failure: trader score = max(0, 100 - 51 - 120) = 0 → miner/explorer/mission_runner run instead.
+
+#### Bot registration pool selector (`src/web/src/views/DashboardView.vue`, `src/web/src/stores/botStore.ts`)
+- Add Bot modal now shows a "Pool / VM" dropdown when `vmList.length > 1`.
+- `botStore.addBot(username, password, vm?)` and `registerBot(code, username, empire, vm?)` accept optional `vm` param and include it in the WS message.
+
+#### Panel reactivity — Cargo / Station Storage / Faction Storage (`src/web/src/components/BotProfile.vue`)
+- Added `refreshPanelData()` which fires `get_cargo`, `view_storage` (when docked), and `view_faction_storage` (when docked + faction member) and writes results into `botStore.bots`.
+- Called on `onMounted`, on `props.bot.username` change (bot-switch), and when `isDocked` transitions false→true.
+
+#### Activity log raw JSON for dock response (`src/web/src/components/BotControlPanel.vue`)
+- Added `dock` case in `pushDetailLines()` that renders station condition, storage summary, trade fills (up to 5), order count, unread chat, and story snippet (160 chars) in human-readable format instead of raw `JSON.stringify`.
+- Extended the `skip` set in the `default` case to suppress dock-specific fields (`open_orders`, `trade_fills`, `station_condition`, `story`, `unread_chat_note`, etc.) from falling through to the generic key:value dumper.
+
+---
+
 ## [2.5.0] - 2026-03-08
 
 ### Fixed

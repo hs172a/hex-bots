@@ -144,116 +144,143 @@ export const iceHarvesterRoutine: Routine = async function* (ctx: RoutineContext
 
     if (bot.state !== "running") break;
 
-    // ── Find ice field and station in current system ──
+    // ── Get system info (always needed for station routing) ──
     yield "find_ice_field";
     const { pois, systemId } = await getSystemInfo(ctx);
     if (systemId) bot.system = systemId;
 
-    let icePoi: { id: string; name: string } | null = null;
     let stationPoi: { id: string; name: string } | null = null;
-
     const station = findStation(pois);
     if (station) stationPoi = { id: station.id, name: station.name };
 
-    // Find ice field — prefer one with target ice if set
-    if (settings.targetIce) {
-      for (const poi of pois) {
-        if (isIceFieldPoi(poi.type)) {
-          const sysData = ctx.mapStore.getSystem(bot.system);
-          const storedPoi = sysData?.pois.find(p => p.id === poi.id);
-          if (storedPoi?.ores_found.some(o => o.item_id === settings.targetIce)) {
-            icePoi = { id: poi.id, name: poi.name };
-            break;
+    // Pre-harvest cargo check — if already at threshold, skip straight to unload
+    await bot.refreshStatus();
+    const preHarvestFill = bot.cargoMax > 0 ? bot.cargo / bot.cargoMax : 0;
+    const skipToUnload = preHarvestFill >= cargoThresholdRatio;
+    if (skipToUnload) {
+      ctx.log("mining", `Cargo already ${Math.round(preHarvestFill * 100)}% full — skipping to unload`);
+    }
+
+    if (!skipToUnload) {
+      let icePoi: { id: string; name: string } | null = null;
+
+      // Find ice field — prefer one with target ice if set
+      if (settings.targetIce) {
+        for (const poi of pois) {
+          if (isIceFieldPoi(poi.type)) {
+            const sysData = ctx.mapStore.getSystem(bot.system);
+            const storedPoi = sysData?.pois.find(p => p.id === poi.id);
+            if (storedPoi?.ores_found.some(o => o.item_id === settings.targetIce)) {
+              icePoi = { id: poi.id, name: poi.name };
+              break;
+            }
           }
         }
       }
-    }
 
-    // Fallback: any ice field POI
-    if (!icePoi) {
-      const iceField = pois.find(p => isIceFieldPoi(p.type));
-      if (iceField) icePoi = { id: iceField.id, name: iceField.name };
-    }
-
-    if (!icePoi) {
-      ctx.log("error", "No ice field found in this system — waiting 30s before retry");
-      await sleep(30000);
-      continue;
-    }
-
-    // ── Travel to ice field ──
-    yield "travel_to_field";
-    const travelResp = await bot.exec("travel", { target_poi: icePoi.id });
-    if (travelResp.error && !travelResp.error.message.includes("already")) {
-      ctx.log("error", `Travel failed: ${travelResp.error.message}`);
-      await sleep(5000);
-      continue;
-    }
-    bot.poi = icePoi.id;
-
-    // ── Scavenge wrecks before harvesting ──
-    yield "scavenge";
-    await scavengeWrecks(ctx);
-
-    // ── Harvest loop: mine until cargo threshold ──
-    yield "harvest_loop";
-    let harvestCycles = 0;
-    let stopReason = "";
-    const iceMinedMap = new Map<string, number>();
-
-    while (bot.state === "running") {
-      await bot.refreshStatus();
-
-      const midHull = bot.maxHull > 0 ? Math.round((bot.hull / bot.maxHull) * 100) : 100;
-      if (midHull <= 40) { stopReason = `hull critical (${midHull}%)`; break; }
-
-      const midFuel = bot.maxFuel > 0 ? Math.round((bot.fuel / bot.maxFuel) * 100) : 100;
-      if (midFuel < safetyOpts.fuelThresholdPct) { stopReason = `fuel low (${midFuel}%)`; break; }
-
-      const mineResp = await bot.exec("mine");
-
-      if (mineResp.error) {
-        const msg = mineResp.error.message.toLowerCase();
-        if (msg.includes("depleted") || msg.includes("no resources") || msg.includes("no ice") || msg.includes("no minable")) {
-          stopReason = "ice field depleted"; break;
-        }
-        if (msg.includes("cargo") && msg.includes("full")) {
-          stopReason = "cargo full"; break;
-        }
-        if (msg.includes("harvester") || msg.includes("equipment")) {
-          ctx.log("error", `Missing ice harvester module: ${mineResp.error.message}`);
-          await sleep(30000);
-          return;
-        }
-        ctx.log("error", `Harvest error: ${mineResp.error.message}`);
-        break;
+      // Fallback: any ice field POI
+      if (!icePoi) {
+        const iceField = pois.find(p => isIceFieldPoi(p.type));
+        if (iceField) icePoi = { id: iceField.id, name: iceField.name };
       }
 
-      harvestCycles++;
-
-      const { oreId, oreName } = parseOreFromMineResult(mineResp.result);
-      if (oreId && bot.poi) {
-        ctx.mapStore.recordMiningYield(bot.system, bot.poi, { item_id: oreId, name: oreName });
-        iceMinedMap.set(oreName, (iceMinedMap.get(oreName) || 0) + 1);
-        bot.stats.totalMined++;
+      if (!icePoi) {
+        ctx.log("error", "No ice field found in this system — waiting 30s before retry");
+        await sleep(30000);
+        continue;
       }
 
-      await bot.refreshStatus();
-      const fillRatio = bot.cargoMax > 0 ? bot.cargo / bot.cargoMax : 0;
-      if (fillRatio >= cargoThresholdRatio) {
-        stopReason = `cargo at ${Math.round(fillRatio * 100)}%`; break;
+      // ── Travel to ice field ──
+      yield "travel_to_field";
+      const travelResp = await bot.exec("travel", { target_poi: icePoi.id });
+      if (travelResp.error && !travelResp.error.message.includes("already")) {
+        ctx.log("error", `Travel failed: ${travelResp.error.message}`);
+        await sleep(5000);
+        continue;
+      }
+      bot.poi = icePoi.id;
+
+      // Report ice field resources to deposits DB
+      const icePoiResp = await bot.exec("get_poi");
+      if (!icePoiResp.error && icePoiResp.result && typeof icePoiResp.result === "object") {
+        const ip = icePoiResp.result as Record<string, unknown>;
+        const iceResources = (
+          Array.isArray(ip.resources) ? ip.resources :
+          Array.isArray(ip.ices) ? ip.ices : []
+        ) as Array<Record<string, unknown>>;
+        if (iceResources.length > 0 && bot.system) {
+          const sysSt = ctx.mapStore.getSystem(bot.system);
+          ctx.mapStore.updateDeposits(
+            icePoi.id, bot.system, sysSt?.name ?? bot.system,
+            icePoi.name, "ice_field", iceResources, bot.username,
+          );
+        }
       }
 
-      yield "harvesting";
-    }
+      // ── Scavenge wrecks before harvesting ──
+      yield "scavenge";
+      await scavengeWrecks(ctx);
 
-    // Harvest summary
-    if (harvestCycles > 0) {
-      const iceList = [...iceMinedMap.entries()].map(([name, qty]) => `${qty}x ${name}`).join(", ");
-      ctx.log("mining", `Harvested ${harvestCycles} cycles (${iceList})${stopReason ? ` — ${stopReason}` : ""}`);
-    } else if (stopReason) {
-      ctx.log("mining", `Stopped before harvesting — ${stopReason}`);
-    }
+      // ── Harvest loop: mine until cargo threshold ──
+      yield "harvest_loop";
+      let harvestCycles = 0;
+      let stopReason = "";
+      const iceMinedMap = new Map<string, number>();
+
+      while (bot.state === "running") {
+        await bot.refreshStatus();
+
+        const midHull = bot.maxHull > 0 ? Math.round((bot.hull / bot.maxHull) * 100) : 100;
+        if (midHull <= 40) { stopReason = `hull critical (${midHull}%)`; break; }
+
+        const midFuel = bot.maxFuel > 0 ? Math.round((bot.fuel / bot.maxFuel) * 100) : 100;
+        if (midFuel < safetyOpts.fuelThresholdPct) { stopReason = `fuel low (${midFuel}%)`; break; }
+
+        const mineResp = await bot.exec("mine");
+
+        if (mineResp.error) {
+          const msg = mineResp.error.message.toLowerCase();
+          if (msg.includes("depleted") || msg.includes("no resources") || msg.includes("no ice") || msg.includes("no minable")) {
+            stopReason = "ice field depleted"; break;
+          }
+          if (msg.includes("cargo") && msg.includes("full")) {
+            stopReason = "cargo full"; break;
+          }
+          if (msg.includes("harvester") || msg.includes("equipment")) {
+            ctx.log("error", `Missing ice harvester module: ${mineResp.error.message}`);
+            await sleep(30000);
+            return;
+          }
+          ctx.log("error", `Harvest error: ${mineResp.error.message}`);
+          break;
+        }
+
+        harvestCycles++;
+
+        const { oreId, oreName } = parseOreFromMineResult(mineResp.result);
+        if (oreId && bot.poi) {
+          ctx.mapStore.recordMiningYield(bot.system, bot.poi, { item_id: oreId, name: oreName });
+          iceMinedMap.set(oreName, (iceMinedMap.get(oreName) || 0) + 1);
+          bot.stats.totalMined++;
+        }
+
+        await bot.refreshStatus();
+        const fillRatio = bot.cargoMax > 0 ? bot.cargo / bot.cargoMax : 0;
+        if (fillRatio >= cargoThresholdRatio) {
+          stopReason = `cargo at ${Math.round(fillRatio * 100)}%`; break;
+        }
+
+        yield "harvesting";
+      }
+
+      // Harvest summary
+      if (harvestCycles > 0) {
+        const iceList = [...iceMinedMap.entries()].map(([name, qty]) => `${qty}x ${name}`).join(", ");
+        ctx.log("mining", `Harvested ${harvestCycles} cycles (${iceList})${stopReason ? ` — ${stopReason}` : ""}`);
+      } else if (stopReason) {
+        ctx.log("mining", `Stopped before harvesting — ${stopReason}`);
+      }
+    } // end if (!skipToUnload)
 
     if (bot.state !== "running") break;
 
@@ -323,25 +350,62 @@ export const iceHarvesterRoutine: Routine = async function* (ctx: RoutineContext
         if (!itemId || quantity <= 0) continue;
         const displayName = (item.name as string) || itemId;
 
+        let deposited = false;
         if (settings.depositMode === "sell") {
           const sellResp = await bot.exec("sell", { item_id: itemId, quantity });
-          if (sellResp.error) {
-            await bot.exec("deposit_items", { item_id: itemId, quantity });
+          const sr = (!sellResp.error && sellResp.result && typeof sellResp.result === "object")
+            ? sellResp.result as Record<string, unknown> : null;
+          const unsoldQty = sr ? ((sr.unsold as number) ?? quantity) : quantity;
+
+          if (!sellResp.error && unsoldQty <= 0) {
+            deposited = true;
+          } else {
+            const toDeposit = sellResp.error ? quantity : unsoldQty;
+            if (!sellResp.error) ctx.log("trade", `No buyers for ${displayName} (${toDeposit} unsold) — depositing to storage`);
+            else ctx.log("trade", `Sell failed for ${displayName}: ${sellResp.error.message} — depositing to storage`);
+            const storeResp = await bot.exec("deposit_items", { item_id: itemId, quantity: toDeposit });
+            if (!storeResp.error) deposited = true;
+            else {
+              const fResp2 = await bot.exec("faction_deposit_items", { item_id: itemId, quantity: toDeposit });
+              if (!fResp2.error) deposited = true;
+              else ctx.log("error", `All deposit methods failed for ${displayName}: ${fResp2.error.message}`);
+            }
           }
         } else if (settings.depositMode === "faction") {
           const fResp = await bot.exec("faction_deposit_items", { item_id: itemId, quantity });
-          if (fResp.error) {
-            await bot.exec("deposit_items", { item_id: itemId, quantity });
+          if (!fResp.error) {
+            deposited = true;
+          } else {
+            const storeResp = await bot.exec("deposit_items", { item_id: itemId, quantity });
+            if (!storeResp.error) deposited = true;
+            else ctx.log("error", `All deposit methods failed for ${displayName}: ${storeResp.error.message}`);
           }
         } else if (settings.depositBot) {
           const gResp = await bot.exec("send_gift", { recipient: settings.depositBot, item_id: itemId, quantity });
-          if (gResp.error) {
-            await bot.exec("deposit_items", { item_id: itemId, quantity });
+          if (!gResp.error) {
+            deposited = true;
+          } else {
+            const storeResp = await bot.exec("deposit_items", { item_id: itemId, quantity });
+            if (!storeResp.error) deposited = true;
+            else {
+              const fResp2 = await bot.exec("faction_deposit_items", { item_id: itemId, quantity });
+              if (!fResp2.error) deposited = true;
+              else ctx.log("error", `All deposit methods failed for ${displayName}: ${fResp2.error.message}`);
+            }
           }
         } else {
-          await bot.exec("deposit_items", { item_id: itemId, quantity });
+          const storeResp = await bot.exec("deposit_items", { item_id: itemId, quantity });
+          if (!storeResp.error) {
+            deposited = true;
+          } else {
+            const fResp2 = await bot.exec("faction_deposit_items", { item_id: itemId, quantity });
+            if (!fResp2.error) deposited = true;
+            else ctx.log("error", `All deposit methods failed for ${displayName}: ${fResp2.error.message}`);
+          }
         }
-        unloadedItems.push(`${quantity}x ${displayName}`);
+        if (deposited) {
+          unloadedItems.push(`${quantity}x ${displayName}`);
+        }
         yield "unloading";
       }
 

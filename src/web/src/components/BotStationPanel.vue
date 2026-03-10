@@ -540,12 +540,14 @@ const stationInfo = computed(() => {
 
 const filteredStation = computed(() => {
   const q = stationSearch.value.toLowerCase().trim();
-  if (!q) return stationFacilities.value;
-  return stationFacilities.value.filter((f: any) =>
-    (f.name || '').toLowerCase().includes(q) ||
-    (f.description || '').toLowerCase().includes(q) ||
-    (f.category || '').toLowerCase().includes(q)
-  );
+  const src = q
+    ? stationFacilities.value.filter((f: any) =>
+        (f.name || '').toLowerCase().includes(q) ||
+        (f.description || '').toLowerCase().includes(q) ||
+        (f.category || '').toLowerCase().includes(q)
+      )
+    : stationFacilities.value;
+  return [...src].sort((a: any, b: any) => (a.name || '').localeCompare(b.name || ''));
 });
 
 const groupedStation = computed(() => {

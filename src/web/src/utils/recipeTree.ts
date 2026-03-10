@@ -32,6 +32,8 @@ export interface RecipeNode {
   crafts_needed: number;
   /** Output quantity per single craft operation. */
   craft_output_qty: number;
+  /** Recipe ID used to craft this node's item (undefined for leaf/satisfied nodes). */
+  recipe_id?: string;
   children: RecipeNode[];
 }
 
@@ -136,6 +138,7 @@ export function buildNode(
       quantity_available: qty_available, quantity_to_gather: 0,
       has_recipe: recipeIndex.has(item_id), is_satisfied: true, is_leaf: false,
       crafts_needed: 0, craft_output_qty: recipeIndex.get(item_id)?.output_quantity ?? 1,
+      recipe_id: recipeIndex.get(item_id)?.recipe_id,
       children: [],
     };
   }
@@ -149,6 +152,7 @@ export function buildNode(
       quantity_available: qty_available, quantity_to_gather: qty_to_gather,
       has_recipe: !!recipe, is_satisfied: false, is_leaf: true,
       crafts_needed: 0, craft_output_qty: recipe?.output_quantity ?? 1,
+      recipe_id: recipe?.recipe_id,
       children: [],
     };
   }
@@ -174,6 +178,7 @@ export function buildNode(
     quantity_available: qty_available, quantity_to_gather: qty_to_gather,
     has_recipe: true, is_satisfied: false, is_leaf: false,
     crafts_needed, craft_output_qty: recipe.output_quantity,
+    recipe_id: recipe.recipe_id,
     children,
   };
 }

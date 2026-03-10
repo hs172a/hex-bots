@@ -207,4 +207,12 @@ export class FactionStorageDb {
       .all(systemId)
       .map((r: any) => ({ ...r, active: r.active === 1 })) as FactionBuildingEntry[];
   }
+
+  /** Return buildings at a specific POI. */
+  getBuildingsForPoi(poiId: string): FactionBuildingEntry[] {
+    return this.db
+      .query("SELECT * FROM faction_buildings WHERE poi_id = ? ORDER BY facility_name")
+      .all(poiId)
+      .map((r: any) => ({ ...r, active: r.active === 1 })) as FactionBuildingEntry[];
+  }
 }

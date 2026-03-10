@@ -7,7 +7,7 @@
     </div>
 
     <!-- ── Overview Tab ─────────────────────────────────────── -->
-    <div v-if="activeTab === 'overview'" class="flex-1 flex flex-col gap-4 p-4 overflow-hidden">
+    <div v-if="activeTab === 'overview'" class="flex-1 flex flex-col gap-2 p-2 overflow-hidden">
     <!-- Market Header -->
     <div class="flex items-center justify-between">
       <h2 class="text-lg font-semibold text-space-text-bright">Market Overview</h2>
@@ -19,20 +19,20 @@
     </div>
 
     <!-- Market Stats -->
-    <div class="grid grid-cols-4 gap-4">
-      <div class="card p-4">
+    <div class="grid grid-cols-4 gap-2">
+      <div class="card p-2">
         <div class="text-xs text-space-text-dim mb-1">Total Items</div>
         <div class="text-2xl font-bold text-space-text-bright">{{ marketItems.length }}</div>
       </div>
-      <div class="card p-4">
+      <div class="card p-2">
         <div class="text-xs text-space-text-dim mb-1">Stations</div>
         <div class="text-2xl font-bold text-space-text-bright">{{ uniqueStations }}</div>
       </div>
-      <div class="card p-4">
+      <div class="card p-2">
         <div class="text-xs text-space-text-dim mb-1">Best Profit</div>
         <div class="text-2xl font-bold text-space-green">{{ formatNumber(bestProfit) }} ₡</div>
       </div>
-      <div class="card p-4">
+      <div class="card p-2">
         <div class="text-xs text-space-text-dim mb-1">Avg Price</div>
         <div class="text-2xl font-bold text-space-yellow">{{ formatNumber(avgPrice) }} ₡</div>
       </div>
@@ -40,7 +40,7 @@
 
     <!-- Market Table -->
     <div class="card flex flex-col flex-1 overflow-hidden">
-      <div class="flex items-center gap-4 px-4 py-3 border-b border-space-border">
+      <div class="flex items-center gap-2 px-4 py-3 border-b border-space-border">
         <input 
           v-model="searchQuery"
           type="text" 
@@ -122,12 +122,12 @@
     </div><!-- /overview tab -->
 
     <!-- ── My Orders Tab ────────────────────────────────────── -->
-    <div v-else-if="activeTab === 'orders'" class="flex-1 flex flex-col gap-3 p-4 overflow-hidden">
+    <div v-else-if="activeTab === 'orders'" class="flex-1 flex flex-col gap-2 p-2 overflow-hidden">
       <!-- Controls -->
-      <div class="flex items-center gap-3 shrink-0">
+      <div class="flex items-center gap-2 shrink-0">
         <h2 class="text-lg font-semibold text-space-text-bright">My Orders</h2>
         <select v-model="orderBot" class="input text-xs min-w-[160px]">
-          <option v-for="b in botStore.bots" :key="b.username" :value="b.username">{{ b.username }}</option>
+          <option v-for="b in botStore.sortedBots" :key="b.username" :value="b.username">{{ b.username }}</option>
         </select>
         <button @click="loadOrders" :disabled="ordersLoading || !orderBot" class="btn btn-secondary text-xs px-3">
           {{ ordersLoading ? '⏳' : '🔄 Load' }}
@@ -259,7 +259,7 @@ interface Order {
   location?: string;
 }
 
-const orderBot = ref(botStore.bots[0]?.username || '');
+const orderBot = ref(botStore.sortedBots[0]?.username || '');
 const orders = ref<Order[]>([]);
 const ordersLoading = ref(false);
 const ordersLoaded = ref(false);

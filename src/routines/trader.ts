@@ -188,6 +188,8 @@ function findFactionStorageRoutes(
   const allBuys = ctx.mapStore.getAllBuyDemand();
   if (allBuys.length === 0) return routes;
 
+  const fsReserved = getReservedForGoals(bot.poi ?? "");
+
   for (const item of bot.factionStorage) {
     const lower = item.itemId.toLowerCase();
     if (lower.includes("fuel") || lower.includes("energy_cell")) continue;
@@ -195,6 +197,11 @@ function findFactionStorageRoutes(
     const catItem = ctx.catalogStore.getItem(item.itemId);
     if (catItem?.category === "ore") continue;
     if (item.quantity <= 0) continue;
+
+    // Skip items reserved for active gather/build/crafter goals
+    const fsReservedQty = fsReserved.get(item.itemId) ?? 0;
+    const fsTradableQty = item.quantity - fsReservedQty;
+    if (fsTradableQty <= 0) continue;
 
     // Filter by allowed items if configured
     if (settings.tradeItems.length > 0) {
@@ -220,7 +227,7 @@ function findFactionStorageRoutes(
       const { jumps, cost: fuelCost } = estimateFuelCost(currentSystem, buy.systemId, ctx.mapStore, settings.fuelCostPerJump);
       if (jumps >= 999 || jumps > settings.maxJumps) continue;
 
-      const sellQty = Math.min(item.quantity, buy.quantity, maxItemsForCargo(cargoCapacity, item.itemId));
+      const sellQty = Math.min(fsTradableQty, buy.quantity, maxItemsForCargo(cargoCapacity, item.itemId));
       const profitPerUnit = buy.price - itemCost - (jumps > 0 ? fuelCost / sellQty : 0);
       if (profitPerUnit < settings.minProfitPerUnit) continue;
 
@@ -554,6 +561,10 @@ async function sellFactionStorageItems(ctx: RoutineContext): Promise<{ count: nu
  * 5. Travel to destination station, sell items
  * 6. Refuel, repair, repeat
  */
+/** Timestamp of the last time trader exited due to no profitable routes (3x streak).
+ *  SmartSelector reads this to apply a heavy blackout penalty after no-route exits. */
+export let lastNoRouteExitMs = 0;
+
 export const traderRoutine: Routine = async function* (ctx: RoutineContext) {
   const { bot } = ctx;
 
@@ -802,6 +813,7 @@ export const traderRoutine: Routine = async function* (ctx: RoutineContext) {
       noRouteStreak++;
       if (noRouteStreak >= 3) {
         ctx.log("trade", `No profitable trade routes found ${noRouteStreak}x in a row — yielding to SmartSelector`);
+        lastNoRouteExitMs = Date.now();
         return;
       }
       ctx.log("trade", `No profitable trade routes found (${noRouteStreak}/3) — waiting 60s before re-scanning`);
@@ -916,8 +928,15 @@ export const traderRoutine: Routine = async function* (ctx: RoutineContext) {
 
         if (isInStation) {
           // ── In-station faction route: batch withdraw→sell until done ──
+          const isReserved = getReservedForGoals(bot.poi ?? "");
+          const isReservedQty = isReserved.get(candidate.itemId) ?? 0;
+          const isTradableQty = availQty - isReservedQty;
+          if (isTradableQty <= 0) {
+            ctx.log("trade", `All ${candidate.itemName} in faction storage reserved for build goals — skipping`);
+            continue;
+          }
           let totalSold = 0;
-          let remaining = availQty;
+          let remaining = isTradableQty;
 
           while (remaining > 0 && bot.state === "running") {
             await bot.refreshStatus();
@@ -988,8 +1007,15 @@ export const traderRoutine: Routine = async function* (ctx: RoutineContext) {
         }
 
         // ── Cross-system faction route: withdraw what fits, travel to sell ──
+        const csReserved = getReservedForGoals(bot.poi ?? "");
+        const csReservedQty = csReserved.get(candidate.itemId) ?? 0;
+        const csTradableQty = availQty - csReservedQty;
+        if (csTradableQty <= 0) {
+          ctx.log("trade", `All ${candidate.itemName} in faction storage reserved for build goals — skipping`);
+          continue;
+        }
         const freeSpaceF = getFreeSpace(bot);
-        let qty = Math.min(candidate.buyQty, availQty, maxItemsForCargo(freeSpaceF, candidate.itemId));
+        let qty = Math.min(candidate.buyQty, csTradableQty, maxItemsForCargo(freeSpaceF, candidate.itemId));
         if (qty <= 0) {
           ctx.log("trade", "No cargo space for faction withdrawal — trying next route");
           continue;

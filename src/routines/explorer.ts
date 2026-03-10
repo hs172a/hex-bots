@@ -6,6 +6,7 @@ import {
   isMinablePoi,
   isScenicPoi,
   isStationPoi,
+  isWormholePoi,
   findStation,
   getSystemInfo,
   parseOreFromMineResult,
@@ -325,6 +326,23 @@ export const explorerRoutine: Routine = async function* (ctx: RoutineContext) {
     const surveyResp = await bot.exec("survey_system");
     if (!surveyResp.error) {
       ctx.log("info", `Surveyed ${bot.system} — checking for newly revealed POIs...`);
+      // Parse deposit data if the survey response includes resource info
+      if (surveyResp.result && typeof surveyResp.result === "object") {
+        const sr = surveyResp.result as Record<string, unknown>;
+        const surveyPois = (Array.isArray(sr.pois) ? sr.pois : []) as Array<Record<string, unknown>>;
+        for (const sp of surveyPois) {
+          const spResources = (Array.isArray(sp.resources) ? sp.resources : []) as Array<Record<string, unknown>>;
+          const spId = (sp.id as string) || "";
+          if (spId && spResources.length > 0) {
+            const sysSt = ctx.mapStore.getSystem(systemId);
+            ctx.mapStore.updateDeposits(
+              spId, systemId, sysSt?.name ?? systemId,
+              (sp.name as string) || spId, (sp.type as string) || "unknown",
+              spResources, bot.username,
+            );
+          }
+        }
+      }
       // Re-fetch system info to pick up any hidden POIs that were revealed
       const refreshed = await getSystemInfo(ctx);
       if (refreshed.pois.length > pois.length) {
@@ -332,6 +350,79 @@ export const explorerRoutine: Routine = async function* (ctx: RoutineContext) {
       }
       pois = refreshed.pois;
       connections = refreshed.connections;
+
+      // Detect wormhole POIs revealed by this survey and resolve their destinations
+      for (const poi of pois) {
+        if (!isWormholePoi(poi.type)) continue;
+        const sysInfo = ctx.mapStore.getSystem(systemId);
+        const sysName = sysInfo?.name ?? systemId;
+        const existing = ctx.mapStore.getWormhole(poi.id);
+
+        if (!existing) {
+          // New wormhole — record as active, try to resolve destination via get_poi
+          ctx.log("info", `Wormhole detected: ${poi.name || poi.id} (${poi.type})`);
+          ctx.mapStore.upsertWormhole({
+            entrance_poi_id: poi.id,
+            entrance_system_id: systemId,
+            entrance_system_name: sysName,
+            exit_system_id: "",
+            exit_system_name: "",
+            exit_poi_id: "",
+            status: "active",
+            discovered_by: bot.username,
+            last_seen_at: new Date().toISOString(),
+            expires_estimated_at: null,
+            collapse_seen_at: null,
+          });
+        } else if (existing.status === "collapsed") {
+          ctx.log("info", `Wormhole remnant: ${poi.name || poi.id} — still visible`);
+          ctx.mapStore.markWormholeSeen(poi.id);
+          continue;
+        } else {
+          ctx.mapStore.markWormholeSeen(poi.id);
+        }
+
+        // Only resolve destination for active wormholes with unknown exit
+        const wh = ctx.mapStore.getWormhole(poi.id);
+        if (wh && wh.status === "active" && !wh.exit_system_id) {
+          yield "wormhole_probe";
+          const poiResp = await bot.exec("get_poi", { poi_id: poi.id });
+          if (!poiResp.error && poiResp.result && typeof poiResp.result === "object") {
+            const pr = poiResp.result as Record<string, unknown>;
+            const exitSysId   = (pr.wormhole_destination_id as string) ?? "";
+            const exitSysName = (pr.wormhole_destination as string) ?? "";
+            const poiObj      = pr.poi as Record<string, unknown> | undefined;
+            const exitPoiId   = (poiObj?.id as string) ?? "";
+            const expiresRaw  = (poiObj?.expires_at as string) ?? null;
+            if (exitSysId) {
+              ctx.log("info", `Wormhole ${poi.id} → ${exitSysName || exitSysId}`);
+              ctx.mapStore.upsertWormhole({
+                entrance_poi_id: poi.id,
+                entrance_system_id: systemId,
+                entrance_system_name: sysName,
+                exit_system_id: exitSysId,
+                exit_system_name: exitSysName,
+                exit_poi_id: exitPoiId,
+                status: "active",
+                discovered_by: bot.username,
+                last_seen_at: new Date().toISOString(),
+                expires_estimated_at: expiresRaw,
+                collapse_seen_at: null,
+              });
+            }
+          }
+        }
+      }
+
+      // Check for collapsed wormholes (was known active, no longer in POI list)
+      for (const knownWh of ctx.mapStore.getWormholesBySystem(systemId)) {
+        if (knownWh.status !== "active") continue;
+        const stillPresent = pois.some(p => p.id === knownWh.entrance_poi_id);
+        if (!stillPresent) {
+          ctx.log("info", `Wormhole ${knownWh.entrance_poi_id} no longer detected — may have collapsed`);
+          ctx.mapStore.markWormholeCollapsed(knownWh.entrance_poi_id);
+        }
+      }
     } else {
       const msg = surveyResp.error.message.toLowerCase();
       // Don't log for expected errors like "already surveyed" or skill-related
@@ -348,17 +439,23 @@ export const explorerRoutine: Routine = async function* (ctx: RoutineContext) {
       const isStation = isStationPoi(poi);
       const isMinable = isMinablePoi(poi.type);
       const isScenic = isScenicPoi(poi.type);
+      const isWormhole = isWormholePoi(poi.type);
       const minutesAgo = ctx.mapStore.minutesSinceExplored(systemId, poi.id);
 
       if (isStation) {
         if (minutesAgo < STATION_REFRESH_MINS) { skippedCount++; continue; }
         toVisit.push({ poi, reason: minutesAgo === Infinity ? "new" : "refresh" });
       } else if (isMinable) {
-        // Always re-visit if explored but no ores were recorded
         const storedPoi = ctx.mapStore.getSystem(systemId)?.pois.find(p => p.id === poi.id);
         const hasOreData = (storedPoi?.ores_found?.length ?? 0) > 0;
         if (minutesAgo < RESOURCE_REFRESH_MINS && hasOreData) { skippedCount++; continue; }
         toVisit.push({ poi, reason: minutesAgo === Infinity ? "new" : (hasOreData ? "re-sample" : "no-data") });
+      } else if (isWormhole) {
+        // Visit active wormholes to confirm status; skip collapsed remnants
+        const wh = ctx.mapStore.getWormhole(poi.id);
+        if (wh?.status === "collapsed") { skippedCount++; continue; }
+        if (minutesAgo < STATION_REFRESH_MINS) { skippedCount++; continue; }
+        toVisit.push({ poi, reason: wh?.exit_system_id ? "confirm" : "new" });
       } else if (isScenic) {
         if (minutesAgo < Infinity) { skippedCount++; continue; }
         toVisit.push({ poi, reason: "new" });
@@ -414,20 +511,22 @@ export const explorerRoutine: Routine = async function* (ctx: RoutineContext) {
       const isMinable = isMinablePoi(poi.type);
       const isStation = isStationPoi(poi);
 
-      // Check fuel before traveling to each POI
-      yield "fuel_check";
-      const poiFueled = await ensureFueled(ctx, FUEL_SAFETY_PCT);
-      if (!poiFueled) {
-        ctx.log("error", "Could not refuel — restarting system loop...");
-        break;
+      // Check fuel before traveling to each POI (skip if cached fuel is clearly above threshold)
+      const cachedFuelPct = bot.maxFuel > 0 ? Math.round((bot.fuel / bot.maxFuel) * 100) : 100;
+      if (cachedFuelPct < FUEL_SAFETY_PCT + 15) {
+        yield "fuel_check";
+        const poiFueled = await ensureFueled(ctx, FUEL_SAFETY_PCT);
+        if (!poiFueled) {
+          ctx.log("error", "Could not refuel — restarting system loop...");
+          break;
+        }
+        // ensureFueled already called refreshStatus internally
+        if (bot.system !== systemId) {
+          ctx.log("info", `Moved to ${bot.system} during refuel — restarting system scan`);
+          break;
+        }
+        await ensureUndocked(ctx);
       }
-      // If refueling moved us to a different system, break out to restart
-      await bot.refreshStatus();
-      if (bot.system !== systemId) {
-        ctx.log("info", `Moved to ${bot.system} during refuel — restarting system scan`);
-        break;
-      }
-      await ensureUndocked(ctx);
 
       yield `visit_${poi.id}`;
       const travelResp = await bot.exec("travel", { target_poi: poi.id });
@@ -436,10 +535,6 @@ export const explorerRoutine: Routine = async function* (ctx: RoutineContext) {
         continue;
       }
       bot.poi = poi.id;
-
-      // Scavenge wrecks/containers at each POI
-      yield "scavenge";
-      await scavengeWrecks(ctx);
 
       if (isMinable) {
         yield* sampleResourcePoi(ctx, systemId, poi);
@@ -581,6 +676,41 @@ async function* sampleResourcePoi(
 ): AsyncGenerator<string, void, void> {
   const { bot } = ctx;
   yield `sample_${poi.id}`;
+
+  // Always call get_poi first — records resource list without needing a mining module.
+  // Covers gas clouds and ice fields which the explorer can't mine directly.
+  const poiDetailResp = await bot.exec("get_poi");
+  if (!poiDetailResp.error && poiDetailResp.result && typeof poiDetailResp.result === "object") {
+    const pr = poiDetailResp.result as Record<string, unknown>;
+    const apiResources = (Array.isArray(pr.resources) ? pr.resources : []) as Array<Record<string, unknown>>;
+    if (apiResources.length > 0) {
+      const sysSt = ctx.mapStore.getSystem(systemId);
+      ctx.mapStore.updateDeposits(
+        poi.id, systemId, sysSt?.name ?? systemId,
+        poi.name, poi.type, apiResources, bot.username,
+      );
+      const resNames = apiResources
+        .map(r => (r.name as string) || (r.resource_id as string) || "")
+        .filter(Boolean).join(", ");
+      if (resNames) ctx.log("mining", `POI ${poi.name}: resources — ${resNames}`);
+    }
+  }
+
+  // Skip mine attempts for gas/ice POIs when the ship lacks the required harvester module
+  const poiTypeLower = poi.type.toLowerCase();
+  if (bot.shipModules.length > 0) {
+    const needsGas = poiTypeLower.includes("gas");
+    const needsIce = poiTypeLower.includes("ice");
+    const hasGas = bot.shipModules.some(m =>
+      (m.type_id || "").includes("gas_harvester") || (m.name || "").toLowerCase().includes("gas harvester"));
+    const hasIce = bot.shipModules.some(m =>
+      (m.type_id || "").includes("ice_harvester") || (m.name || "").toLowerCase().includes("ice harvester"));
+    if ((needsGas && !hasGas) || (needsIce && !hasIce)) {
+      ctx.mapStore.markExplored(systemId, poi.id);
+      return;
+    }
+  }
+
   const oresFound = new Set<string>();
   let mined = 0;
   let cantMine = false;
@@ -592,7 +722,7 @@ async function* sampleResourcePoi(
       const msg = mineResp.error.message.toLowerCase();
       if (msg.includes("no asteroids") || msg.includes("depleted") || msg.includes("no minable") || msg.includes("nothing to mine")) break;
       if (msg.includes("cargo") && msg.includes("full")) break;
-      // Missing module — mark as explored to avoid revisiting, but don't sample
+      // Missing module (gas/ice harvester) — resource data already recorded via get_poi above
       if (msg.includes("gas harvester") || msg.includes("ice harvester")) {
         ctx.mapStore.markExplored(systemId, poi.id);
         return;

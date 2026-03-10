@@ -155,6 +155,7 @@ export interface BotStatus {
   factionRank: string;
   isCloaked: boolean;
   tradingRestrictedUntil: Date | null;
+  empireRep: Record<string, unknown> | null;
   inventory: CargoItem[];
   storage: CargoItem[];
   factionStorage: CargoItem[];
@@ -281,6 +282,9 @@ export class Bot extends EventEmitter {
   /** ISO timestamp until which trading/gifting is restricted (null = unrestricted). */
   tradingRestrictedUntil: Date | null = null;
 
+  /** Empire reputation data from last get_status call. */
+  empireRep: Record<string, unknown> | null = null;
+
   /** Whether the bot's ship is dead (hull <= 0). */
   isDead = false;
 
@@ -297,6 +301,20 @@ export class Bot extends EventEmitter {
    * Set by hunter.ts (and any other combat-aware routine) based on its autoDefend setting.
    */
   autoDefend = false;
+
+  /**
+   * When true, the bot will automatically call attack + set fire stance when hit by a pirate.
+   * Requires the bot NOT to be docked. Cooldown prevents spamming every damage tick.
+   */
+  autoFightBack = false;
+  private _lastFightBackMs = 0;
+  private static readonly FIGHT_BACK_COOLDOWN_MS = 12_000;
+  private _lastEmergencyUndockMs = 0;
+  private static readonly EMERGENCY_UNDOCK_COOLDOWN_MS = 30_000;
+
+  /** Set true while a jump command is in-flight. Prevents fight-back on notifications
+   * from the previous system that arrive inside the jump response. */
+  isJumping = false;
 
   /** Cached installed mod IDs from last refreshShipMods(). */
   installedMods: string[] = [];
@@ -741,6 +759,12 @@ export class Bot extends EventEmitter {
       // Cloak detection
       this.isCloaked = !!(p.is_cloaked || p.cloaked);
 
+      // Empire reputation
+      const rawRep = p.empire_rep ?? p.empire_reputations;
+      if (rawRep && typeof rawRep === "object" && !Array.isArray(rawRep)) {
+        this.empireRep = rawRep as Record<string, unknown>;
+      }
+
       // Trading/gifting restriction (added in API update)
       const rawRestriction = p.trading_restricted_until as string | null | undefined;
       if (rawRestriction) {
@@ -817,10 +841,14 @@ export class Bot extends EventEmitter {
   }
 
   /**
-   * Call view_orders with optional station_id for remote order checking.
+   * Call view_orders with optional station_id and scope for remote order checking.
+   * scope='faction' returns faction orders (v0.191.0: separated from personal orders).
    */
-  async viewOrders(stationId?: string): Promise<Record<string, unknown>> {
-    const resp = await this.exec("view_orders", stationId ? { station_id: stationId } : undefined);
+  async viewOrders(stationId?: string, scope?: 'personal' | 'faction'): Promise<Record<string, unknown>> {
+    const params: Record<string, unknown> = {};
+    if (stationId) params.station_id = stationId;
+    if (scope) params.scope = scope;
+    const resp = await this.exec("view_orders", Object.keys(params).length ? params : undefined);
     if (resp.error || !resp.result || typeof resp.result !== "object") return {};
     return resp.result as Record<string, unknown>;
   }
@@ -1066,6 +1094,47 @@ export class Bot extends EventEmitter {
             mapStore.recordPirate(this.system, { player_id: pirateName, name: pirateName });
           }
 
+          // Auto-fight-back: engage and return fire when attacked by a pirate.
+          // Skip if jumping — notifications from jump responses reference the previous system.
+          if (this.autoFightBack && this.state === "running" && !this.isJumping) {
+            const now = Date.now();
+
+            if (this.docked) {
+              // Emergency undock: can't fight from dock — undock to enable fight-back or flee
+              if (now - this._lastEmergencyUndockMs > Bot.EMERGENCY_UNDOCK_COOLDOWN_MS) {
+                this._lastEmergencyUndockMs = now;
+                this.log("combat", `[EMERGENCY] Under attack while docked — undocking to escape`);
+                this.api.execute("undock")
+                  .then(() => { this.docked = false; })
+                  .catch(() => {});
+              }
+            } else {
+              // Undocked: fight back or flee based on hull
+              if (now - this._lastFightBackMs > Bot.FIGHT_BACK_COOLDOWN_MS) {
+                this._lastFightBackMs = now;
+                const hullPct = this.maxHull > 0 ? (this.hull / this.maxHull) * 100 : 100;
+                const attackerId = (d.attacker_id as string) || (d.pirate_id as string) || pirateName;
+
+                if (hullPct < 20) {
+                  // Hull critical — flee rather than fight
+                  this.log("combat", `[AUTO-FLEE] Hull critical (${Math.round(hullPct)}%) — fleeing`);
+                  this.api.execute("battle", { action: "stance", id: "flee" }).catch(() => {});
+                } else if (attackerId && attackerId !== "Unknown") {
+                  const attackSystem = this.system;
+                  this.log("combat", `[AUTO-FIGHT] Engaging ${attackerId} in ${attackSystem}`);
+                  // Sequential: attack first, then set stance only after attack lands
+                  this.api.execute("attack", { target_id: attackerId, id: attackerId })
+                    .then(res => {
+                      if (res.error) return;
+                      if (this.system !== attackSystem || this.docked || this.isJumping) return;
+                      return this.api.execute("battle", { action: "stance", id: "fire" });
+                    })
+                    .catch(() => {});
+                }
+              }
+            }
+          }
+
         } else {
           const message = (d.message as string) || "";
           if (message) {
@@ -1096,7 +1165,7 @@ export class Bot extends EventEmitter {
         if (this.autoDefend && this.state === "running") {
           const hullPct = this.maxHull > 0 ? (this.hull / this.maxHull) * 100 : 100;
           const defStance = hullPct < 25 ? "flee" : "brace";
-          this.api.execute("battle", { action: "stance", stance: defStance }).catch(() => {});
+          this.api.execute("battle", { action: "stance", id: defStance }).catch(() => {});
           this.log("combat", `[AUTO-DEFEND] Unexpected combat — auto-stance: ${defStance}`);
         }
 
@@ -1273,6 +1342,7 @@ export class Bot extends EventEmitter {
       factionRank: this.factionRank,
       isCloaked: this.isCloaked,
       tradingRestrictedUntil: this.tradingRestrictedUntil,
+      empireRep: this.empireRep,
       inventory: this.inventory,
       storage: this.storage,
       factionStorage: this.factionStorage,

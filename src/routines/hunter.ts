@@ -64,6 +64,7 @@ function getHunterSettings(username?: string): {
   preferredStance: string;
   retreatHpPct: number;
   autoDefend: boolean;
+  autoFightBack: boolean;
 } {
   const all = readSettings();
   const h = all.hunter || {};
@@ -82,6 +83,7 @@ function getHunterSettings(username?: string): {
     preferredStance: (h.preferredStance as string) || "fire",
     retreatHpPct: (h.retreatHpPct as number) || 20,
     autoDefend: (h.autoDefend as boolean) ?? true,
+    autoFightBack: (h.autoFightBack as boolean) ?? true,
   };
 }
 
@@ -355,21 +357,15 @@ async function engageTarget(
 ): Promise<boolean> {
   const { bot } = ctx;
 
-  // Check if a previous battle is still active (v2 battle_status)
-  const statusResp = await bot.exec("v2_battle_status");
-  if (!statusResp.error && statusResp.result && typeof statusResp.result === "object") {
-    const bs = statusResp.result as Record<string, unknown>;
-    const inBattle = bs.in_battle ?? bs.active ?? bs.status === "active";
-    if (inBattle) {
-      ctx.log("combat", "Previous battle still active — waiting for it to resolve...");
+  // Check if still in a previous battle via get_status
+  const preStatus = await bot.exec("get_status");
+  if (!preStatus.error && preStatus.result && typeof preStatus.result === "object") {
+    const ps = preStatus.result as Record<string, unknown>;
+    const stillInBattle = ps.in_battle || ps.battle_active || ps.battle_id;
+    if (stillInBattle) {
+      ctx.log("combat", "Previous battle still active — retreating before engaging new target");
+      await bot.exec("battle", { action: "retreat" });
       await sleep(10_000);
-      const bs2Resp = await bot.exec("v2_battle_status");
-      const bs2 = bs2Resp.result as Record<string, unknown> | undefined;
-      if (bs2?.in_battle || bs2?.active) {
-        ctx.log("combat", "Battle still unresolved — retreating and skipping target");
-        await bot.exec("battle", { action: "retreat" });
-        return false;
-      }
     }
   }
 
@@ -382,22 +378,18 @@ async function engageTarget(
     ctx.log("combat", `Scan: ${target.name} — ${shipType} | Faction: ${faction}`);
   }
 
-  // Initiate combat via v2 battle/engage
+  // Initiate combat: 'attack' works for both NPC pirates (1v1) and players (zone battle).
+  // Pass both target_id (v1) and id (v2 positional) for server compatibility.
   ctx.log("combat", `Engaging ${target.name}...`);
-  const engageResp = await bot.exec("battle", { action: "engage", target_id: target.id });
-  if (engageResp.error) {
-    const msg = engageResp.error.message.toLowerCase();
+  const attackResp = await bot.exec("attack", { target_id: target.id, id: target.id });
+  if (attackResp.error) {
+    const msg = attackResp.error.message.toLowerCase();
     if (msg.includes("not found") || msg.includes("invalid") || msg.includes("no target")) {
       ctx.log("combat", `${target.name} is no longer available`);
       return false;
     }
-    // Fallback to v1 attack if v2 engage is not available
-    ctx.log("combat", `v2 engage unavailable (${engageResp.error.message}) — falling back to v1 attack`);
-    const fallbackResp = await bot.exec("attack", { target_id: target.id });
-    if (fallbackResp.error) {
-      ctx.log("error", `Attack failed: ${fallbackResp.error.message}`);
-      return false;
-    }
+    ctx.log("error", `Attack failed: ${attackResp.error.message}`);
+    return false;
   }
 
   ctx.log("combat", "Combat initiated — advancing to close range...");
@@ -408,91 +400,85 @@ async function engageTarget(
     if (advResp.error) break;
   }
 
-  // ── v2 Battle state machine ──────────────────────────────────
-  // Per tick: status → stance decision → target → advance → check resolved
+  // ── Battle state machine (one action per 10s game tick) ──────
   const MAX_COMBAT_TICKS = 30;
   for (let tick = 0; tick < MAX_COMBAT_TICKS; tick++) {
     if (bot.state !== "running") return false;
+    await sleep(10_000);
 
-    // Get live battle state from v2
-    const bsResp = await bot.exec("v2_battle_status");
+    // Read live battle state via v2_battle_status
     let ownHpPct = 100;
-    let targetHpPct = 100;
-    let inBattle = true;
-
+    const bsResp = await bot.exec("v2_battle_status");
     if (!bsResp.error && bsResp.result && typeof bsResp.result === "object") {
       const bs = bsResp.result as Record<string, unknown>;
 
-      // Battle resolved
-      const over = (bs.battle_over ?? bs.resolved ?? (bs.status === "resolved")) || (bs.in_battle === false);
+      // Detect battle end
+      const over = !!(bs.battle_over) || !!(bs.resolved)
+        || bs.status === "resolved"
+        || bs.in_battle === false;
       if (over) {
         ctx.log("combat", `${target.name} eliminated (battle resolved)`);
         return true;
       }
 
-      inBattle = !(bs.in_battle === false);
-
-      // Parse own HP from sides[] or own_hp field
+      // Parse own HP from sides[] array or fallback fields
       const sides = Array.isArray(bs.sides) ? (bs.sides as Array<Record<string, unknown>>) : [];
       const ownSide = sides.find(s => (s.player_id as string) === bot.username || (s.is_self as boolean));
-      const enemySide = sides.find(s => s !== ownSide);
-
       if (ownSide) {
-        const ownHp = (ownSide.hp as number) ?? (ownSide.hull as number) ?? -1;
-        const ownMaxHp = (ownSide.max_hp as number) ?? (ownSide.max_hull as number) ?? -1;
-        ownHpPct = ownMaxHp > 0 ? Math.round((ownHp / ownMaxHp) * 100) : (bs.own_hp_pct as number) ?? 100;
+        const ownHp    = (ownSide.hp     as number) ?? (ownSide.hull     as number) ?? bot.hull;
+        const ownMaxHp = (ownSide.max_hp as number) ?? (ownSide.max_hull as number) ?? bot.maxHull;
+        ownHpPct = ownMaxHp > 0 ? Math.round((ownHp / ownMaxHp) * 100) : 100;
       } else {
-        ownHpPct = (bs.own_hp_pct as number) ?? (bs.own_hull_pct as number) ??
-          (bot.maxHull > 0 ? Math.round((bot.hull / bot.maxHull) * 100) : 100);
-      }
-
-      if (enemySide) {
-        const eHp = (enemySide.hp as number) ?? (enemySide.hull as number) ?? -1;
-        const eMaxHp = (enemySide.max_hp as number) ?? (enemySide.max_hull as number) ?? -1;
-        targetHpPct = eMaxHp > 0 ? Math.round((eHp / eMaxHp) * 100) : (bs.target_hp_pct as number) ?? 100;
-      } else {
-        targetHpPct = (bs.target_hp_pct as number) ?? (bs.enemy_hp_pct as number) ?? 100;
+        ownHpPct = (bs.own_hp_pct as number)
+          ?? (bot.maxHull > 0 ? Math.round((bot.hull / bot.maxHull) * 100) : 100);
       }
     } else {
-      // Fallback: read own hull from bot status
+      // Fallback: v2_battle_status unavailable — read from get_status
       await bot.refreshStatus();
       ownHpPct = bot.maxHull > 0 ? Math.round((bot.hull / bot.maxHull) * 100) : 100;
-    }
-
-    if (!inBattle) {
-      ctx.log("combat", `${target.name} — battle ended`);
-      return true;
+      if (bsResp.error) {
+        const em = bsResp.error.message.toLowerCase();
+        if (em.includes("not in battle") || em.includes("no battle") || em.includes("battle_over")) {
+          ctx.log("combat", `${target.name} — battle ended`);
+          return true;
+        }
+      }
     }
 
     // Emergency flee
     if (ownHpPct <= fleeThreshold) {
       ctx.log("combat", `Hull critical (${ownHpPct}%) — fleeing!`);
-      await bot.exec("battle", { action: "stance", stance: "flee" });
+      await bot.exec("battle", { action: "stance", id: "flee" });
       await bot.exec("battle", { action: "retreat" });
       return false;
     }
 
-    // Stance decision per roadmap:
-    //   target_hp < 30% → 'fire' (press the attack)
-    //   own shields critical → 'brace'
-    //   otherwise → preferredStance (fire/evade)
-    let stance: string;
-    if (targetHpPct < 30) {
-      stance = "fire";
-    } else if (ownHpPct < 40 && ownHpPct > fleeThreshold) {
-      stance = "brace";
-    } else {
-      stance = preferredStance;
+    // Stance decision: brace when wounded, otherwise preferred stance
+    const stance = ownHpPct < 40 && ownHpPct > fleeThreshold ? "brace" : preferredStance;
+
+    // v2 battle/stance uses 'id' as the positional stance name field
+    const stanceResp = await bot.exec("battle", { action: "stance", id: stance });
+    if (stanceResp.error) {
+      const em = stanceResp.error.message.toLowerCase();
+      if (em.includes("not in battle") || em.includes("no battle") || em.includes("battle_over") || em.includes("battle ended")) {
+        ctx.log("combat", `${target.name} — battle ended`);
+        return true;
+      }
     }
-    await bot.exec("battle", { action: "stance", stance });
 
-    // Set targeting priority on the current target
-    await bot.exec("battle", { action: "target", player_id: target.id });
+    // v2 battle/target uses 'id' as the positional target player/entity ID field
+    await bot.exec("battle", { action: "target", id: target.id });
 
-    // Advance to maintain close range
-    await bot.exec("battle", { action: "advance" });
+    const advResp = await bot.exec("battle", { action: "advance" });
+    if (advResp.error) {
+      const em = advResp.error.message.toLowerCase();
+      if (em.includes("not in battle") || em.includes("no battle") || em.includes("battle_over") || em.includes("battle ended")) {
+        ctx.log("combat", `${target.name} — battle ended`);
+        return true;
+      }
+    }
 
-    ctx.log("combat", `Tick ${tick + 1}: own ${ownHpPct}% | target ${targetHpPct}% | stance ${stance} — fighting ${target.name}`);
+    ctx.log("combat", `Tick ${tick + 1}: hull ${ownHpPct}% | stance ${stance} — fighting ${target.name}`);
   }
 
   ctx.log("combat", `Combat with ${target.name} reached max ticks — moving on`);
@@ -522,6 +508,41 @@ function findNextHuntSystem(fromSystemId: string, ms: MapStore): string | null {
   if (unmapped) return unmapped.system_id;
 
   return null;
+}
+
+// ── Auto fight-back ──────────────────────────────────────────
+
+/**
+ * Check get_status for an active battle and fight back if autoFightBack is set.
+ * Called after each refreshStatus() in the patrol loop.
+ */
+async function checkAndFightBack(
+  ctx: RoutineContext,
+  settings: ReturnType<typeof getHunterSettings>,
+): Promise<void> {
+  if (!settings.autoFightBack) return;
+  const { bot } = ctx;
+
+  const statusResp = await bot.exec("get_status");
+  if (statusResp.error || !statusResp.result) return;
+  const st = statusResp.result as Record<string, unknown>;
+  const inBattle = st.in_battle || st.battle_active || st.battle_id;
+  if (!inBattle) return;
+
+  ctx.log("combat", "⚡ Auto fight-back: active battle detected — setting fire stance and advancing");
+  await bot.exec("battle", { action: "stance", id: settings.preferredStance || "fire" });
+  await bot.exec("battle", { action: "advance" });
+
+  // Target the nearest hostile if possible
+  const nearbyResp = await bot.exec("get_nearby");
+  if (!nearbyResp.error && nearbyResp.result) {
+    const entities = parseNearby(nearbyResp.result);
+    const hostile = entities.find(e => isPirateTarget(e, settings.onlyNPCs));
+    if (hostile) {
+      await bot.exec("battle", { action: "target", id: hostile.id });
+      ctx.log("combat", `Auto fight-back: targeting ${hostile.name}`);
+    }
+  }
 }
 
 // ── Arrival combat scan ─────────────────────────────────────
@@ -815,9 +836,9 @@ export const hunterRoutine: Routine = async function* (ctx: RoutineContext) {
     hullThresholdPct: settings0.repairThreshold,
   });
 
-  // Enable auto-defend so the bot braces when hit while patrolling between engagements
-  const settings0AutoDefend = settings0.autoDefend;
-  bot.autoDefend = settings0AutoDefend;
+  // Enable auto-defend (brace/flee) and auto-fight-back (attack+fire) while patrolling
+  bot.autoDefend = settings0.autoDefend;
+  bot.autoFightBack = settings0.autoFightBack;
 
   let totalKills = 0;
 
@@ -838,6 +859,7 @@ export const hunterRoutine: Routine = async function* (ctx: RoutineContext) {
     yield "get_status";
     await bot.refreshStatus();
     logStatus(ctx);
+    await checkAndFightBack(ctx, settings);
 
     // ── Weapon + ammo check ──
     if (bot.ammo >= 0 && bot.ammo < settings.ammoThreshold && !bot.docked) {
@@ -1207,4 +1229,6 @@ export const hunterRoutine: Routine = async function* (ctx: RoutineContext) {
   }
 
   bot.autoDefend = false;
+  // Do NOT reset autoFightBack — botmanager sets it from global hunter settings
+  // so other routines (gatherer, miner, etc.) also fight back when attacked.
 };

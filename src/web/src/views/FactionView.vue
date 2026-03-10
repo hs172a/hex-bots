@@ -2,7 +2,7 @@
   <div class="flex-1 flex gap-2 p-2 overflow-hidden">
     <!-- Sidebar -->
     <div class="w-56 bg-space-card border border-space-border rounded-lg flex flex-col overflow-hidden flex-shrink-0">
-      <div class="px-3 py-2 border-b border-space-border">
+      <div class="px-2 py-2 border-b border-space-border">
         <h3 class="text-xs font-semibold text-space-text-dim uppercase tracking-wider">Faction</h3>
       </div>
       <div class="flex-1 overflow-auto p-2 scrollbar-dark">
@@ -13,7 +13,7 @@
           <button v-if="!factionData" @click="showCreateModal = true" class="w-full text-left px-2 py-1.5 text-xs rounded-md text-space-green hover:bg-space-row-hover transition-colors">Create Faction</button>
           <button v-if="!factionData" @click="checkInvites" :disabled="loading" class="w-full text-left px-2 py-1.5 text-xs rounded-md text-space-cyan hover:bg-space-row-hover transition-colors disabled:opacity-50">Check Invites</button>
           <button v-if="factionData && isMember" @click="leaveFaction" class="w-full text-left px-2 py-1.5 text-xs rounded-md text-space-red hover:bg-space-row-hover transition-colors">Leave Faction</button>
-          <button v-if="!factionData" @click="loadFactionList" :disabled="loading" class="w-full text-left px-2 py-1.5 text-xs rounded-md text-space-text-dim hover:bg-space-row-hover hover:text-space-text transition-colors disabled:opacity-50">All Factions</button>
+          <button _vif="!factionData" @click="loadFactionList" :disabled="loading" class="w-full text-left px-2 py-1.5 text-xs rounded-md text-space-text-dim hover:bg-space-row-hover hover:text-space-text transition-colors disabled:opacity-50">All Factions</button>
         </div>
       </div>
     </div>
@@ -26,8 +26,8 @@
       </div>
 
       <!-- Error/Status -->
-      <div v-if="errorMsg" class="mb-3 text-xs px-3 py-2 rounded bg-[#2d0000] text-space-red">{{ errorMsg }}</div>
-      <div v-if="statusMsg" class="mb-3 text-xs px-3 py-2 rounded bg-[#0d2818] text-space-green">{{ statusMsg }}</div>
+      <div v-if="errorMsg" class="mb-3 text-xs px-2 py-2 rounded bg-[#2d0000] text-space-red">{{ errorMsg }}</div>
+      <div v-if="statusMsg" class="mb-3 text-xs px-2 py-2 rounded bg-[#0d2818] text-space-green">{{ statusMsg }}</div>
 
       <!-- Loading -->
       <div v-if="selectedBot && loading && !factionData" class="text-xs text-space-text-dim italic py-6 text-center">Loading faction data...</div>
@@ -46,7 +46,7 @@
         <!-- All factions list -->
         <div v-if="factionList.length > 0" class="mt-6">
           <h3 class="text-sm font-semibold text-space-text-bright mb-2">All Factions</h3>
-          <div v-for="f in factionList" :key="f.id" @click="viewFactionDetails(f.id)" class="bg-space-bg border border-[#21262d] rounded-md p-3 mb-2 cursor-pointer hover:border-space-accent transition-colors">
+          <div v-for="f in factionList" :key="f.id" @click="viewFactionDetails(f.id)" class="bg-deep-bg border border-[#21262d] rounded-md p-2 mb-2 cursor-pointer hover:border-space-accent transition-colors">
             <div class="flex items-center justify-between">
               <div>
                 <span class="text-sm font-medium text-space-text">{{ f.name }}</span>
@@ -64,12 +64,12 @@
           <div class="flex items-start justify-between mb-2">
             <div>
               <h2 class="text-xl font-bold text-space-text-bright">{{ factionData.name }}</h2>
-              <div class="flex items-center gap-3 text-xs mt-1">
+              <div class="flex items-center gap-2 text-xs mt-1">
                 <span class="px-2 py-0.5 rounded text-space-text">[{{ factionData.tag }}]</span>
                 <span class="text-space-text-dim">Members: {{ factionData.member_count || 0 }}</span>
               </div>
             </div>
-            <button @click="factionData = null" class="btn text-xs px-3 py-1">← Back</button>
+            <button @click="factionData = null" class="btn text-xs px-2 py-1">← Back</button>
           </div>
           <p v-if="factionData.description" class="text-xs text-space-text-dim">{{ factionData.description }}</p>
         </div>
@@ -82,31 +82,31 @@
           <div class="flex items-start justify-between mb-3">
             <div>
               <h2 class="text-xl font-bold text-space-text-bright">{{ factionData.name }}</h2>
-              <div class="flex items-center gap-3 text-xs mt-1">
+              <div class="flex items-center gap-2 text-xs mt-1">
                 <span class="px-2 py-0.5 rounded text-space-text">[{{ factionData.tag }}]</span>
                 <span class="text-space-text-dim">Leader: {{ factionData.leader_username || factionData.leader || '-' }}</span>
               </div>
             </div>
-            <button @click="refreshData" :disabled="loading" class="btn text-xs px-3 py-1">Refresh</button>
+            <button @click="refreshData" :disabled="loading" class="btn text-xs px-2 py-1">Refresh</button>
           </div>
 
           <p v-if="factionData.description" class="text-xs text-space-text-dim mb-3">{{ factionData.description }}</p>
 
           <!-- Stats row -->
           <div class="grid grid-cols-4 gap-2 text-center">
-            <div class="bg-space-bg border border-[#21262d] rounded-md p-2">
+            <div class="bg-deep-bg border border-[#21262d] rounded-md p-2">
               <div class="text-lg font-bold text-space-cyan">{{ memberCount }}</div>
               <div class="text-[11px] text-space-text-dim">Members</div>
             </div>
-            <div class="bg-space-bg border border-[#21262d] rounded-md p-2">
+            <div class="bg-deep-bg border border-[#21262d] rounded-md p-2">
               <div class="text-lg font-bold text-space-green">{{ onlineCount }}</div>
               <div class="text-[11px] text-space-text-dim">Online</div>
             </div>
-            <div class="bg-space-bg border border-[#21262d] rounded-md p-2">
+            <div class="bg-deep-bg border border-[#21262d] rounded-md p-2">
               <div class="text-lg font-bold text-space-yellow">{{ fmt(factionData.treasury ?? factionData.credits ?? 0) }}</div>
               <div class="text-[11px] text-space-text-dim">Treasury</div>
             </div>
-            <div class="bg-space-bg border border-[#21262d] rounded-md p-2">
+            <div class="bg-deep-bg border border-[#21262d] rounded-md p-2">
               <div class="text-lg font-bold text-space-magenta">{{ ownFacilities.length }}</div>
               <div class="text-[11px] text-space-text-dim">Facilities</div>
             </div>
@@ -122,11 +122,11 @@
               @keydown.enter="depositCredits"
             />
             <button @click="depositCredits" :disabled="treasuryLoading || !treasuryAmount"
-              class="btn btn-secondary text-xs px-3 py-1 disabled:opacity-40">
+              class="btn btn-secondary text-xs px-2 py-1 disabled:opacity-40">
               {{ treasuryLoading ? '⏳' : '↑ Deposit' }}
             </button>
             <button @click="withdrawCredits" :disabled="treasuryLoading || !treasuryAmount"
-              class="btn text-xs px-3 py-1 disabled:opacity-40">
+              class="btn text-xs px-2 py-1 disabled:opacity-40">
               {{ treasuryLoading ? '⏳' : '↓ Withdraw' }}
             </button>
           </div>
@@ -135,7 +135,7 @@
         <!-- Horizontal section tabs -->
         <div class="flex gap-1 flex-wrap border-b border-[#21262d] mb-4 -mx-2 px-2 pb-0">
           <button v-for="sec in sections" :key="sec.id" @click="switchSection(sec.id)"
-            class="px-3 py-1.5 text-xs font-medium rounded-t border-b-2 transition-colors whitespace-nowrap"
+            class="px-2 py-1.5 text-xs font-medium rounded-t border-b-2 transition-colors whitespace-nowrap"
             :class="activeSection === sec.id
               ? 'border-space-accent text-space-accent bg-[rgba(88,166,255,0.08)]'
               : 'border-transparent text-space-text-dim hover:text-space-text hover:border-[#30363d]'"
@@ -147,13 +147,13 @@
           <div class="flex items-center justify-between mb-3">
             <h3 class="text-sm font-semibold text-space-text-bright">Members <span class="text-space-text-dim font-normal">({{ memberCount }}, {{ onlineCount }} online)</span></h3>
             <div class="flex gap-2">
-              <button @click="inviteOwnBots" :disabled="loading" class="btn btn-secondary text-xs px-3 py-1" title="Quick-invite bots from your fleet">+ Own Bots</button>
-              <button @click="showInviteModal = true" class="btn text-xs px-3 py-1">Invite Player</button>
+              <button @click="inviteOwnBots" :disabled="loading" class="btn btn-secondary text-xs px-2 py-1" title="Quick-invite bots from your fleet">+ Own Bots</button>
+              <button @click="showInviteModal = true" class="btn text-xs px-2 py-1">Invite Player</button>
             </div>
           </div>
           <div v-if="!members.length" class="text-xs text-space-text-dim italic">No member data.</div>
-          <div v-for="m in members" :key="m.player_id || m.username" class="flex items-center justify-between py-2 px-3 border-b border-[#21262d] hover:bg-space-row-hover transition-colors">
-            <div class="flex items-center gap-3">
+          <div v-for="m in members" :key="m.player_id || m.username" class="flex items-center justify-between py-2 px-2 border-b border-[#21262d] hover:bg-space-row-hover transition-colors">
+            <div class="flex items-center gap-2">
               <div class="relative w-7 h-7 bg-space-accent rounded-full flex items-center justify-center text-xs text-white font-bold shrink-0">
                 {{ (m.username || '?')[0].toUpperCase() }}
                 <span class="absolute -bottom-0.5 -right-0.5 w-2.5 h-2.5 rounded-full border-2 border-space-card"
@@ -182,7 +182,7 @@
         <div v-if="activeSection === 'storage'">
           <div class="flex items-center justify-between mb-3">
             <h3 class="text-sm font-semibold text-space-text-bright">Faction Storage</h3>
-            <button @click="loadStorage" :disabled="loading" class="btn text-xs px-3 py-1">{{ storageLoaded ? 'Reload' : 'Load Storage' }}</button>
+            <button @click="loadStorage" :disabled="loading" class="btn text-xs px-2 py-1">{{ storageLoaded ? 'Reload' : 'Load Storage' }}</button>
           </div>
           <div v-if="!storageLoaded" class="text-xs text-space-text-dim italic py-4 text-center">Click "Load Storage" to view items (bot must be docked at a faction storage facility).</div>
           <div v-else-if="storageError" class="text-xs text-space-red px-2 py-2">{{ storageError }}</div>
@@ -192,7 +192,7 @@
               <h4 class="text-[11px] font-semibold uppercase tracking-wider text-space-text-dim mb-1.5">{{ category }}</h4>
               <div class="grid grid-cols-2 gap-1">
                 <div v-for="item in items" :key="item.item_id || item.name"
-                  class="flex items-center justify-between py-1.5 px-2 rounded bg-space-bg hover:bg-space-row-hover transition-colors">
+                  class="flex items-center justify-between py-1.5 px-2 rounded bg-deep-bg hover:bg-space-row-hover transition-colors">
                   <span class="text-xs text-space-text truncate">{{ item.name || item.item_id }}</span>
                   <span class="text-xs font-mono ml-2 shrink-0" :class="CATEGORY_COLORS[category] || 'text-space-text-dim'">{{ fmt(item.quantity) }}</span>
                 </div>
@@ -205,14 +205,14 @@
         <div v-if="activeSection === 'buildings'">
           <div class="flex items-center justify-between mb-3">
             <h3 class="text-sm font-semibold text-space-text-bright">Faction Infrastructure</h3>
-            <button @click="loadFacilities" :disabled="loading" class="btn text-xs px-3 py-1">Refresh</button>
+            <button @click="loadFacilities" :disabled="loading" class="btn text-xs px-2 py-1">Refresh</button>
           </div>
 
           <!-- Existing facilities -->
           <h4 class="text-xs font-semibold text-space-text-dim uppercase mb-2">Active Facilities</h4>
           <div v-if="ownFacilities.length > 0" class="grid grid-cols-5 gap-2">
             <div v-for="f in ownFacilities" :key="f.facility_id"
-              class="bg-space-bg border border-[#21262d] rounded-md p-2 mb-2 text-xs"
+              class="bg-deep-bg border border-[#21262d] rounded-md p-2 mb-2 text-xs"
               :class="f.active === false ? 'opacity-60' : ''">
               <div class="flex items-start justify-between gap-2">
                 <div class="min-w-0 flex-1">
@@ -255,7 +255,7 @@
           <h4 class="text-xs font-semibold text-space-text-dim uppercase mb-2">Build New Facility</h4>
           <div v-if="allBuildableTypes.length > 0" class="grid grid-cols-5 gap-2">
             <div v-for="bt in allBuildableTypes" :key="bt.id"
-              class="bg-space-bg border border-[#21262d] rounded-md p-2 mb-2 text-xs transition-opacity"
+              class="bg-deep-bg border border-[#21262d] rounded-md p-2 mb-2 text-xs transition-opacity"
               :class="[!bt.buildable && !hasFacility(bt.id) ? 'opacity-50' : '', !bt.buildable && hasFacility(bt.id) ? 'border-green-900/30' : '']">
               <div class="flex items-start justify-between gap-2">
                 <div class="min-w-0 flex-1">
@@ -377,7 +377,7 @@
         <div v-if="activeSection === 'allstorages'">
           <div class="flex items-center justify-between mb-3">
             <h3 class="text-sm font-semibold text-space-text-bright">All Faction Storages <span class="text-space-text-dim font-normal text-xs">({{ filteredAllStorageItems.length }} items)</span></h3>
-            <button @click="fetchAllStorages" :disabled="botStore.factionStorageLoading" class="btn text-xs px-3 py-1">{{ botStore.factionStorageLoading ? '⏳' : '🔄 Refresh' }}</button>
+            <button @click="fetchAllStorages" :disabled="botStore.factionStorageLoading" class="btn text-xs px-2 py-1">{{ botStore.factionStorageLoading ? '⏳' : '🔄 Refresh' }}</button>
           </div>
 
           <!-- Filters -->
@@ -410,7 +410,7 @@
               </div>
               <div class="grid grid-cols-2 gap-1">
                 <div v-for="item in group.items" :key="item.item_id"
-                  class="flex items-center justify-between py-1 px-2 rounded bg-space-bg hover:bg-space-row-hover transition-colors">
+                  class="flex items-center justify-between py-1 px-2 rounded bg-deep-bg hover:bg-space-row-hover transition-colors">
                   <span class="text-xs text-space-text truncate">{{ item.item_name || item.item_id }}</span>
                   <span class="text-xs font-mono ml-2 shrink-0" :class="itemTypeColor(item.item_id)">{{ fmt(item.quantity) }}</span>
                 </div>
@@ -433,8 +433,8 @@
           <div class="flex items-center justify-between mb-4">
             <h3 class="text-sm font-semibold text-space-text-bright">Faction Missions</h3>
             <div class="flex gap-2">
-              <button @click="loadFactionMissions" :disabled="missionsLoading" class="btn btn-secondary text-xs px-3">{{ missionsLoading ? '⏳' : '🔄 Refresh' }}</button>
-              <button @click="showPostMissionModal = true" class="btn btn-primary text-xs px-3">+ Post Mission</button>
+              <button @click="loadFactionMissions" :disabled="missionsLoading" class="btn btn-secondary text-xs px-2">{{ missionsLoading ? '⏳' : '🔄 Refresh' }}</button>
+              <button @click="showPostMissionModal = true" class="btn btn-primary text-xs px-2">+ Post Mission</button>
             </div>
           </div>
 
@@ -442,8 +442,8 @@
           <div v-else-if="factionMissions.length === 0" class="text-xs text-space-text-dim italic text-center py-6">No missions posted by this faction.</div>
           <div v-else class="space-y-2">
             <div v-for="m in factionMissions" :key="m.id || m.mission_id"
-              class="bg-space-bg border border-[#21262d] rounded-md p-3 hover:border-space-accent/30 transition-colors">
-              <div class="flex items-start justify-between gap-3">
+              class="bg-deep-bg border border-[#21262d] rounded-md p-2 hover:border-space-accent/30 transition-colors">
+              <div class="flex items-start justify-between gap-2">
                 <div class="min-w-0 flex-1">
                   <div class="flex items-center gap-2 flex-wrap">
                     <span class="text-sm font-medium text-space-text-bright">{{ m.title || m.name }}</span>
@@ -451,7 +451,7 @@
                     <span v-if="m.difficulty" class="text-[11px] text-space-text-dim">Diff {{ m.difficulty }}</span>
                   </div>
                   <div v-if="m.description" class="text-xs text-space-text-dim mt-1 line-clamp-2">{{ m.description }}</div>
-                  <div class="flex items-center gap-3 mt-1.5 text-[11px]">
+                  <div class="flex items-center gap-2 mt-1.5 text-[11px]">
                     <span v-if="m.reward_credits || m.reward?.credits" class="text-space-yellow">💰 {{ fmt(m.reward_credits || m.reward?.credits || 0) }} cr</span>
                     <span v-if="m.expires_at" class="text-space-text-dim">⏱ Expires {{ formatDate(m.expires_at) }}</span>
                     <span v-if="m.accepted_count !== undefined" class="text-space-text-dim">{{ m.accepted_count }} accepted</span>
@@ -484,7 +484,7 @@
                       <label class="text-xs text-space-text-dim block mb-1">Description</label>
                       <textarea v-model="newMission.description" rows="3" placeholder="Mission briefing…" class="input text-sm w-full resize-none"></textarea>
                     </div>
-                    <div class="grid grid-cols-2 gap-3">
+                    <div class="grid grid-cols-2 gap-2">
                       <div>
                         <label class="text-xs text-space-text-dim block mb-1">Type</label>
                         <select v-model="newMission.type" class="input text-sm w-full">
@@ -501,7 +501,7 @@
                         <input v-model.number="newMission.reward_credits" type="number" min="0" placeholder="0" class="input text-sm w-full" />
                       </div>
                     </div>
-                    <div class="grid grid-cols-2 gap-3">
+                    <div class="grid grid-cols-2 gap-2">
                       <div>
                         <label class="text-xs text-space-text-dim block mb-1">Min Level</label>
                         <input v-model.number="newMission.min_level" type="number" min="0" placeholder="0" class="input text-sm w-full" />
@@ -528,40 +528,40 @@
         <div v-if="activeSection === 'intel'">
           <div class="flex items-center justify-between mb-4">
             <h3 class="text-sm font-semibold text-space-text-bright">Trade Intelligence</h3>
-            <button @click="loadIntelStatus" :disabled="intelLoading" class="btn btn-secondary text-xs px-3">{{ intelLoading ? '⏳' : '🔄 Refresh' }}</button>
+            <button @click="loadIntelStatus" :disabled="intelLoading" class="btn btn-secondary text-xs px-2">{{ intelLoading ? '⏳' : '🔄 Refresh' }}</button>
           </div>
 
           <!-- Coverage stats -->
-          <div v-if="intelStatus" class="grid grid-cols-3 gap-3 mb-4">
-            <div class="bg-space-bg border border-[#21262d] rounded-md p-3 text-center">
+          <div v-if="intelStatus" class="grid grid-cols-3 gap-2 mb-4">
+            <div class="bg-deep-bg border border-[#21262d] rounded-md p-2 text-center">
               <div class="text-xl font-bold text-space-cyan">{{ intelStatus.systems_covered ?? '—' }}</div>
               <div class="text-[11px] text-space-text-dim">Systems Covered</div>
             </div>
-            <div class="bg-space-bg border border-[#21262d] rounded-md p-3 text-center">
+            <div class="bg-deep-bg border border-[#21262d] rounded-md p-2 text-center">
               <div class="text-xl font-bold text-space-yellow">{{ intelStatus.total_reports ?? '—' }}</div>
               <div class="text-[11px] text-space-text-dim">Reports</div>
             </div>
-            <div class="bg-space-bg border border-[#21262d] rounded-md p-3 text-center">
+            <div class="bg-deep-bg border border-[#21262d] rounded-md p-2 text-center">
               <div class="text-xl font-bold text-space-green">{{ intelStatus.freshness_score ?? '—' }}</div>
               <div class="text-[11px] text-space-text-dim">Freshness</div>
             </div>
           </div>
 
           <!-- Query intel -->
-          <div class="card py-2 px-3 mb-3">
+          <div class="card py-2 px-2 mb-3">
             <h4 class="text-xs font-semibold text-space-text-dim uppercase mb-2">Query Intel</h4>
             <div class="flex gap-2">
               <input v-model="intelQuery" type="text" placeholder="Item ID or system ID…" class="input text-xs flex-1" @keydown.enter="queryIntel" />
-              <button @click="queryIntel" :disabled="intelLoading || !intelQuery.trim()" class="btn btn-primary text-xs px-3">Search</button>
+              <button @click="queryIntel" :disabled="intelLoading || !intelQuery.trim()" class="btn btn-primary text-xs px-2">Search</button>
             </div>
             <div v-if="intelResults.length > 0" class="mt-3 space-y-1">
               <div v-for="(r, i) in intelResults" :key="i"
-                class="flex items-center justify-between px-2 py-1.5 bg-space-bg border border-[#21262d] rounded text-xs">
+                class="flex items-center justify-between px-2 py-1.5 bg-deep-bg border border-[#21262d] rounded text-xs">
                 <div>
                   <span class="text-space-text-bright">{{ r.item_name || r.item_id }}</span>
                   <span class="text-space-text-dim ml-2">@ {{ r.station_name || r.base_name || r.location }}</span>
                 </div>
-                <div class="flex gap-3 shrink-0">
+                <div class="flex gap-2 shrink-0">
                   <span v-if="r.buy_price" class="text-space-cyan">Buy: {{ fmt(r.buy_price) }}</span>
                   <span v-if="r.sell_price" class="text-space-yellow">Sell: {{ fmt(r.sell_price) }}</span>
                   <span v-if="r.timestamp" class="text-space-text-dim">{{ formatDate(r.timestamp) }}</span>
@@ -572,7 +572,7 @@
           </div>
 
           <!-- Submit intel -->
-          <div class="card py-2 px-3">
+          <div class="card py-2 px-2">
             <h4 class="text-xs font-semibold text-space-text-dim uppercase mb-2">Submit Market Observation</h4>
             <div class="grid grid-cols-2 gap-2">
               <div>

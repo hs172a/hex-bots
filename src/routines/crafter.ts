@@ -384,15 +384,35 @@ function hasMaterialsAnywhere(ctx: RoutineContext, recipe: Recipe): boolean {
   return true;
 }
 
-/** Build a lookup: output_item_id → Recipe, so we can find what recipe produces a given item. */
-function buildRecipeIndex(recipes: Recipe[]): Map<string, Recipe> {
-  const index = new Map<string, Recipe>();
+/** Build a lookup: output_item_id → Recipe[], so we can find all recipes that produce a given item.
+ * Multiple recipes may produce the same output (e.g. different recipes for Circuit Board). */
+function buildRecipeIndex(recipes: Recipe[]): Map<string, Recipe[]> {
+  const index = new Map<string, Recipe[]>();
   for (const r of recipes) {
-    if (r.output_item_id) {
-      index.set(r.output_item_id, r);
-    }
+    if (!r.output_item_id) continue;
+    if (!index.has(r.output_item_id)) index.set(r.output_item_id, []);
+    index.get(r.output_item_id)!.push(r);
   }
   return index;
+}
+
+/**
+ * Pick the best recipe from a list of candidates:
+ * 1. Prefer the explicitly requested recipe_id (from goal settings).
+ * 2. Otherwise prefer a recipe the bot has the skill to craft.
+ * 3. Fall back to the first available.
+ */
+function pickRecipe(
+  candidates: Recipe[],
+  ctx: RoutineContext,
+  preferRecipeId?: string,
+): Recipe | null {
+  if (candidates.length === 0) return null;
+  if (preferRecipeId) {
+    const explicit = candidates.find(r => r.recipe_id === preferRecipeId);
+    if (explicit) return explicit;
+  }
+  return candidates.find(r => canCraftSkillwise(ctx, r).ok) ?? candidates[0];
 }
 
 /**
@@ -404,7 +424,7 @@ function buildRecipeIndex(recipes: Recipe[]): Map<string, Recipe> {
 async function craftPrerequisites(
   ctx: RoutineContext,
   recipe: Recipe,
-  recipeIndex: Map<string, Recipe>,
+  recipeIndex: Map<string, Recipe[]>,
   depth: number = 0,
 ): Promise<string[]> {
   if (depth > 2) return []; // prevent infinite recursion
@@ -416,8 +436,15 @@ async function craftPrerequisites(
     if (totalAvailable >= comp.quantity) continue; // have enough
 
     const deficit = comp.quantity - totalAvailable;
-    const prereqRecipe = recipeIndex.get(comp.item_id);
-    if (!prereqRecipe) continue; // no recipe to craft this item
+    const prereqRecipe = pickRecipe(recipeIndex.get(comp.item_id) ?? [], ctx);
+    if (!prereqRecipe) continue; // no suitable recipe to craft this item
+
+    // Skip if the bot lacks the required skill for this prereq recipe
+    const prereqSkill = canCraftSkillwise(ctx, prereqRecipe);
+    if (!prereqSkill.ok) {
+      ctx.log("warn", `[craftPrerequisites] Skill too low for '${prereqRecipe.name}': ${prereqSkill.reason} — cannot craft prereq`);
+      continue;
+    }
 
     // How many batches do we need? (each batch produces output_quantity)
     const batchesNeeded = Math.ceil(deficit / (prereqRecipe.output_quantity || 1));
@@ -484,7 +511,7 @@ async function craftPrerequisites(
 async function grindCraftingXP(
   ctx: RoutineContext,
   recipes: Recipe[],
-  recipeIndex: Map<string, Recipe>,
+  recipeIndex: Map<string, Recipe[]>,
   allowedRecipeIds?: Set<string>,
   excludeRecipeIds?: Set<string>,
 ): Promise<string[]> {
@@ -504,8 +531,13 @@ async function grindCraftingXP(
         allowedRecipeIds.has(recipe.name) ||
         allowedRecipeIds.has(recipe.name.toLowerCase());
       // Also allow recipes whose output is a component of an allowed recipe
-      const isPrereq = [...allowedRecipeIds].some(id => {
-        const parent = recipeIndex.get(id);
+      // NOTE: recipeIndex is keyed by output_item_id, not recipe_id — look up in recipes array
+      const isPrereq = [...allowedRecipeIds].some(allowedId => {
+        const parent = recipes.find(r =>
+          r.recipe_id === allowedId ||
+          r.name === allowedId ||
+          r.name.toLowerCase() === allowedId.toLowerCase()
+        );
         return parent?.components.some(c => c.item_id === recipe.output_item_id);
       });
       if (!isAllowed && !isPrereq) continue;
@@ -882,9 +914,10 @@ export const crafterRoutine: Routine = async function* (ctx: RoutineContext) {
           if (goal.goal_type !== "craft" && goal.goal_type !== "crafter") continue;
 
           const recipe = recipes.find(r =>
+            (goal.recipe_id && r.recipe_id === goal.recipe_id) ||
             r.output_item_id === goal.target_id ||
             r.recipe_id === goal.target_id ||
-            (goal.target_name && r.name === goal.target_name)
+            (goal.target_name && (r.name === goal.target_name || r.output_name === goal.target_name))
           );
           if (!recipe) {
             ctx.log("warn", `[CrafterGoal] No recipe for '${goal.target_name || goal.target_id}' — skipping`);
@@ -963,6 +996,11 @@ export const crafterRoutine: Routine = async function* (ctx: RoutineContext) {
             totalCrafted += qty;
             bot.stats.totalCrafted += qty;
             applyCraftDelta(ctx, recipe, batchCount, result);
+            // Flush cargo immediately if next batch is not possible
+            if (!hasMaterialsAnywhere(ctx, recipe)) {
+              await dumpCargo(ctx);
+              break;
+            }
           }
 
           if (goalCrafted > 0) {
@@ -1174,10 +1212,17 @@ export const crafterRoutine: Routine = async function* (ctx: RoutineContext) {
         totalCrafted += actualCount;
         bot.stats.totalCrafted += actualCount;
         applyCraftDelta(ctx, recipe, batchSize, result);
+        // Flush cargo immediately when no materials left for the next batch
+        if (!hasMaterialsAnywhere(ctx, recipe)) {
+          await dumpCargo(ctx);
+          break;
+        }
       }
 
       if (crafted > 0) {
         craftedSummary.push(`${crafted}x ${recipe.name}`);
+        // Dump any remaining crafted output before processing the next recipe
+        if (bot.docked) await dumpCargo(ctx);
       }
 
       // ── Skill too low: try grinding XP on configured recipes only ──
@@ -1278,10 +1323,16 @@ export const crafterRoutine: Routine = async function* (ctx: RoutineContext) {
           bot.stats.totalCrafted += qty;
           craftedSummary.push(`${qty}x ${recipe.name}`);
           applyCraftDelta(ctx, recipe, batchCount, result);
-          if (!hasMaterialsAnywhere(ctx, recipe)) break;
+          if (!hasMaterialsAnywhere(ctx, recipe)) {
+            await dumpCargo(ctx);
+            break;
+          }
           await withdrawFactionMaterials(ctx, recipe, targetBatch());
           await withdrawStorageMaterials(ctx, recipe, targetBatch());
-          if (getMissingMaterial(ctx, recipe)) break;
+          if (getMissingMaterial(ctx, recipe)) {
+            await dumpCargo(ctx);
+            break;
+          }
         }
       }
     }

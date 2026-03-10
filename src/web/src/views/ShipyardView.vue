@@ -35,7 +35,7 @@
         <div v-else class="space-y-3">
 
           <!-- ── Header ── -->
-          <div class="bg-space-bg border border-[#21262d] rounded-md overflow-hidden">
+          <div class="bg-deep-bg border border-[#21262d] rounded-md overflow-hidden">
             <!-- Ship image banner -->
             <div v-if="shipClass" class="relative h-32 bg-[#0d1117] overflow-hidden">
               <img :src="shipImageUrl(shipClass)" :alt="shipName"
@@ -88,7 +88,7 @@
           </div>
 
           <!-- ── Resource Bars ── -->
-          <div class="bg-space-bg border border-[#21262d] rounded-md p-3">
+          <div class="bg-deep-bg border border-[#21262d] rounded-md p-3">
             <div class="text-[11px] font-semibold text-space-text-dim uppercase tracking-wider mb-2">Ship Status</div>
             <div class="grid grid-cols-2 gap-x-4 gap-y-2">
               <div>
@@ -155,7 +155,7 @@
           </div>
 
           <!-- ── Characteristics ── -->
-          <div class="bg-space-bg border border-[#21262d] rounded-md p-3">
+          <div class="bg-deep-bg border border-[#21262d] rounded-md p-3">
             <div class="text-[11px] font-semibold text-space-text-dim uppercase tracking-wider mb-2">Characteristics</div>
             <div class="grid grid-cols-3 gap-x-3 gap-y-1.5 text-[11px]">
               <div v-if="ship.speed != null || currentShipCatalog?.base_speed" class="flex justify-between gap-1">
@@ -202,7 +202,7 @@
           </div>
 
           <!-- ── Description ── -->
-          <div v-if="currentShipCatalog?.description" class="bg-space-bg border border-[#21262d] rounded-md p-3">
+          <div v-if="currentShipCatalog?.description" class="bg-deep-bg border border-[#21262d] rounded-md p-3">
             <div class="text-[11px] font-semibold text-space-text-dim uppercase tracking-wider mb-1.5">Description</div>
             <div class="text-xs text-space-text-dim leading-relaxed">{{ currentShipCatalog.description }}</div>
             <div class="flex flex-wrap gap-1 mt-2" v-if="currentShipCatalog.flavor_tags?.length">
@@ -211,7 +211,7 @@
           </div>
 
           <!-- ── Quick Actions ── -->
-          <div class="bg-space-bg border border-[#21262d] rounded-md p-3">
+          <div class="bg-deep-bg border border-[#21262d] rounded-md p-3">
             <div class="text-[11px] font-semibold text-space-text-dim uppercase tracking-wider mb-2">Quick Actions</div>
             <div class="flex gap-2 flex-wrap">
               <button v-if="isDocked" @click="execCmd('repair')" :disabled="loading" class="btn text-xs px-3 py-1">🔧 Repair</button>
@@ -221,10 +221,19 @@
               <button @click="fetchShipData(selectedBot!)" :disabled="loading" class="btn text-xs px-3 py-1">🔄 Refresh</button>
             </div>
             <div v-if="!isDocked" class="text-[11px] text-space-text-dim italic mt-1.5">Dock at a station to repair or refuel.</div>
+            <!-- Rename ship (v0.200) -->
+            <div class="mt-3 pt-3 border-t border-[#21262d]">
+              <div class="text-[11px] font-semibold text-space-text-dim uppercase tracking-wider mb-1.5">✏️ Rename Ship</div>
+              <div class="flex gap-2 items-center">
+                <input v-model="renameShipName" type="text" maxlength="32" minlength="3" placeholder="New name (3–32 chars, globally unique)…" class="input text-xs flex-1 !py-1" />
+                <button @click="renameShip" :disabled="renameSaving || renameShipName.trim().length < 3" class="btn btn-primary text-xs px-3 py-1 shrink-0">{{ renameSaving ? '⏳' : '✏️ Rename' }}</button>
+              </div>
+              <div class="text-[11px] text-space-text-dim mt-1">Send empty name to clear custom name. Names are globally unique and visible to other players.</div>
+            </div>
           </div>
 
           <!-- ── Modules ── -->
-          <div class="bg-space-bg border border-[#21262d] rounded-md p-3">
+          <div class="bg-deep-bg border border-[#21262d] rounded-md p-3">
             <div class="flex items-center justify-between mb-2">
               <div class="text-[11px] font-semibold text-space-text-dim uppercase tracking-wider">Installed Modules</div>
               <span class="text-[11px] text-space-text-dim">{{ modules.length }} installed</span>
@@ -251,7 +260,7 @@
           </div>
 
           <!-- ── Cargo hold ── -->
-          <div v-if="currentBot?.inventory?.length" class="bg-space-bg border border-[#21262d] rounded-md p-3">
+          <div v-if="currentBot?.inventory?.length" class="bg-deep-bg border border-[#21262d] rounded-md p-3">
             <div class="text-[11px] font-semibold text-space-text-dim uppercase tracking-wider mb-2">Cargo Hold</div>
             <div class="grid grid-cols-2 gap-x-4 gap-y-1">
               <div v-for="item in currentBot.inventory" :key="item.itemId || item.item_id" class="flex items-center justify-between text-[11px]">
@@ -272,8 +281,8 @@
         </div>
         <div v-if="fleetLoading" class="text-xs text-space-text-dim italic">Loading fleet...</div>
         <div v-else-if="fleet.length === 0" class="text-xs text-space-text-dim italic py-4">No ships found. Click Refresh to load.</div>
-        <div v-else class="space-y-3">
-          <div v-for="s in fleet" :key="s.ship_id" class="bg-space-bg border border-[#21262d] rounded-md text-xs overflow-hidden">
+        <div v-else class="grid grid-cols-3 gap-3">
+          <div v-for="s in fleet" :key="s.ship_id" class="bg-deep-bg border border-[#21262d] rounded-md text-xs overflow-hidden flex flex-col">
             <!-- Ship image strip -->
             <div class="relative h-20 bg-[#0d1117] overflow-hidden">
               <img :src="shipImageUrl(s.class_id)" :alt="s.class_name"
@@ -309,26 +318,25 @@
                 </div>
               </div>
             </div>
-            <!-- Details row -->
-            <div class="flex items-center justify-between gap-2">
-              <div class="text-space-text-dim space-x-3 min-w-0">
+            <!-- Details + actions -->
+            <div class="space-y-1.5">
+              <div class="text-[11px] text-space-text-dim flex flex-wrap gap-x-2">
                 <span>⚙️ {{ s.modules }} mod</span>
-                <span>📦 {{ s.cargo_used }} cargo</span>
-                <span>📍 {{ s.location }}</span>
+                <span>📦 {{ s.cargo_used }}</span>
+                <span class="truncate">📍 {{ s.location }}</span>
               </div>
-              <div class="flex gap-1.5 shrink-0">
+              <div class="flex gap-1 flex-wrap">
                 <button
                   v-if="s.can_switch && isDocked"
                   @click="switchShip(s.ship_id)"
                   :disabled="loading"
                   class="btn btn-primary text-[11px] px-2 py-0.5"
                 >Switch</button>
-                <!-- Sell Ship confirmation -->
                 <template v-if="!s.is_active && !s.starter_ship && isDocked">
                   <template v-if="sellConfirmId === s.ship_id">
                     <button @click="sellShip(s.ship_id)" :disabled="loading"
                       class="text-[11px] px-2 py-0.5 rounded border border-space-red/60 text-space-red bg-red-900/20 hover:bg-red-900/40 transition-colors">
-                      ✓ Confirm Sell
+                      ✓ Sell
                     </button>
                     <button @click="sellConfirmId = ''" class="text-[11px] px-1.5 py-0.5 rounded border border-space-border text-space-text-dim hover:text-space-text transition-colors">✕</button>
                   </template>
@@ -337,6 +345,20 @@
                     💰 Sell
                   </button>
                 </template>
+              </div>
+              <!-- Transfer ship to player -->
+              <div v-if="!s.is_active && !s.starter_ship && isDocked" class="flex gap-1 items-center pt-1 border-t border-[#21262d]">
+                <input
+                  :value="transferTargets[s.ship_id] || ''"
+                  @input="transferTargets[s.ship_id] = ($event.target as HTMLInputElement).value"
+                  type="text" placeholder="📤 Transfer to player…"
+                  class="input text-[11px] flex-1 !py-0.5"
+                />
+                <button
+                  @click="transferShip(s.ship_id)"
+                  :disabled="loading || !(transferTargets[s.ship_id] || '').trim()"
+                  class="text-[11px] px-2 py-0.5 rounded border border-space-border text-space-text-dim hover:border-space-accent hover:text-space-accent transition-colors disabled:opacity-40 shrink-0"
+                >🤝</button>
               </div>
             </div>
             </div>
@@ -351,7 +373,7 @@
           <span v-if="showroomLevel !== null" class="text-xs text-space-text-dim">Shipyard Level {{ showroomLevel }}</span>
         </div>
         <!-- Station description from catalog -->
-        <div v-if="currentStationCatalog" class="mb-3 bg-space-bg border border-[#21262d] rounded-md p-3 text-xs">
+        <div v-if="currentStationCatalog" class="mb-3 bg-deep-bg border border-[#21262d] rounded-md p-3 text-xs">
           <div class="flex items-center gap-2 mb-1">
             <span class="text-space-text font-semibold">{{ currentStationCatalog.name }}</span>
             <span class="text-space-text-dim text-[11px]">{{ currentStationCatalog.empire_name }}</span>
@@ -368,7 +390,7 @@
           <button @click="loadShowroom" :disabled="showroomLoading" class="btn text-xs px-3 py-1">🔄 Refresh</button>
         </div>
         <div v-else class="grid grid-cols-3 gap-2">
-          <div v-for="s in showroom" :key="s.class_id" class="flex flex-col !mb-2 bg-space-bg border border-[#21262d] rounded-md text-xs overflow-hidden">
+          <div v-for="s in [...showroom].sort((a,b) => (a.name||'').localeCompare(b.name||''))" :key="s.class_id" class="flex flex-col !mb-2 bg-deep-bg border border-[#21262d] rounded-md text-xs overflow-hidden">
             <div class="relative h-24 bg-[#0d1117] overflow-hidden">
               <img :src="shipImageUrl(s.class_id)" :alt="s.name"
                 class="w-full h-full object-cover opacity-65"
@@ -379,10 +401,18 @@
                 <div class="text-[10px] text-white/60">{{ s.category }} {{ s.scale ? '• ' + s.scale : '' }}</div>
               </div>
             </div>
-            <div class="flex items-center justify-between px-3 py-2">
-              <span class="text-space-text-dim text-[11px]">{{ s.class_id }}</span>
-              <div class="flex items-center gap-2">
-                <span class="text-space-yellow font-semibold">{{ fmt(s.price) }} cr</span>
+            <div class="px-3 py-2 space-y-1.5">
+              <div class="flex items-center justify-between gap-1 text-[11px] text-space-text-dim flex-wrap">
+                <span v-if="s.hull !== null">🛡 {{ s.hull }}</span>
+                <span v-if="s.shield !== null">🔵 {{ s.shield }}</span>
+                <span v-if="s.cargo !== null">📦 {{ s.cargo }}</span>
+                <span v-if="s.speed !== null">⚡ {{ s.speed }}</span>
+              </div>
+              <div class="flex items-center justify-between">
+                <div class="text-[10px] text-space-text-dim leading-tight">
+                  <div class="text-space-yellow font-semibold text-[11px]">{{ fmt(s.price) }} cr</div>
+                  <div v-if="s.material_cost !== null" class="opacity-70">Mat: {{ fmt(s.material_cost) }} + Labor: {{ fmt(s.labor_cost) }}</div>
+                </div>
                 <button
                   @click="buyShip(s.class_id)"
                   :disabled="loading || botCredits < s.price"
@@ -406,13 +436,13 @@
               v-model="commissionSearch"
               type="text"
               placeholder="Search ship name..."
-              class="bg-space-bg border border-space-border rounded-md px-2 py-1 text-xs text-space-text placeholder-space-text-dim focus:border-space-accent outline-none flex-1 min-w-0"
+              class="bg-deep-bg border border-space-border rounded-md px-2 py-1 text-xs text-space-text placeholder-space-text-dim focus:border-space-accent outline-none flex-1 min-w-0"
             />
-            <select v-model="commissionEmpireFilter" class="bg-space-bg border border-space-border rounded-md px-2 py-1 text-xs text-space-text focus:border-space-accent outline-none">
+            <select v-model="commissionEmpireFilter" class="bg-deep-bg border border-space-border rounded-md px-2 py-1 text-xs text-space-text focus:border-space-accent outline-none">
               <option value="">All empires</option>
               <option v-for="[empire] in shipsGroupedByEmpire" :key="empire" :value="empire">{{ empire }}</option>
             </select>
-            <select v-model="commissionTierFilter" class="bg-space-bg border border-space-border rounded-md px-2 py-1 text-xs text-space-text focus:border-space-accent outline-none">
+            <select v-model="commissionTierFilter" class="bg-deep-bg border border-space-border rounded-md px-2 py-1 text-xs text-space-text focus:border-space-accent outline-none">
               <option value="">All tiers</option>
               <option v-for="t in allTiers" :key="t" :value="t">Tier {{ t }}</option>
             </select>
@@ -423,7 +453,7 @@
             <select
               v-model="commissionShipClass"
               @change="onShipClassChange"
-              class="flex-1 bg-space-bg border border-space-border rounded-md px-2 py-1.5 text-xs text-space-text focus:border-space-accent outline-none"
+              class="flex-1 bg-deep-bg border border-space-border rounded-md px-2 py-1.5 text-xs text-space-text focus:border-space-accent outline-none"
             >
               <option value="">— Select a ship class —</option>
               <optgroup v-for="[empire, ships] in filteredShipsGrouped" :key="empire" :label="empire">
@@ -460,7 +490,7 @@
           <div v-if="selectedShipCatalog || commissionQuote" class="flex gap-3 items-start">
 
             <!-- Left: Selected ship details (2/3) -->
-            <div v-if="selectedShipCatalog" class="flex-[2] bg-space-bg border border-[#21262d] rounded-md p-3 text-xs space-y-2 min-w-0">
+            <div v-if="selectedShipCatalog" class="flex-[2] bg-deep-bg border border-[#21262d] rounded-md p-3 text-xs space-y-2 min-w-0">
               <div class="flex items-start justify-between gap-2">
                 <div>
                   <div class="text-space-text font-semibold">{{ selectedShipCatalog.name }} | {{ selectedShipCatalog.id }}</div>
@@ -520,7 +550,7 @@
             </div>
 
             <!-- Right: Quote (1/3) -->
-            <div v-if="commissionQuote" class="flex-1 bg-space-bg border border-space-accent/30 rounded-md p-3 text-xs space-y-1.5 min-w-0">
+            <div v-if="commissionQuote" class="flex-1 bg-deep-bg border border-space-accent/30 rounded-md p-3 text-xs space-y-1.5 min-w-0">
               <div class="text-space-text font-semibold">Quote: {{ commissionQuote.ship_class || commissionShipClass }}</div>
 
               <!-- Cost breakdown -->
@@ -628,7 +658,7 @@
         <div v-if="statusLoading" class="text-xs text-space-text-dim italic">Loading commissions...</div>
         <div v-else-if="commissionStatuses.length === 0" class="text-xs text-space-text-dim italic py-4">No commissions found. Click Refresh to load.</div>
         <div v-else class="space-y-3">
-          <div v-for="c in commissionStatuses" :key="c.commission_id || c.id" class="bg-space-bg border border-[#21262d] rounded-md p-3 text-xs">
+          <div v-for="c in commissionStatuses" :key="c.commission_id || c.id" class="bg-deep-bg border border-[#21262d] rounded-md p-3 text-xs">
             <div class="flex items-center justify-between mb-1.5">
               <span class="text-space-text font-semibold">{{ c.ship_class_name || c.ship_class || c.class_id || '?' }}</span>
               <span class="px-2 py-0.5 rounded text-[11px] font-medium"
@@ -719,6 +749,9 @@ const supplyItemId = ref('');
 const supplyQty = ref(1);
 const supplyLoading = ref(false);
 const sellConfirmId = ref('');
+const renameShipName = ref('');
+const renameSaving = ref(false);
+const transferTargets = ref<Record<string, string>>({});
 
 function submitSupply(commissionId: string) {
   if (!supplyItemId.value.trim() || !selectedBot.value) return;
@@ -992,7 +1025,11 @@ function loadFleet() {
           can_switch: !s.is_active,
           starter_ship: !!s.starter_ship,
         };
-      });
+      }).sort((a, b) =>
+        // Active ship first, then alphabetical by class name
+        (b.is_active ? 1 : 0) - (a.is_active ? 1 : 0) ||
+        (a.class_name || '').localeCompare(b.class_name || '')
+      );
     }
   });
 }
@@ -1013,7 +1050,14 @@ function loadShowroom() {
         name: s.name,
         category: s.category || 'Unknown',
         scale: s.scale || '',
-        price: s.price || 0,
+        tier: s.tier || '',
+        price: s.showroom_price ?? s.price ?? 0,
+        material_cost: s.material_cost ?? null,
+        labor_cost: s.labor_cost ?? null,
+        hull: s.hull ?? null,
+        shield: s.shield ?? null,
+        cargo: s.cargo ?? null,
+        speed: s.speed ?? null,
       }));
     }
   });
@@ -1040,6 +1084,39 @@ function sellShip(shipId: string) {
   execCmd('sell_ship', { ship_id: shipId });
   // Reload fleet after selling
   setTimeout(() => loadFleet(), 1500);
+}
+
+function transferShip(shipId: string) {
+  if (!selectedBot.value) return;
+  const target = (transferTargets.value[shipId] || '').trim();
+  if (!target) return;
+  loading.value = true;
+  botStore.sendExec(selectedBot.value, 'gift_ship', { ship_id: shipId, target_username: target }, (result: any) => {
+    loading.value = false;
+    if (result.ok) {
+      setStatus(`Ship transferred to ${target}`, true);
+      transferTargets.value[shipId] = '';
+      setTimeout(() => loadFleet(), 1000);
+    } else {
+      setStatus(result.error || 'Transfer failed', false);
+    }
+  });
+}
+
+function renameShip() {
+  if (!selectedBot.value) return;
+  const name = renameShipName.value.trim();
+  renameSaving.value = true;
+  botStore.sendExec(selectedBot.value, 'rename_ship', { name }, (result: any) => {
+    renameSaving.value = false;
+    if (result.ok) {
+      setStatus(name ? `Ship renamed to "${name}"` : 'Ship name cleared', true);
+      renameShipName.value = '';
+      fetchShipData(selectedBot.value!);
+    } else {
+      setStatus(result.error || 'Rename failed', false);
+    }
+  });
 }
 
 function shipImageUrl(classId: string): string {

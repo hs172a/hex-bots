@@ -9,7 +9,7 @@
         <!-- Bot selector -->
         <select v-model="selectedBotModel" class="input text-xs py-0 h-7 min-w-36">
           <option value="__all__">🌐 All Bots</option>
-          <option v-for="b in botStore.bots" :key="b.username" :value="b.username">{{ b.username }}</option>
+          <option v-for="b in botStore.sortedBots" :key="b.username" :value="b.username">{{ b.username }}</option>
         </select>
         <div class="w-px h-4 bg-space-border mx-1 shrink-0"></div>
 

@@ -6,7 +6,7 @@
 
 A multi-VM autonomous bot fleet for [SpaceMolt](https://www.spacemolt.com). Bots coordinate as a single production organism — miners respond to real-time ore deficits, gatherers deliver to faction storage, crafters consume what is there, and the coordinator monitors chain efficiency and switches miners to exploration when all quotas are met. The whole fleet is controlled from one reactive Vue 3 dashboard.
 
-![Interface](https://img.shields.io/badge/interface-vue3_spa-blue) ![Runtime](https://img.shields.io/badge/runtime-bun-black) ![Deps](https://img.shields.io/badge/deps-zero_runtime-green) ![Version](https://img.shields.io/badge/version-2.4.1-purple)
+![Interface](https://img.shields.io/badge/interface-vue3_spa-blue) ![Runtime](https://img.shields.io/badge/runtime-bun-black) ![Deps](https://img.shields.io/badge/deps-zero_runtime-green) ![Version](https://img.shields.io/badge/version-2.5.2-purple)
 
 ---
 
@@ -308,7 +308,7 @@ Tab order: **Control · Ship · Facility · Insurance · Combat · Profile · St
 | **Trader** | Finds price spreads between stations, buys low / sells high. Insurance before runs, mission handling at every dock. |
 | **Gas Harvester** | Harvests gas clouds and nebulae, deposits to faction or station storage. |
 | **Ice Harvester** | Harvests ice fields, deposits to faction or station storage. |
-| **Gatherer** | Collects build and craft materials for fleet goals. `goal_type='build'` deposits to **faction storage** (accessible to all bots); `goal_type='craft'` deposits to **personal storage**. Staleness guard: faction storage DB cache > 30 min is ignored to prevent false demand suppression. Non-overlapping component claims via swarmcoord. |
+| **Gatherer** | Collects build and craft materials for fleet goals. `goal_type='build'` deposits to **faction storage** (accessible to all bots); `goal_type='craft'` deposits to **personal storage**. Staleness guard: faction storage DB cache > 30 min is ignored to prevent false demand suppression. Non-overlapping component claims via swarmcoord. **Phase 0.5 build executor**: when all materials for an own build goal are confirmed in faction storage, gatherer navigates to the target station and issues `faction_build` — no separate bot needed. |
 | **Faction Trader** | Runs faction sell routes, deposits to faction storage. Returns home when empty. |
 | **Cleanup** | Consolidates scattered station storage to a home base. |
 | **Hunter** | Autonomous pirate patrol with BFS navigation, combat stances (fire/brace/flee), faction alert response within configurable jump range. |
@@ -323,7 +323,7 @@ Tab order: **Control · Ship · Facility · Insurance · Combat · Profile · St
 | **AI Commander** | Fleet-level LLM reads all bot statuses and issues `start`/`stop`/`exec` decisions every N seconds. Run on a dedicated "HQ" bot. |
 | **Facility Manager** | Monitors owned facilities; alerts on rent expiration; auto-renews by docking and toggling off/on; applies faction facility upgrades when configured. |
 | **Trade Broker** | Intercepts P2P trade notifications; auto-accepts offers matching `acceptItems` list or `minAcceptCredits`; auto-declines others; optionally redistributes surplus to faction members at the same station. |
-| **SmartSelector** | Rule-based orchestrator: scores all routines each cycle. **Needs Matrix integration**: `scoreMiner()` returns 1 when all ore targets are met (quota saturation); applies 0.5–1.5× urgency multiplier on active deficits; explorer gets +20 when all quotas satisfied. Also: miner POI-awareness, crafter profit-awareness, `get_nearby` enemy penalty, ship module awareness, faction intel signals. |
+| **SmartSelector** | Rule-based orchestrator: scores all routines each cycle. **Needs Matrix integration**: `scoreMiner()` returns 1 when all ore targets are met (quota saturation); applies 0.5–1.5× urgency multiplier on active deficits; explorer gets +20 when all quotas satisfied. Also: miner POI-awareness, crafter profit-awareness, `get_nearby` enemy penalty, ship module awareness, faction intel signals. **Sticky gatherer**: once gatherer is selected, SmartSelector keeps re-running it (score 90 for ready builds, 25–55 for pending deliveries) without switching to miner/trader until all fleet goals and build goals are resolved. |
 
 ### Common routine features
 All mining/travel routines also include:

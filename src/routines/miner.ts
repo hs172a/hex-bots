@@ -63,6 +63,7 @@ function getMinerV2Settings(username?: string, ms?: MapStore): {
   targetOre: string;
   acceptMissions: boolean;
   oreQuotas: Record<string, number>;
+  maxJumpsFromHome: number;
 } {
   const all = readSettings();
   const m = all.miner || {};
@@ -103,6 +104,7 @@ function getMinerV2Settings(username?: string, ms?: MapStore): {
     targetOre: (botOverrides.targetOre as string) || (m.targetOre as string) || "",
     acceptMissions,
     oreQuotas: (m.oreQuotas as Record<string, number>) || (ms ? defaultOreQuotas(ms) : {}),
+    maxJumpsFromHome: (m.maxJumpsFromHome as number) || 0,
   };
 }
 
@@ -229,7 +231,8 @@ const MAX_DEPLETION_WAITS = 4;      // max consecutive waits before trying alt s
 
 /** Check belt resources: returns depleted flag + human-readable info for UI logging. */
 async function getBeltStatus(ctx: RoutineContext): Promise<{ depleted: boolean; info: string }> {
-  const poiResp = await ctx.bot.exec("get_poi");
+  const { bot } = ctx;
+  const poiResp = await bot.exec("get_poi");
   if (!poiResp.result || typeof poiResp.result !== "object") return { depleted: false, info: "" };
   const r = poiResp.result as Record<string, unknown>;
   const resources = (
@@ -238,6 +241,17 @@ async function getBeltStatus(ctx: RoutineContext): Promise<{ depleted: boolean; 
     Array.isArray(r.ores) ? r.ores : []
   ) as Array<Record<string, unknown>>;
   if (resources.length === 0) return { depleted: false, info: "" };
+
+  // Report deposit data to the deposits DB
+  if (bot.poi && bot.system) {
+    const poiName = (r.name as string) || (r.poi_name as string) || bot.poi;
+    const poiType = (r.type as string) || (r.poi_type as string) || "asteroid_belt";
+    const sysId = bot.system;
+    const sysSt = ctx.mapStore.getSystem(sysId);
+    const sysName = sysSt?.name ?? sysId;
+    ctx.mapStore.updateDeposits(bot.poi, sysId, sysName, poiName, poiType, resources, bot.username);
+  }
+
   const available = resources.filter(res => {
     const depletion = (res.depletion_percent as number) ?? 0;
     const remaining = (res.remaining as number) ?? Infinity;
@@ -300,6 +314,15 @@ async function handleCargoFromResponse(
     }
     if (mode === "faction") {
       if (!bot.inFaction || noFactionStorage) return false;
+      // Cap pre-check: avoid withdraw→fail cycle when faction storage is full for this item
+      if (bot.poi) {
+        const cap = ctx.mapStore.getFactionStorageCapPerItem(bot.poi);
+        const facQty = bot.factionStorage.find(i => i.itemId === itemId)?.quantity ?? 0;
+        if (facQty >= cap) {
+          ctx.log("trade", `⛔ ${displayName}: faction storage cap (${facQty.toLocaleString()}/${cap.toLocaleString()}) — using fallback`);
+          return false;
+        }
+      }
       const factionResp = await bot.exec("faction_deposit_items", { item_id: itemId, quantity });
       if (!factionResp.error) {
         if (bot.poi) ctx.mapStore.setFactionStorage(bot.poi, true);
@@ -307,7 +330,9 @@ async function handleCargoFromResponse(
       }
       const ec = factionResp.error.code ?? "";
       const em = factionResp.error.message ?? "";
-      if (ec === "no_faction_storage" || em.includes("no_faction_storage") || em.includes("faction_lockbox") ||
+      if (ec === "storage_cap_exceeded" || em.includes("storage_cap_exceeded") || em.includes("storage cap reached")) {
+        ctx.log("trade", `⛔ ${displayName}: faction storage cap exceeded — using fallback`);
+      } else if (ec === "no_faction_storage" || em.includes("no_faction_storage") || em.includes("faction_lockbox") ||
           ec === "not_in_faction" || em.includes("not_in_faction")) {
         noFactionStorage = true;
         if (bot.poi) ctx.mapStore.setFactionStorage(bot.poi, false);
@@ -602,7 +627,7 @@ export const minerRoutineV2: Routine = async function* (ctx: RoutineContext) {
 
     if (targetOre) {
       const allOreLocations = ctx.mapStore.findOreLocations(targetOre);
-      const oreLocations = allOreLocations.filter((loc: { systemId: string; poiId: string; systemName?: string; hasStation?: boolean }) => {
+      let oreLocations = allOreLocations.filter((loc: { systemId: string; poiId: string; systemName?: string; hasStation?: boolean }) => {
         const sys = ctx.mapStore.getSystem(loc.systemId);
         const poi = sys?.pois.find(p => p.id === loc.poiId);
         return poi ? isOreBeltPoi(poi.type) : true;
@@ -611,6 +636,17 @@ export const minerRoutineV2: Routine = async function* (ctx: RoutineContext) {
       if (oreLocations.length === 0) {
         ctx.log("error", `Target ore "${targetOre}" not found at any ore belt — mining locally`);
       } else {
+        // Restrict to homeSystem jump radius if configured
+        if (settings.maxJumpsFromHome > 0 && homeSystem) {
+          const nearby = oreLocations.filter(loc => {
+            if (loc.systemId === homeSystem) return true;
+            const route = ctx.mapStore.findRoute(homeSystem, loc.systemId);
+            return route !== null && route.length <= settings.maxJumpsFromHome;
+          });
+          if (nearby.length > 0) oreLocations = nearby;
+          else ctx.log("mining", `No ore within ${settings.maxJumpsFromHome} jumps of home — expanding search`);
+        }
+
         // Anti-collision: prefer systems not already claimed by other bots
         const unclaimedLocations = oreLocations.filter(loc => miningClaimCount(loc.systemId) === 0);
         const candidateLocations = unclaimedLocations.length > 0 ? unclaimedLocations : oreLocations;

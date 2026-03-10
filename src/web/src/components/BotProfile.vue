@@ -37,6 +37,24 @@
     <div class="flex-1 flex gap-2 p-2 overflow-hidden">
       <!-- Sidebar col 1 -->
       <div class="w-72 space-y-3 overflow-hidden">
+        <!-- Statistics -->
+        <div class="card py-2 px-2 !mb-2">
+          <div class="py-1 px-0 border-b border-space-border bg-space-card">
+            <h3 class="text-xs font-semibold text-space-text-dim uppercase">📊 Statistics</h3>
+          </div>
+          <div class="py-1 px-0">
+            <div class="grid grid-cols-2 gap-y-1.5 gap-x-3 text-xs">
+              <div class="flex items-center gap-1 text-green-400"><span>💰</span><span>₡{{ formatNumber(currentBot.playerStats?.creditsEarned ?? 0) }}</span><span class="text-gray-500">earned</span></div>
+              <div class="flex items-center gap-1 text-red-400"><span>💸</span><span>{{ formatNumber(currentBot.playerStats?.creditsSpent ?? 0) }}</span><span class="text-gray-500">spent</span></div>
+              <div class="flex items-center gap-1 text-amber-400"><span>⛏️</span><span>{{ formatNumber(currentBot.playerStats?.oreMined ?? 0) }}</span><span class="text-gray-500">mined</span></div>
+              <div class="flex items-center gap-1 text-blue-400"><span>🔄</span><span>{{ currentBot.playerStats?.tradesCompleted ?? 0 }}</span><span class="text-gray-500">trades</span></div>
+              <div class="flex items-center gap-1 text-red-400"><span>💥</span><span>{{ currentBot.playerStats?.shipsDestroyed ?? 0 }}</span><span class="text-gray-500">kills</span></div>
+              <div class="flex items-center gap-1 text-gray-400"><span>💀</span><span>{{ currentBot.playerStats?.shipsLost ?? 0 }}</span><span class="text-gray-500">deaths</span></div>
+              <div class="flex items-center gap-1 text-purple-400"><span>🗺️</span><span>{{ currentBot.playerStats?.systemsExplored ?? 0 }}</span><span class="text-gray-500">explored</span></div>
+              <div class="flex items-center gap-1 text-cyan-400"><span>🏴‍☠️</span><span>{{ currentBot.playerStats?.piratesDestroyed ?? 0 }}</span><span class="text-gray-500">pirates</span></div>
+            </div>
+          </div>
+        </div>
         <!-- Status -->
         <div class="card py-2 px-2 !mb-2">
           <div class="py-1 px-0 border-b border-space-border bg-space-card">
@@ -92,7 +110,10 @@
         <!-- Cargo Hold -->
         <div class="card py-2 px-2 !mb-2">
           <div class="py-1 px-0 border-b border-space-border bg-space-card">
-            <h3 class="text-xs font-semibold text-space-text-dim uppercase">📦 Cargo Hold</h3>
+            <div class="flex items-center justify-between">
+              <h3 class="text-xs font-semibold text-space-text-dim uppercase">📦 Cargo Hold</h3>
+              <span v-if="inventory.length > 0" class="text-[11px] text-space-text-dim">{{ inventory.reduce((s, i) => s + i.quantity, 0).toLocaleString() }} units</span>
+            </div>
           </div>
           <div class="py-1 px-0 max-h-40 overflow-auto scrollbar-dark">
             <div v-if="inventory.length === 0" class="text-xs text-space-text-dim text-center py-2">Empty</div>
@@ -107,7 +128,10 @@
         <!-- Station Storage -->
         <div class="card py-2 px-2 !mt-2 !mb-2">
           <div class="py-1 px-0 border-b border-space-border bg-space-card">
-            <h3 class="text-xs font-semibold text-space-text-dim uppercase">🏠 Station Storage</h3>
+            <div class="flex items-center justify-between">
+              <h3 class="text-xs font-semibold text-space-text-dim uppercase">🏠 Station Storage</h3>
+              <span v-if="storage.length > 0" class="text-[11px] text-space-text-dim">{{ storage.reduce((s, i) => s + i.quantity, 0).toLocaleString() }} units</span>
+            </div>
           </div>
           <div class="py-1 px-0 max-h-60 overflow-auto scrollbar-dark">
             <div v-if="!currentBot.docked" class="text-xs text-space-text-dim text-center py-2 italic">⚠️ Not docked</div>
@@ -123,7 +147,10 @@
         <!-- Faction Storage -->
         <div v-if="currentBot.factionId" :key="currentBot.username + ':faction-storage'" class="card py-2 px-2 !mt-2 border-space-accent/30">
           <div class="py-1 px-0 border-b border-space-border bg-space-card">
-            <h3 class="text-xs font-semibold text-space-accent uppercase">🛡️ Faction Storage</h3>
+            <div class="flex items-center justify-between">
+              <h3 class="text-xs font-semibold text-space-accent uppercase">🛡️ Faction Storage</h3>
+              <span v-if="factionStorage.length > 0" class="text-[11px] text-space-accent/70">{{ factionStorage.reduce((s, i) => s + i.quantity, 0).toLocaleString() }} units</span>
+            </div>
           </div>
           <div class="py-1 px-0 max-h-60 overflow-auto scrollbar-dark">
             <div v-if="!currentBot.docked" class="text-xs text-space-text-dim text-center py-2 italic">⚠️ Not docked</div>
@@ -136,6 +163,54 @@
             </div>
           </div>
         </div>
+        <!-- Session Stats -->
+        <div v-if="hasAnyStats" class="card py-2 px-2 !mt-2 !mb-2">
+          <div class="py-1 px-0 border-b border-space-border bg-space-card">
+            <h3 class="text-xs font-semibold text-space-text-dim uppercase">📊 Session Stats</h3>
+          </div>
+          <div class="py-1 px-0 space-y-1.5 text-xs">
+            <div v-if="(currentBot.stats?.totalEarned ?? 0) > 0" class="flex justify-between">
+              <span class="text-space-text-dim">💰 Earned</span>
+              <span class="text-space-green">₡{{ formatNumber(currentBot.stats.totalEarned) }}</span>
+            </div>
+            <div v-if="(currentBot.stats?.totalSpent ?? 0) > 0" class="flex justify-between">
+              <span class="text-space-text-dim">💸 Spent</span>
+              <span class="text-space-red">₡{{ formatNumber(currentBot.stats.totalSpent) }}</span>
+            </div>
+            <div v-if="(currentBot.stats?.totalDonated ?? 0) > 0" class="flex justify-between">
+              <span class="text-space-text-dim">🎁 Donated</span>
+              <span class="text-space-cyan">₡{{ formatNumber(currentBot.stats.totalDonated) }}</span>
+            </div>
+            <div v-if="(currentBot.stats?.totalMined ?? 0) > 0" class="flex justify-between">
+              <span class="text-space-text-dim">⛏️ Mined</span>
+              <span class="text-space-text">{{ formatNumber(currentBot.stats.totalOreUnits ?? currentBot.stats.totalMined) }} units</span>
+            </div>
+            <div v-if="(currentBot.stats?.totalTrades ?? 0) > 0" class="flex justify-between">
+              <span class="text-space-text-dim">💼 Trades</span>
+              <span class="text-space-text">{{ currentBot.stats.totalTrades }}</span>
+            </div>
+            <div v-if="(currentBot.stats?.totalCrafted ?? 0) > 0" class="flex justify-between">
+              <span class="text-space-text-dim">🔨 Crafted</span>
+              <span class="text-space-text">{{ currentBot.stats.totalCrafted }}</span>
+            </div>
+            <div v-if="(currentBot.stats?.totalMissions ?? 0) > 0" class="flex justify-between">
+              <span class="text-space-text-dim">📋 Missions</span>
+              <span class="text-space-text">{{ currentBot.stats.totalMissions }}</span>
+            </div>
+            <div v-if="(currentBot.stats?.totalKills ?? 0) > 0" class="flex justify-between">
+              <span class="text-space-text-dim">⚔️ Kills</span>
+              <span class="text-space-green">{{ currentBot.stats.totalKills }}</span>
+            </div>
+            <div v-if="(currentBot.stats?.totalDeaths ?? 0) > 0" class="flex justify-between">
+              <span class="text-space-text-dim">💀 Deaths</span>
+              <span class="text-space-red">{{ currentBot.stats.totalDeaths }}</span>
+            </div>
+            <div v-if="(currentBot.stats?.totalJumps ?? 0) > 0" class="flex justify-between">
+              <span class="text-space-text-dim">🌀 Jumps</span>
+              <span class="text-space-text">{{ currentBot.stats.totalJumps }}</span>
+            </div>
+          </div>
+        </div>
       </div>
       <!-- Main Content -->
       <div class="flex-1 flex flex-col overflow-hidden">
@@ -145,7 +220,6 @@
           <button @click="currentBot.docked && (activeMainTab = 'ship')" class="px-3 py-2 text-xs font-medium border-b-2 transition-all whitespace-nowrap" :class="[activeMainTab === 'ship' ? 'text-space-text-bright border-space-accent' : 'text-space-text-dim border-transparent', currentBot.docked ? 'hover:text-space-text cursor-pointer' : 'opacity-40 cursor-not-allowed']" :title="!currentBot.docked ? 'Dock to manage ship' : ''">🛸 Ship</button>
           <button @click="activeMainTab = 'skills'" class="px-3 py-2 text-xs font-medium border-b-2 transition-all whitespace-nowrap" :class="activeMainTab === 'skills' ? 'text-space-text-bright border-space-accent' : 'text-space-text-dim border-transparent hover:text-space-text'">🎯 Skills</button>
           <button @click="currentBot.docked && loadFacilityTab()" class="px-3 py-2 text-xs font-medium border-b-2 transition-all whitespace-nowrap" :class="[activeMainTab === 'facility' ? 'text-space-text-bright border-space-accent' : 'text-space-text-dim border-transparent', currentBot.docked ? 'hover:text-space-text cursor-pointer' : 'opacity-40 cursor-not-allowed']" :title="!currentBot.docked ? 'Dock to manage facilities' : ''">⚙️ Facility</button>
-          <button @click="activeMainTab = 'insurance'" class="px-3 py-2 text-xs font-medium border-b-2 transition-all whitespace-nowrap" :class="activeMainTab === 'insurance' ? 'text-space-text-bright border-space-accent' : 'text-space-text-dim border-transparent hover:text-space-text'">🔰 Insurance</button>
           <button @click="activeMainTab = 'combat'" class="px-3 py-2 text-xs font-medium border-b-2 transition-all whitespace-nowrap" :class="activeMainTab === 'combat' ? 'text-space-text-bright border-space-accent' : 'text-space-text-dim border-transparent hover:text-space-text'">⚔️ Combat</button>
           <button @click="activeMainTab = 'profile'" class="px-3 py-2 text-xs font-medium border-b-2 transition-all whitespace-nowrap" :class="activeMainTab === 'profile' ? 'text-space-text-bright border-space-accent' : 'text-space-text-dim border-transparent hover:text-space-text'">👤 Profile</button>
           <button @click="currentBot.docked && loadStationTab()" class="px-3 py-2 text-xs font-medium border-b-2 transition-all whitespace-nowrap" :class="[activeMainTab === 'station' ? 'text-space-text-bright border-space-accent' : 'text-space-text-dim border-transparent', currentBot.docked ? 'hover:text-space-text cursor-pointer' : 'opacity-40 cursor-not-allowed']" :title="!currentBot.docked ? 'Dock to view station info' : ''">🏠 Station</button>
@@ -154,14 +228,16 @@
           <button @click="activeMainTab = 'social'" class="px-3 py-2 text-xs font-medium border-b-2 transition-all whitespace-nowrap" :class="activeMainTab === 'social' ? 'text-space-text-bright border-space-accent' : 'text-space-text-dim border-transparent hover:text-space-text'">🤝 Social</button>
         </div>
         <!-- Panel components -->
-        <BotControlPanel ref="controlPanel" v-show="activeMainTab === 'control'" :bot="bot" @notif="onChildNotif" />
-        <BotShipPanel v-show="activeMainTab === 'ship'" :bot="bot" @notif="onChildNotif" />
+        <BotControlPanel ref="controlPanel" v-show="activeMainTab === 'control'" :bot="bot" @notif="onChildNotif" @ldStatusChange="onLdStatusChange" />
+        <BotShipPanel v-show="activeMainTab === 'ship'" :bot="bot" @notif="onChildNotif" @refresh="refreshPanelData" />
         <SkillsTab v-if="activeMainTab === 'skills'" :skills="displaySkills" @refresh="fetchSkills" />
         <BotStationPanel v-show="activeMainTab === 'facility'" ref="facilityPanel" :bot="bot" mode="facility" @notif="onChildNotif" />
-        <InsurancePanel v-if="activeMainTab === 'insurance'" :bot="bot" @notif="onChildNotif" />
         <CombatPanel v-if="activeMainTab === 'combat'" :bot="bot" @notif="onChildNotif" />
         <BotProfilePanel v-if="activeMainTab === 'profile'" :bot="bot" @notif="onChildNotif" />
-        <BotStationPanel v-show="activeMainTab === 'station'" ref="stationPanel" :bot="bot" mode="station" @notif="onChildNotif" />
+        <div v-show="activeMainTab === 'station'" class="flex-1 overflow-auto scrollbar-dark">
+          <BotStationPanel ref="stationPanel" :bot="bot" mode="station" @notif="onChildNotif" />
+          <InsurancePanel :bot="bot" @notif="onChildNotif" />
+        </div>
         <CaptainsLogPanel v-if="activeMainTab === 'log'" :bot="bot" @notif="onChildNotif" />
         <NotesPanel v-if="activeMainTab === 'notes'" :bot="bot" @notif="onChildNotif" />
         <SocialPanel v-if="activeMainTab === 'social'" :bot="bot" @notif="onChildNotif" />
@@ -170,7 +246,7 @@
     <!-- Ship class tooltip -->
     <Teleport to="body">
       <div v-if="shipTooltipVisible && headerShipClassId"
-        class="fixed z-[9999] w-72 bg-[#0d1117] border border-space-border rounded-lg shadow-2xl overflow-hidden pointer-events-none"
+        class="fixed z-[9999] w-86 bg-[#0d1117] border border-space-border rounded-lg shadow-2xl overflow-hidden pointer-events-none"
         :style="{ top: shipTooltipPos.y + 'px', left: shipTooltipPos.x + 'px' }">
         <img v-if="headerShipCatalog"
           :src="headerShipImageUrl(headerShipClassId)"
@@ -199,6 +275,12 @@
             <div class="text-space-text-dim">⚔️ <span class="text-space-text">{{ headerShipCatalog?.weapon_slots ?? '?' }} wpn</span></div>
             <div class="text-space-text-dim">🛡️ <span class="text-space-text">{{ headerShipCatalog?.defense_slots ?? '?' }} def</span></div>
             <div class="text-space-text-dim">🔧 <span class="text-space-text">{{ headerShipCatalog?.utility_slots ?? '?' }} util</span></div>
+          </div>
+          <div v-if="headerShipCatalog" class="grid grid-cols-4 gap-x-3 gap-y-0.5 text-[11px] pt-1 border-t border-[#21262d]">
+            <div class="text-space-text-dim">⚡ J.Fuel <span class="text-space-cyan">{{ shipJumpFuel(headerShipCatalog) }}</span></div>
+            <div class="text-space-text-dim">⏱ Time/J <span class="text-space-cyan">{{ shipJumpTime(headerShipCatalog) }}s</span></div>
+            <div class="text-space-text-dim">🎯 J.Tks <span class="text-space-cyan">{{ shipJumpTicks(headerShipCatalog) }}</span></div>
+            <div class="text-space-text-dim">🔢 MaxJp <span class="text-space-cyan">{{ shipMaxJumps(headerShipCatalog) }}</span></div>
           </div>
           <div v-if="headerShipCatalog?.flavor_tags?.length" class="flex flex-wrap gap-1 pt-1 border-t border-[#21262d]">
             <span v-for="tag in headerShipCatalog.flavor_tags" :key="tag" class="px-1.5 py-0.5 rounded bg-[#21262d] text-space-text-dim text-[11px]">{{ tag }}</span>
@@ -358,8 +440,9 @@ function onShipNameHover(e: MouseEvent) {
 const activeMainTab = ref<'control' | 'ship' | 'skills' | 'station' | 'log' | 'profile' | 'combat' | 'insurance' | 'notes' | 'facility' | 'social'>('control');
 const controlPanel = ref<InstanceType<typeof BotControlPanel> | null>(null);
 const facilityPanel = ref<InstanceType<typeof BotStationPanel> | null>(null);
-/** True while Long Distance Travel is actively jumping — exposed by BotControlPanel. */
-const ldTraveling = computed(() => !!(controlPanel.value as any)?.ldRelocating?.value);
+/** True while Long Distance Travel is actively jumping — updated via ldStatusChange event. */
+const ldTraveling = ref(false);
+function onLdStatusChange(val: boolean) { ldTraveling.value = val; }
 watch(activeMainTab, (tab) => {
   if (tab === 'control') nextTick(() => controlPanel.value?.scrollToBottom());
 });
@@ -420,7 +503,31 @@ const groupedSkills = computed(() => {
   return ordered;
 });
 
-function formatNumber(n: number): string { return new Intl.NumberFormat().format(n); }
+function formatNumber(n: number): string { return new Intl.NumberFormat().format(Math.round(n)); }
+const hasAnyStats = computed(() => {
+  const s = (currentBot.value as any)?.stats;
+  if (!s) return false;
+  return (s.totalEarned ?? 0) > 0 || (s.totalMined ?? 0) > 0 || (s.totalTrades ?? 0) > 0 ||
+    (s.totalKills ?? 0) > 0 || (s.totalDeaths ?? 0) > 0 || (s.totalJumps ?? 0) > 0 ||
+    (s.totalMissions ?? 0) > 0 || (s.totalCrafted ?? 0) > 0;
+});
+
+function shipJumpFuel(ship: any): number {
+  const tier = ship?.tier ?? 1;
+  const speed = ship?.base_speed ?? 1;
+  return Math.ceil(Math.pow(Math.max(1, tier), 1.5) * speed);
+}
+function shipJumpTime(ship: any): number {
+  return Math.max(1, 7 - (ship?.base_speed ?? 1)) * 10;
+}
+function shipJumpTicks(ship: any): number {
+  return Math.max(1, 7 - (ship?.base_speed ?? 1));
+}
+function shipMaxJumps(ship: any): number {
+  const fuel = ship?.base_fuel ?? (currentBot.value as any)?.maxFuel ?? 0;
+  const jpf = shipJumpFuel(ship);
+  return jpf > 0 ? Math.floor(fuel / jpf) : 0;
+}
 function formatLocation(bot: any): string {
   if (bot.poi) {
     const system = botStore.mapData[bot.system];
@@ -470,10 +577,48 @@ function fetchSkills() { execCommand('get_skills'); }
 
 const isDocked = computed(() => !!currentBot.value?.docked);
 
+function updateCurrentBotInStore(partial: Record<string, any>) {
+  const idx = botStore.bots.findIndex((b: any) => b.username === (currentBot.value?.username || props.bot.username));
+  if (idx !== -1) Object.assign(botStore.bots[idx], partial);
+}
+
+function refreshPanelData() {
+  const username = currentBot.value?.username || props.bot.username;
+  if (!username) return;
+  // Always refresh cargo
+  botStore.sendExec(username, 'get_cargo', undefined, (r: any) => {
+    if (!r.ok) return;
+    const rawItems = (r.data?.items || r.data?.cargo || []) as any[];
+    updateCurrentBotInStore({ inventory: rawItems.map((i: any) => ({ itemId: i.item_id || '', name: i.name || i.item_id || '', quantity: i.quantity ?? 0 })) });
+  });
+  // Storage panels only make sense when docked
+  if (isDocked.value) {
+    botStore.sendExec(username, 'view_storage', undefined, (r: any) => {
+      if (!r.ok) return;
+      const rawItems = (r.data?.items || r.data?.storage || []) as any[];
+      updateCurrentBotInStore({ storage: rawItems.map((i: any) => ({ itemId: i.item_id || '', name: i.name || i.item_id || '', quantity: i.quantity ?? 0 })) });
+    });
+    if ((currentBot.value as any)?.factionId) {
+      botStore.sendExec(username, 'view_faction_storage', undefined, (r: any) => {
+        if (!r.ok) return;
+        const rawItems = (r.data?.items || r.data?.storage || r.data?.faction_storage || []) as any[];
+        updateCurrentBotInStore({ factionStorage: rawItems.map((i: any) => ({ itemId: i.item_id || '', name: i.name || i.item_id || '', quantity: i.quantity ?? 0 })) });
+      });
+    }
+  }
+}
+
 onMounted(() => {
   execCommand('get_status');
-  if (isDocked.value) {
-    fetchSkills();
-  }
+  if (isDocked.value) fetchSkills();
+  refreshPanelData();
+});
+
+watch(() => props.bot.username, () => {
+  refreshPanelData();
+});
+
+watch(isDocked, (docked, prev) => {
+  if (docked && !prev) refreshPanelData();
 });
 </script>

@@ -28,9 +28,9 @@
     <div class="card py-2 px-3">
       <div class="flex items-center justify-between">
         <h3 class="text-xs font-semibold text-space-text-dim uppercase">👤 Player Profile</h3>
-        <button @click="loadProfile" :disabled="loading" class="btn btn-secondary text-xs py-0 px-2">{{ loading ? '⏳' : '🔄 Load' }}</button>
+        <button @click="loadProfile" :disabled="loading" class="btn btn-secondary text-xs py-0 px-2">{{ loading ? '⏳' : '🔄' }}</button>
       </div>
-      <div v-if="!loaded" class="text-xs text-space-text-dim italic py-4 text-center">Click Load to fetch current profile settings.</div>
+      <div v-if="loading" class="text-xs text-space-text-dim italic py-2 text-center">Loading...</div>
     </div>
 
     <template v-if="loaded">
@@ -135,33 +135,38 @@
         </div>
         <div v-if="!currentBot.docked" class="text-[11px] text-space-text-dim mt-1.5 italic">Dock at a station to set home base.</div>
       </div>
-      <!-- Empire Reputation (v0.183+) -->
-      <div v-if="empireReputations.length" class="card py-2 px-3">
-        <h3 class="text-xs font-semibold text-space-text-dim uppercase mb-2">⚜️ Empire Reputation</h3>
-        <div class="space-y-2">
-          <div v-for="rep in empireReputations" :key="rep.empire" class="bg-[#21262d] rounded-md p-2 text-xs">
-            <div class="flex items-center justify-between mb-1">
-              <span class="font-semibold text-space-text-bright">{{ rep.empire_name }}</span>
-              <div class="flex gap-1 flex-wrap justify-end">
-                <span v-if="rep.criminal > 0" class="px-1.5 py-0.5 rounded text-[10px] bg-red-900/40 text-red-300">🚔 Criminal {{ rep.criminal }}</span>
-              </div>
+    </template>
+
+    <!-- Empire Reputation — always visible from bot state, refresh optional -->
+    <div class="card py-2 px-3">
+      <div class="flex items-center justify-between mb-2">
+        <h3 class="text-xs font-semibold text-space-text-dim uppercase">⚜️ Empire Reputation</h3>
+        <button @click="refreshReputation" :disabled="loadingRep" class="btn btn-secondary text-xs py-0 px-2">{{ loadingRep ? '⏳' : '🔄' }}</button>
+      </div>
+      <div v-if="empireReputations.length" class="space-y-2">
+        <div v-for="rep in empireReputations" :key="rep.empire" class="bg-[#21262d] rounded-md p-2 text-xs">
+          <div class="flex items-center justify-between mb-1">
+            <span class="font-semibold text-space-text-bright">{{ rep.empire_name }}</span>
+            <div class="flex gap-1 flex-wrap justify-end">
+              <span v-if="rep.criminal > 0" class="px-1.5 py-0.5 rounded text-[10px] bg-red-900/40 text-red-300">🚔 Criminal {{ rep.criminal }}</span>
             </div>
-            <div class="grid grid-cols-3 gap-x-3 gap-y-0.5 text-[11px]">
-              <span v-if="rep.fame !== undefined" class="text-space-text-dim">⭐ Fame <span class="text-space-text">{{ rep.fame }}</span></span>
-              <span v-if="rep.need !== undefined" class="text-space-text-dim">📦 Need <span class="text-space-text">{{ rep.need }}</span></span>
-              <span v-if="rep.love !== undefined" class="text-space-text-dim">💚 Love <span class="text-space-text">{{ rep.love }}</span></span>
-              <span v-if="rep.hate !== undefined" class="text-space-text-dim">💢 Hate <span class="text-space-red">{{ rep.hate }}</span></span>
-              <span v-if="rep.fear !== undefined" class="text-space-text-dim">😱 Fear <span class="text-space-red">{{ rep.fear }}</span></span>
-            </div>
+          </div>
+          <div class="grid grid-cols-3 gap-x-3 gap-y-0.5 text-[11px]">
+            <span v-if="rep.fame !== undefined" class="text-space-text-dim">⭐ Fame <span class="text-space-text">{{ rep.fame }}</span></span>
+            <span v-if="rep.need !== undefined" class="text-space-text-dim">📦 Need <span class="text-space-text">{{ rep.need }}</span></span>
+            <span v-if="rep.love !== undefined" class="text-space-text-dim">💚 Love <span class="text-space-text">{{ rep.love }}</span></span>
+            <span v-if="rep.hate !== undefined" class="text-space-text-dim">💢 Hate <span class="text-space-red">{{ rep.hate }}</span></span>
+            <span v-if="rep.fear !== undefined" class="text-space-text-dim">😱 Fear <span class="text-space-red">{{ rep.fear }}</span></span>
           </div>
         </div>
       </div>
-    </template>
+      <div v-else class="text-xs text-space-text-dim italic py-1">No reputation data — click 🔄 to fetch.</div>
+    </div>
   </div>
 </template>
 
 <script setup lang="ts">
-import { ref, computed, watch, nextTick } from 'vue';
+import { ref, computed, watch, nextTick, onMounted } from 'vue';
 import { useBotStore } from '../stores/botStore';
 
 interface Props { bot: any; }
@@ -171,11 +176,26 @@ const emit = defineEmits<{ (e: 'notif', text: string, type: 'success' | 'warn' |
 const botStore = useBotStore();
 const loading = ref(false);
 const loaded = ref(false);
+const loadingRep = ref(false);
 
 const reputationRaw = ref<any>(null);
 
+async function refreshReputation() {
+  loadingRep.value = true;
+  const r = await execCmd('get_status');
+  loadingRep.value = false;
+  if (r.ok && r.data) {
+    const d = r.data as any;
+    const player = d.player || d.character || d;
+    reputationRaw.value = player.empire_rep || d.empire_rep || player.empire_reputations || d.empire_reputations || null;
+  } else {
+    emit('notif', r.error || 'Failed to refresh reputation', 'error');
+  }
+}
+
 const empireReputations = computed(() => {
   const src = reputationRaw.value
+    || (currentBot.value as any)?.empireRep
     || (currentBot.value as any)?.playerStats?.empire_reputations
     || (currentBot.value as any)?.empire_reputations
     || null;
@@ -207,6 +227,9 @@ const saving = ref({ status: false, anon: false, colors: false, home: false });
 
 const depositPrimary = ref('faction');
 const depositSecondary = ref('storage');
+
+onMounted(() => { loadProfile(); });
+watch(() => props.bot.username, () => { loaded.value = false; loadProfile(); });
 
 let _skipDepositSave = false;
 watch(() => botStore.settings, (s) => {
@@ -244,7 +267,7 @@ async function loadProfile() {
     form.value.anonymous = !!(player.anonymous || player.is_anonymous);
     form.value.primary_color = player.primary_color || player.color || '#4a9eff';
     form.value.secondary_color = player.secondary_color || '#ffffff';
-    reputationRaw.value = d.empire_reputations || d.reputations || player.empire_reputations || player.reputations || null;
+    reputationRaw.value = player.empire_rep || d.empire_rep || player.empire_reputations || d.empire_reputations || d.reputations || player.reputations || null;
     loaded.value = true;
   } else {
     emit('notif', r.error || 'Failed to load profile', 'error');

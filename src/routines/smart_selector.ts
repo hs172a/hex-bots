@@ -24,7 +24,7 @@
 
 import type { Routine, RoutineContext } from "../bot.js";
 import { minerRoutineV2 } from "./miner.js";
-import { traderRoutine } from "./trader.js";
+import { traderRoutine, lastNoRouteExitMs } from "./trader.js";
 import { missionRunnerRoutine } from "./mission_runner.js";
 import { explorerRoutine } from "./explorer.js";
 import { gasHarvesterRoutine } from "./gas_harvester.js";
@@ -318,6 +318,16 @@ async function buildCandidates(
   if (traderCooldownPenalty > 0) {
     ctx.log("system", `SmartSelector: trader cooldown -${traderCooldownPenalty} (ran ${Math.round(traderElapsed / 1000)}s ago)`);
   }
+  // No-routes blackout — when trader exits after 3x no-route streak, suppress it for 15 min
+  // so lower-scoring routines (miner, explorer, mission_runner) get a chance to run.
+  const TRADER_NO_ROUTE_BLACKOUT_MS = 15 * 60 * 1000;
+  const noRouteElapsed = Date.now() - lastNoRouteExitMs;
+  const traderNoRoutePenalty = lastNoRouteExitMs > 0 && noRouteElapsed < TRADER_NO_ROUTE_BLACKOUT_MS
+    ? Math.round((1 - noRouteElapsed / TRADER_NO_ROUTE_BLACKOUT_MS) * 120)
+    : 0;
+  if (traderNoRoutePenalty > 0) {
+    ctx.log("system", `SmartSelector: trader no-route blackout -${traderNoRoutePenalty} (${Math.round(noRouteElapsed / 60000)}min ago)`);
+  }
 
   const candidates: RoutineCandidate[] = [
     {
@@ -330,7 +340,7 @@ async function buildCandidates(
       key: "trader",
       name: "Trader",
       fn: traderRoutine,
-      score: Math.max(0, tradeScore - enemyPenalty + allyBonus - lowCreditsPenalty - traderCooldownPenalty),
+      score: Math.max(0, tradeScore - enemyPenalty + allyBonus - lowCreditsPenalty - traderCooldownPenalty - traderNoRoutePenalty),
     },
     {
       key: "gas_harvester",
@@ -618,17 +628,28 @@ export const smartSelectorRoutine: Routine = async function* (ctx: RoutineContex
           if (!sellOk) {
             let deposited = false;
             if (bot.inFaction && !noFacStorage) {
-              const facResp = await bot.exec("faction_deposit_items", { item_id: item.itemId, quantity: item.quantity });
-              if (!facResp.error) {
-                if (bot.poi) ctx.mapStore.setFactionStorage(bot.poi, true);
-                deposited = true;
-              } else {
-                const em = facResp.error.message ?? "";
-                const ec = facResp.error.code ?? "";
-                if (em.includes("no_faction_storage") || em.includes("faction_lockbox") ||
-                    ec === "not_in_faction" || em.includes("not_in_faction")) {
-                  noFacStorage = true;
-                  if (bot.poi) ctx.mapStore.setFactionStorage(bot.poi, false);
+              // Cap pre-check
+              let atCap = false;
+              if (bot.poi) {
+                const cap = ctx.mapStore.getFactionStorageCapPerItem(bot.poi);
+                const facQty = bot.factionStorage.find(i => i.itemId === item.itemId)?.quantity ?? 0;
+                atCap = facQty >= cap;
+              }
+              if (!atCap) {
+                const facResp = await bot.exec("faction_deposit_items", { item_id: item.itemId, quantity: item.quantity });
+                if (!facResp.error) {
+                  if (bot.poi) ctx.mapStore.setFactionStorage(bot.poi, true);
+                  deposited = true;
+                } else {
+                  const em = facResp.error.message ?? "";
+                  const ec = facResp.error.code ?? "";
+                  if (ec === "storage_cap_exceeded" || em.includes("storage_cap_exceeded") || em.includes("storage cap reached")) {
+                    // cap hit — fall through to personal storage
+                  } else if (em.includes("no_faction_storage") || em.includes("faction_lockbox") ||
+                      ec === "not_in_faction" || em.includes("not_in_faction")) {
+                    noFacStorage = true;
+                    if (bot.poi) ctx.mapStore.setFactionStorage(bot.poi, false);
+                  }
                 }
               }
             }
@@ -679,6 +700,21 @@ export const smartSelectorRoutine: Routine = async function* (ctx: RoutineContex
         yield* candidate.fn(ctx);
         ctx.log("system", `SmartSelector: ${candidate.name} completed — re-evaluating in 5s`);
         routineCompleted = true;
+        // Sticky gatherer: once gatherer is selected, keep re-running it until all
+        // fleet goals and own build goals are resolved. This prevents smart_selector
+        // from switching to a lower-priority routine (miner, trader) mid-delivery.
+        if (candidate.key === "gatherer") {
+          let stickyScore = scoreGatherer(ctx);
+          while (bot.state === "running" && stickyScore > 0) {
+            ctx.log("system", `SmartSelector: gatherer still has work (score=${stickyScore}) — continuing without re-evaluation`);
+            await sleepBot(ctx, 3_000);
+            lastRunMs.set("gatherer", Date.now());
+            yield "running:gatherer";
+            yield* gathererRoutine(ctx);
+            ctx.log("system", "SmartSelector: gatherer re-run complete");
+            stickyScore = scoreGatherer(ctx);
+          }
+        }
         break;
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);

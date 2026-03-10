@@ -49,9 +49,12 @@ import type { FleetSummary } from "./commander/types.js";
 import { GoalsStore } from "./data/goals-store.js";
 import { FactionStorageDb } from "./data/faction-storage-db.js";
 import { NeedsMatrixDb } from "./data/needs-matrix-db.js";
+import { DepositsDb } from "./data/deposits-db.js";
+import { WormholesDb } from "./data/wormholes-db.js";
 import { initMarketPricesStore } from "./data/market-prices-store.js";
 import { getAllMaterialDemands, connectNeedsMatrixDb } from "./swarmcoord.js";
 import { GoalSchema } from "./types/config.js";
+import { readSettings } from "./routines/common.js";
 import { AdvisoryCommander } from "./commander/advisory-commander.js";
 import { initDataSync, DataSyncClient, DataSyncServer } from "./datasync.js";
 import { SshTunnelManager } from "./sshtunnels.js";
@@ -188,6 +191,10 @@ function appendBotLog(username: string, line: string): void {
 
 function setupBotLogging(bot: Bot): void {
   logApiRunStart(bot.api.label);
+  // Apply global combat flags from hunter settings so ALL routines fight back
+  const _cs = readSettings();
+  bot.autoFightBack = (_cs.hunter?.autoFightBack as boolean) ?? true;
+  bot.autoDefend    = (_cs.hunter?.autoDefend    as boolean) ?? true;
   
   bot.on("log", (username: string, category: string, message: string) => {
     const timestamp = new Date().toLocaleTimeString("en-US", { hour12: false });
@@ -701,6 +708,12 @@ async function handleExec(action: WebAction): Promise<WebActionResult> {
     const facilities: any[] = (resp.result as any)?.faction_facilities || [];
     if (facilities.length > 0) mapStore.updateFactionBuildings(facilities);
   }
+  // Persist newly built facility so storage level is known immediately
+  if (!resp.error && command === "facility" && (params as any)?.action === "faction_build") {
+    const r = resp.result as any;
+    const built = r?.facility ?? r?.faction_facility ?? r;
+    if (built?.facility_id) mapStore.updateFactionBuildings([built]);
+  }
 
   // Log manual faction operations to faction activity log
   if (!resp.error) {
@@ -766,6 +779,10 @@ async function main(): Promise<void> {
   const needsMatrixDb = new NeedsMatrixDb(db);
   mapStore.connectToNeedsMatrixDb(needsMatrixDb);
   connectNeedsMatrixDb(needsMatrixDb);
+  const depositsDb = new DepositsDb(db);
+  mapStore.connectToDepositsDb(depositsDb);
+  const wormholesDb = new WormholesDb(db);
+  mapStore.connectToWormholesDb(wormholesDb);
   initMarketPricesStore(db);
 
   // Live in-memory fallback: synthesizes faction storage from bot.factionStorage arrays when
@@ -1263,8 +1280,9 @@ async function main(): Promise<void> {
               for (const targetName of TARGET_NAMES) {
                 const typesResp = await leaderBot.exec("facility", { action: "types" });
                 if (typesResp.error) break;
+                const raw = typesResp.result as any;
                 const allTypes: Array<{ id: string; name: string; build_materials?: any[] }> =
-                  (typesResp.result as any)?.types ?? (typesResp.result as any) ?? [];
+                  Array.isArray(raw?.types) ? raw.types : Array.isArray(raw) ? raw : [];
                 const match = allTypes.find((t: any) => t.name === targetName || t.name?.toLowerCase() === targetName.toLowerCase());
                 if (!match) continue;
 

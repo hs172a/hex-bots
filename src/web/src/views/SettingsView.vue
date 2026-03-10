@@ -302,6 +302,14 @@ remote_port  = 4001   # master's DataSync HTTP port</pre>
 
         <div class="setting-row mt-4">
           <div>
+            <div class="text-sm text-space-text">Max Jumps From Home</div>
+            <div class="text-xs text-space-text-dim mt-0.5">Limit mining range to N jumps from the home system. <strong class="text-space-text">0 = no limit</strong> (mine anywhere). Keeps miners close to base.</div>
+          </div>
+          <input type="number" v-model.number="minerForm.maxJumpsFromHome" min="0" max="20" class="input text-sm w-24" />
+        </div>
+
+        <div class="setting-row">
+          <div>
             <div class="text-sm text-space-text">Mining System</div>
             <div class="text-xs text-space-text-dim mt-0.5">Override system to mine in (ignored if Target Ore is set).</div>
           </div>
@@ -784,6 +792,10 @@ remote_port  = 4001   # master's DataSync HTTP port</pre>
         <div class="setting-row">
           <div><div class="text-sm text-space-text">Auto Cloak</div><div class="text-xs text-space-text-dim mt-0.5">Activate cloak while patrolling (if ship has cloak module).</div></div>
           <input type="checkbox" v-model="hunterForm.autoCloak" class="w-4 h-4" />
+        </div>
+        <div class="setting-row">
+          <div><div class="text-sm text-space-text">Auto Fight Back</div><div class="text-xs text-space-text-dim mt-0.5">Automatically engage and fire at pirates that attack this bot (calls <code class="text-space-accent">attack</code> + sets <code class="text-space-accent">fire</code> stance). Disable to use passive brace/flee only.</div></div>
+          <input type="checkbox" v-model="hunterForm.autoFightBack" class="w-4 h-4" />
         </div>
         <div class="save-bar"><button @click="saveHunter" class="btn btn-primary">Save Settings</button></div>
       </div>
@@ -1379,6 +1391,7 @@ const minerForm = ref({
   refuelThreshold: 50,
   repairThreshold: 40,
   oreQuotas: {} as Record<string, number>,
+  maxJumpsFromHome: 0,
 });
 const perBotOre = reactive<Record<string, string>>({});
 const quotaAddOre = ref('');
@@ -1563,6 +1576,7 @@ const hunterForm = ref({
   responseRange: 3,
   onlyNPCs: true,
   autoCloak: false,
+  autoFightBack: true,
 });
 
 // ── Alerts form ─────────────────────────────────────────────
@@ -1741,6 +1755,7 @@ function initForms(s: Record<string, any>) {
     minerForm.value.refuelThreshold = m.refuelThreshold ?? 50;
     minerForm.value.repairThreshold = m.repairThreshold ?? 40;
     minerForm.value.oreQuotas = { ...(m.oreQuotas || {}) };
+    minerForm.value.maxJumpsFromHome = m.maxJumpsFromHome ?? 0;
   }
   if (s.crafter) {
     crafterForm.value.craftLimits = { ...(s.crafter.craftLimits || {}) };
@@ -1846,6 +1861,7 @@ function initForms(s: Record<string, any>) {
     hunterForm.value.responseRange = h.responseRange ?? 3;
     hunterForm.value.onlyNPCs = h.onlyNPCs !== false;
     hunterForm.value.autoCloak = h.autoCloak === true;
+    hunterForm.value.autoFightBack = h.autoFightBack !== false;
   }
   if (s.scout) {
     const sc = s.scout;
@@ -1990,6 +2006,7 @@ function saveMiner() {
     refuelThreshold: minerForm.value.refuelThreshold,
     repairThreshold: minerForm.value.repairThreshold,
     oreQuotas: { ...minerForm.value.oreQuotas },
+    maxJumpsFromHome: minerForm.value.maxJumpsFromHome,
   });
   // Save per-bot ore overrides
   for (const bot of minerBots.value) {

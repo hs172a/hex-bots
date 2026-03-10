@@ -26,21 +26,136 @@
       <button @click="zoomOut" title="Zoom out" class="w-7 h-7 rounded bg-[#161b22] border border-space-border text-space-text hover:bg-[#21262d] text-sm font-bold flex items-center justify-center">−</button>
     </div>
 
-    <!-- Faction buildings toggle button (top-right) -->
-    <button
-      @click="showBuildingsPanel = !showBuildingsPanel"
-      :title="showBuildingsPanel ? 'Hide faction buildings' : 'Show faction buildings'"
-      class="absolute top-2 right-2 px-2.5 py-1 rounded border text-[11px] font-medium transition-colors"
-      :class="showBuildingsPanel
-        ? 'bg-[rgba(255,200,50,0.15)] border-yellow-600/60 text-yellow-400'
-        : 'bg-[#161b22] border-space-border text-space-text-dim hover:text-space-text'"
-    >
-      🏛 {{ botStore.factionBuildings.length || '' }} Buildings
-    </button>
+    <!-- Panel toggle buttons (top-right) -->
+    <div class="absolute top-2 right-2 flex gap-1.5">
+      <button
+        @click="showDepositsPanel = !showDepositsPanel; if(showDepositsPanel){ showBuildingsPanel = false; botStore.fetchDeposits(); }"
+        :title="showDepositsPanel ? 'Hide deposits' : 'Show resource deposits'"
+        class="px-2.5 py-1 rounded border text-[11px] font-medium transition-colors"
+        :class="showDepositsPanel
+          ? 'bg-[rgba(50,200,100,0.15)] border-green-600/60 text-green-400'
+          : 'bg-[#161b22] border-space-border text-space-text-dim hover:text-space-text'"
+      >
+        ⛏ {{ botStore.depositSummary.length || '' }} Deposits
+      </button>
+      <button
+        @click="showBuildingsPanel = !showBuildingsPanel; if(showBuildingsPanel) showDepositsPanel = false"
+        :title="showBuildingsPanel ? 'Hide faction buildings' : 'Show faction buildings'"
+        class="px-2.5 py-1 rounded border text-[11px] font-medium transition-colors"
+        :class="showBuildingsPanel
+          ? 'bg-[rgba(255,200,50,0.15)] border-yellow-600/60 text-yellow-400'
+          : 'bg-[#161b22] border-space-border text-space-text-dim hover:text-space-text'"
+      >
+        🏛 {{ botStore.factionBuildings.length || '' }} Buildings
+      </button>
+      <button
+        @click="showWormholesPanel = !showWormholesPanel; if(showWormholesPanel){ botStore.fetchWormholes(false) }"
+        :title="showWormholesPanel ? 'Hide wormholes' : 'Show known wormholes'"
+        class="px-2.5 py-1 rounded border text-[11px] font-medium transition-colors"
+        :class="showWormholesPanel
+          ? 'bg-[rgba(180,80,255,0.15)] border-purple-600/60 text-purple-300'
+          : 'bg-[#161b22] border-space-border text-space-text-dim hover:text-space-text'"
+      >
+        🌀 {{ botStore.wormholes.filter(w => w.status === 'active').length || '' }} Wormholes
+      </button>
+    </div>
 
-    <!-- Faction buildings panel -->
+    <!-- Deposits search panel -->
+    <div v-if="showDepositsPanel"
+      class="absolute top-10 right-2 w-80 max-h-[75vh] bg-[#0d1117f0] border border-space-border rounded-lg flex flex-col overflow-hidden"
+    >
+      <div class="px-3 py-2 border-b border-space-border flex items-center justify-between shrink-0">
+        <span class="text-xs font-semibold text-green-400">⛏ Resource Deposits ({{ botStore.depositSummary.length }} POIs)</span>
+        <button @click="showDepositsPanel = false" class="text-space-text-dim hover:text-space-text text-lg leading-none">×</button>
+      </div>
+      <!-- Filters -->
+      <div class="px-2 py-1.5 border-b border-space-border shrink-0 flex gap-1.5">
+        <input
+          v-model="depositsSearchQuery"
+          placeholder="Search resource or system…"
+          class="flex-1 text-xs bg-[#0d1117] border border-space-border rounded px-2 py-1 text-space-text placeholder-space-text-dim/50 outline-none focus:border-green-700"
+        />
+        <select v-model="depositsCategoryFilter" class="text-xs bg-[#0d1117] border border-space-border rounded px-1 py-1 text-space-text outline-none">
+          <option value="">All</option>
+          <option value="ore">⛏ Ore</option>
+          <option value="gas">💨 Gas</option>
+          <option value="ice">❄ Ice</option>
+          <option value="crystal">💎 Crystal</option>
+        </select>
+      </div>
+      <div v-if="botStore.depositsLoading" class="p-4 text-xs text-space-text-dim text-center animate-pulse">Loading deposits…</div>
+      <div v-else-if="depositsSearchResults.length === 0" class="p-4 text-xs text-space-text-dim italic text-center">
+        No deposits recorded yet.<br/>
+        <span class="text-[11px]">Bots update this while mining, harvesting, or exploring.</span>
+      </div>
+      <div v-else class="flex-1 overflow-auto p-2 scrollbar-dark space-y-1.5">
+        <div v-for="d in depositsSearchResults" :key="d.poi_id + d.category"
+          class="px-2 py-1.5 rounded border cursor-pointer transition-colors"
+          :class="depositCategoryClass(d.category)"
+          @click="jumpToSystem(d.system_id)"
+        >
+          <div class="flex items-start justify-between gap-1">
+            <span class="font-medium text-xs truncate" :class="depositCategoryTextClass(d.category)">
+              {{ depositCategoryIcon(d.category) }} {{ d.poi_name }}
+            </span>
+            <span class="text-[10px] shrink-0" :class="depletionClass(d.avg_depletion)">
+              {{ Math.round(d.avg_depletion) }}% depleted
+            </span>
+          </div>
+          <div class="text-[11px] text-space-text-dim mt-0.5">
+            {{ d.system_name }} · {{ d.resource_count }} resource{{ d.resource_count !== 1 ? 's' : '' }} · {{ formatRemaining(d.total_remaining) }} remaining
+          </div>
+          <div class="text-[10px] text-space-text-dim/60 mt-0.5">Last seen: {{ formatAge(d.last_seen_at) }}</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Wormholes panel -->
+    <div v-if="showWormholesPanel"
+      class="absolute top-10 w-80 max-h-[75vh] bg-[#0d1117f0] border border-space-border rounded-lg flex flex-col overflow-hidden"
+      :style="showDepositsPanel ? 'right: 336px' : showBuildingsPanel ? 'right: 296px' : 'right: 8px'"
+    >
+      <div class="px-3 py-2 border-b border-space-border flex items-center justify-between shrink-0">
+        <span class="text-xs font-semibold text-purple-300">🌀 Known Wormholes ({{ botStore.wormholes.length }})</span>
+        <button @click="showWormholesPanel = false" class="text-space-text-dim hover:text-space-text text-lg leading-none">×</button>
+      </div>
+      <div v-if="botStore.wormholesLoading" class="p-4 text-xs text-space-text-dim text-center animate-pulse">Loading…</div>
+      <div v-else-if="botStore.wormholes.length === 0" class="p-4 text-xs text-space-text-dim italic text-center">
+        No wormholes recorded yet.<br/>
+        <span class="text-[11px]">Explorers with a survey scanner discover them.</span>
+      </div>
+      <div v-else class="flex-1 overflow-auto p-2 scrollbar-dark space-y-1.5">
+        <div v-for="wh in botStore.wormholes.slice().sort((a,b) => a.status.localeCompare(b.status))"
+          :key="wh.entrance_poi_id"
+          class="px-2 py-1.5 rounded border text-xs cursor-pointer transition-colors"
+          :class="wh.status === 'collapsed'
+            ? 'border-purple-900/40 bg-purple-950/20 opacity-60'
+            : 'border-purple-700/50 bg-purple-950/30 hover:border-purple-600/70'"
+          @click="jumpToSystem(wh.entrance_system_id)"
+        >
+          <div class="flex items-start justify-between gap-1">
+            <span class="font-medium text-purple-200 truncate">
+              {{ wh.status === 'collapsed' ? '💀' : '🌀' }}
+              {{ wh.entrance_system_name || wh.entrance_system_id }}
+            </span>
+            <span class="text-[10px] shrink-0" :class="wh.status === 'collapsed' ? 'text-space-text-dim' : 'text-purple-300'">{{ wh.status }}</span>
+          </div>
+          <div class="text-[11px] text-space-text-dim mt-0.5">
+            → {{ wh.exit_system_name || wh.exit_system_id || '? unknown' }}
+          </div>
+          <div class="text-[10px] text-space-text-dim/60 mt-0.5 flex gap-2">
+            <span>{{ formatAge(wh.last_seen_at) }}</span>
+            <span v-if="wh.expires_estimated_at" class="text-purple-400/70">exp {{ formatAge(wh.expires_estimated_at) }}</span>
+            <span v-if="wh.discovered_by" class="ml-auto">by {{ wh.discovered_by }}</span>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Faction buildings panel (offset left when deposits panel also open) -->
     <div v-if="showBuildingsPanel"
-      class="absolute top-10 right-2 w-72 max-h-[70vh] bg-[#0d1117f0] border border-space-border rounded-lg flex flex-col overflow-hidden"
+      class="absolute top-10 w-72 max-h-[70vh] bg-[#0d1117f0] border border-space-border rounded-lg flex flex-col overflow-hidden"
+      :style="showDepositsPanel ? 'right: 336px' : 'right: 8px'"
     >
       <div class="px-3 py-2 border-b border-space-border flex items-center justify-between shrink-0">
         <span class="text-xs font-semibold text-yellow-400">🏛 Faction Buildings ({{ botStore.factionBuildings.length }})</span>
@@ -87,6 +202,17 @@
         <svg width="10" height="10" viewBox="-5 -5 10 10"><polygon points="0,-4 4,0 0,4 -4,0" fill="rgba(255,200,50,0.9)"/></svg>
         <span class="text-space-text-dim">Faction building</span>
       </div>
+      <div class="flex items-center gap-1.5">
+        <div class="w-2.5 h-2.5 rounded-full" style="background:rgba(50,200,100,0.9)"></div>
+        <span class="text-space-text-dim">Has deposits</span>
+      </div>
+      <div class="flex items-center gap-1.5">
+        <svg width="18" height="6" viewBox="0 0 18 6">
+          <path d="M0,3 Q9,0 18,3" stroke="rgba(180,80,255,0.8)" stroke-width="1.5" fill="none" stroke-dasharray="4 3"/>
+          <polygon points="18,3 15,1 15,5" fill="rgba(180,80,255,0.8)"/>
+        </svg>
+        <span class="text-space-text-dim">Wormhole</span>
+      </div>
     </div>
 
     <!-- Tooltip -->
@@ -96,8 +222,8 @@
       <div ref="tooltipBotsRef" class="text-space-accent text-[11px] mt-0.5 font-medium"></div>
     </div>
 
-    <!-- Bot panel (right side, shown on click) -->
-    <div v-if="selectedSystem" class="absolute top-0 right-0 h-full w-64 bg-[#0d1117f0] border-l border-space-border flex flex-col overflow-hidden">
+    <!-- System detail panel (right side, shown on click) -->
+    <div v-if="selectedSystem" class="absolute top-0 right-0 h-full w-72 bg-[#0d1117f0] border-l border-space-border flex flex-col overflow-hidden">
       <div class="px-3 py-2 border-b border-space-border flex items-center justify-between shrink-0">
         <div>
           <div class="text-sm font-semibold" :style="{ color: selectedSystem.empire_color || '#e8f4f8' }">{{ selectedSystem.name }}</div>
@@ -105,41 +231,122 @@
         </div>
         <button @click="selectedSystem = null" class="text-space-text-dim hover:text-space-text text-lg leading-none">×</button>
       </div>
-      <div class="flex-1 overflow-auto p-2 scrollbar-dark">
-        <!-- Faction buildings in selected system -->
-      <div v-if="buildingsInSelected.length" class="mb-3">
-        <div class="text-[10px] font-semibold text-space-yellow uppercase tracking-wider mb-1 px-1">🏛 Faction Buildings</div>
-        <div v-for="b in buildingsInSelected" :key="b.facility_id"
-          class="mb-1 px-2 py-1 rounded border border-[#2a2200] bg-[#18150a] text-xs">
-          <div class="text-space-yellow font-medium truncate">{{ b.facility_name || b.facility_type }}</div>
-          <div class="text-[11px] text-space-text-dim flex gap-2 mt-0.5">
-            <span>{{ b.poi_name }}</span>
-            <span v-if="b.faction_service" class="text-space-text-dim/70">· {{ b.faction_service }}</span>
-          </div>
-        </div>
+      <!-- Tabs -->
+      <div class="flex border-b border-space-border shrink-0">
+        <button v-for="t in systemPanelTabs" :key="t.id"
+          @click="systemPanelTab = t.id"
+          class="flex-1 text-[11px] py-1.5 transition-colors"
+          :class="systemPanelTab === t.id ? 'text-space-accent border-b-2 border-space-accent font-semibold' : 'text-space-text-dim hover:text-space-text'"
+        >{{ t.label }}</button>
       </div>
+      <div class="flex-1 overflow-auto p-2 scrollbar-dark">
 
-      <div v-if="botsInSelected.length === 0 && buildingsInSelected.length === 0" class="text-xs text-space-text-dim italic py-4 text-center">No bots in this system</div>
-      <div v-if="botsInSelected.length === 0 && buildingsInSelected.length > 0" class="text-xs text-space-text-dim italic py-2 text-center">No bots here</div>
-        <div v-for="bot in botsInSelected" :key="bot.username"
-          class="mb-2 p-2 rounded-md border border-space-border bg-space-bg text-xs">
-          <div class="flex items-center justify-between mb-1">
-            <span class="font-semibold text-space-text-bright">{{ bot.username }}</span>
-            <span class="px-1.5 py-0.5 rounded text-[10px] font-medium"
-              :class="bot.state === 'running' ? 'bg-space-green/20 text-space-green' : 'bg-space-yellow/20 text-space-yellow'">
-              {{ bot.state || 'idle' }}
-            </span>
+        <!-- OVERVIEW tab -->
+        <template v-if="systemPanelTab === 'overview'">
+          <!-- Faction buildings -->
+          <div v-if="buildingsInSelected.length" class="mb-3">
+            <div class="text-[10px] font-semibold text-space-yellow uppercase tracking-wider mb-1 px-1">🏛 Faction Buildings</div>
+            <div v-for="b in buildingsInSelected" :key="b.facility_id"
+              class="mb-1 px-2 py-1 rounded border border-[#2a2200] bg-[#18150a] text-xs">
+              <div class="text-space-yellow font-medium truncate">{{ b.facility_name || b.facility_type }}</div>
+              <div class="text-[11px] text-space-text-dim flex gap-2 mt-0.5">
+                <span>{{ b.poi_name }}</span>
+                <span v-if="b.faction_service" class="text-space-text-dim/70">· {{ b.faction_service }}</span>
+              </div>
+            </div>
           </div>
-          <div class="text-space-text-dim text-[11px]">
-            <span v-if="bot.routine" class="mr-2">⚙️ {{ bot.routine }}</span>
-            <span v-if="(bot as any).poi" class="text-space-text-dim">@ {{ (bot as any).poi }}</span>
+          <!-- POIs from map data -->
+          <div v-if="poisInSelected.length" class="mb-3">
+            <div class="text-[10px] font-semibold text-space-text-dim uppercase tracking-wider mb-1 px-1">🗺 Galactic Objects ({{ poisInSelected.length }})</div>
+            <div v-for="poi in poisInSelected" :key="poi.id"
+              class="mb-1 px-2 py-1.5 rounded border border-space-border bg-space-bg/50 text-xs">
+              <div class="flex items-start justify-between gap-1">
+                <span class="font-medium text-space-text truncate">{{ poiIcon(poi.type) }} {{ poi.name }}</span>
+                <span class="text-[10px] text-space-text-dim shrink-0">{{ poi.type?.replace(/_/g, ' ') }}</span>
+              </div>
+              <div v-if="depositsForPoi(poi.id).length" class="text-[11px] text-green-400/80 mt-0.5">
+                ⛏ {{ depositsForPoi(poi.id).map(d => d.resource_name || d.resource_id).join(', ') }}
+              </div>
+              <!-- Bot at this POI -->
+              <div v-for="b in botsAtPoi(poi.id)" :key="b.username" class="text-[11px] text-space-accent mt-0.5">
+                🚀 {{ b.username }} ({{ b.routine }})
+              </div>
+            </div>
           </div>
-          <div class="flex gap-2 mt-1.5 text-[11px]">
-            <span class="text-space-green">⛽ {{ bot.fuel }}%</span>
-            <span class="text-space-red">🛡 {{ bot.hull }}%</span>
-            <span class="text-space-yellow">₡{{ bot.credits?.toLocaleString() }}</span>
+
+          <!-- Wormholes in this system -->
+          <div v-if="wormholesInSelected.length" class="mb-3">
+            <div class="text-[10px] font-semibold text-purple-300 uppercase tracking-wider mb-1 px-1">🌀 Wormholes</div>
+            <div v-for="wh in wormholesInSelected" :key="wh.entrance_poi_id"
+              class="mb-1 px-2 py-1 rounded border text-xs"
+              :class="wh.status === 'collapsed' ? 'border-purple-900/30 bg-purple-950/10 opacity-60' : 'border-purple-700/40 bg-purple-950/20'">
+              <div class="text-purple-200 font-medium">{{ wh.status === 'collapsed' ? '💀 Remnant' : '🌀 Active' }}</div>
+              <div class="text-[11px] text-space-text-dim mt-0.5">
+                → {{ wh.exit_system_name || wh.exit_system_id || 'Unknown destination' }}
+              </div>
+              <div class="text-[10px] text-space-text-dim/60 mt-0.5">Last seen {{ formatAge(wh.last_seen_at) }}</div>
+            </div>
           </div>
-        </div>
+          <!-- No content -->
+          <div v-if="botsInSelected.length === 0 && buildingsInSelected.length === 0 && depositsInSelected.length === 0 && poisInSelected.length === 0 && wormholesInSelected.length === 0" class="text-xs text-space-text-dim italic py-4 text-center">Nothing recorded in this system</div>
+          <!-- Bots not at any specific POI (in transit) -->
+          <div v-if="botsInSelected.filter(b => !(b as any).poi || !poisInSelected.find(p => p.id === (b as any).poi)).length" class="mb-2">
+            <div class="text-[10px] font-semibold text-space-text-dim uppercase tracking-wider mb-1 px-1">🚀 Bots in transit</div>
+          </div>
+          <div v-for="bot in botsInSelected.filter(b => !(b as any).poi || !poisInSelected.find(p => p.id === (b as any).poi))" :key="bot.username"
+            class="mb-2 p-2 rounded-md border border-space-border bg-space-bg text-xs">
+            <div class="flex items-center justify-between mb-1">
+              <span class="font-semibold text-space-text-bright">{{ bot.username }}</span>
+              <span class="px-1.5 py-0.5 rounded text-[10px] font-medium"
+                :class="bot.state === 'running' ? 'bg-space-green/20 text-space-green' : 'bg-space-yellow/20 text-space-yellow'">
+                {{ bot.state || 'idle' }}
+              </span>
+            </div>
+            <div class="text-space-text-dim text-[11px]">
+              <span v-if="bot.routine" class="mr-2">⚙️ {{ bot.routine }}</span>
+              <span v-if="(bot as any).poi" class="text-space-text-dim">@ {{ (bot as any).poi }}</span>
+            </div>
+            <div class="flex gap-2 mt-1.5 text-[11px]">
+              <span class="text-space-green">⛽ {{ bot.fuel }}%</span>
+              <span class="text-space-red">🛡 {{ bot.hull }}%</span>
+              <span class="text-space-yellow">₡{{ bot.credits?.toLocaleString() }}</span>
+            </div>
+          </div>
+        </template>
+
+        <!-- DEPOSITS tab -->
+        <template v-if="systemPanelTab === 'deposits'">
+          <div v-if="depositsInSelected.length === 0" class="text-xs text-space-text-dim italic py-4 text-center">
+            No deposits recorded for this system.<br/>
+            <span class="text-[11px]">A mining/harvesting bot must visit first.</span>
+          </div>
+          <!-- Group by POI -->
+          <div v-for="(poiDeposits, poiId) in depositsInSelectedByPoi" :key="poiId" class="mb-3">
+            <div class="text-[10px] font-semibold uppercase tracking-wider mb-1 px-1" :class="depositCategoryTextClass(poiDeposits[0]?.category || 'ore')">
+              {{ depositCategoryIcon(poiDeposits[0]?.category || 'ore') }} {{ poiDeposits[0]?.poi_name || poiId }}
+              <span class="text-space-text-dim font-normal lowercase ml-1">({{ poiDeposits[0]?.poi_type || 'POI' }})</span>
+            </div>
+            <div v-for="dep in poiDeposits" :key="dep.resource_id"
+              class="mb-1 px-2 py-1.5 rounded border text-xs"
+              :class="depositCategoryClass(dep.category)"
+            >
+              <div class="flex justify-between items-center">
+                <span class="font-medium">{{ dep.resource_name || dep.resource_id }}</span>
+                <span class="text-[10px]" :class="depletionClass(dep.depletion_pct)">{{ Math.round(dep.depletion_pct) }}%</span>
+              </div>
+              <div class="flex gap-3 text-[11px] text-space-text-dim mt-0.5">
+                <span>{{ formatRemaining(dep.remaining) }} left</span>
+                <span v-if="dep.quality > 0">Q{{ dep.quality.toFixed(0) }}</span>
+                <span class="ml-auto">{{ formatAge(dep.last_seen_at) }}</span>
+              </div>
+              <div class="w-full bg-[#1a1a1a] rounded-full h-1 mt-1">
+                <div class="h-1 rounded-full" :class="dep.depletion_pct > 75 ? 'bg-red-500' : dep.depletion_pct > 40 ? 'bg-yellow-500' : 'bg-green-500'"
+                  :style="{ width: Math.max(2, 100 - dep.depletion_pct) + '%' }"></div>
+              </div>
+            </div>
+          </div>
+        </template>
+
       </div>
     </div>
 
@@ -154,7 +361,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, onMounted, onUnmounted, watch } from 'vue'
+import { ref, computed, onMounted, onUnmounted } from 'vue'
 import { useBotStore } from '../stores/botStore'
 
 // ── Types ──────────────────────────────────────────────────────────────
@@ -254,18 +461,173 @@ const botsInSelected = computed(() =>
 const buildingsBySystem = computed(() => {
   const map = new Map<string, typeof botStore.factionBuildings>()
   for (const b of botStore.factionBuildings) {
-    if (!b.system_id) continue
-    if (!map.has(b.system_id)) map.set(b.system_id, [])
-    map.get(b.system_id)!.push(b)
+    // Index by system_id (primary)
+    if (b.system_id) {
+      if (!map.has(b.system_id)) map.set(b.system_id, [])
+      map.get(b.system_id)!.push(b)
+    }
+    // Also index by lowercased system_name (fallback when IDs differ)
+    if (b.system_name) {
+      const key = b.system_name.toLowerCase()
+      if (!map.has(key)) map.set(key, [])
+      map.get(key)!.push(b)
+    }
   }
   return map
 })
 
+function getBuildingsForSystem(sys: SystemData): typeof botStore.factionBuildings {
+  return (
+    buildingsBySystem.value.get(sys.id) ??
+    buildingsBySystem.value.get(sys.name?.toLowerCase() ?? '') ??
+    []
+  )
+}
+
 const buildingsInSelected = computed(() =>
-  selectedSystem.value ? (buildingsBySystem.value.get(selectedSystem.value.id) || []) : []
+  selectedSystem.value ? getBuildingsForSystem(selectedSystem.value) : []
 )
 
+const depositsBySystem = computed(() => {
+  const map = new Map<string, typeof botStore.deposits>()
+  for (const d of botStore.deposits) {
+    if (!map.has(d.system_id)) map.set(d.system_id, [])
+    map.get(d.system_id)!.push(d)
+  }
+  return map
+})
+
+const depositsInSelected = computed(() =>
+  selectedSystem.value ? (depositsBySystem.value.get(selectedSystem.value.id) ?? []) : []
+)
+
+/** POIs for selected system from mapData (includes full POI type/name info) */
+const poisInSelected = computed((): Array<{ id: string; name: string; type: string }> => {
+  if (!selectedSystem.value) return []
+  const sysData = botStore.mapData[selectedSystem.value.id]
+  if (!sysData?.pois) return []
+  return sysData.pois as Array<{ id: string; name: string; type: string }>
+})
+
+function poiIcon(type: string): string {
+  if (!type) return '📍'
+  const t = type.toLowerCase()
+  if (t.includes('station') || t.includes('base') || t.includes('outpost')) return '🏠'
+  if (t.includes('asteroid') || t.includes('belt')) return '🪨'
+  if (t.includes('gas') || t.includes('cloud')) return '💨'
+  if (t.includes('ice') || t.includes('field')) return '❄'
+  if (t.includes('planet')) return '🌍'
+  if (t.includes('wormhole') || t.includes('gate') || t.includes('jump')) return '🌀'
+  if (t.includes('ruin') || t.includes('wreck') || t.includes('derelict')) return '💀'
+  if (t.includes('anomaly') || t.includes('signal')) return '⚡'
+  if (t.includes('moon')) return '🌑'
+  return '📍'
+}
+
+function depositsForPoi(poiId: string) {
+  return depositsInSelected.value.filter(d => d.poi_id === poiId)
+}
+
+function botsAtPoi(poiId: string) {
+  return botsInSelected.value.filter(b => (b as any).poi === poiId)
+}
+
+/** Deposits for selected system grouped by poi_id */
+const depositsInSelectedByPoi = computed(() => {
+  const groups: Record<string, typeof botStore.deposits> = {}
+  for (const d of depositsInSelected.value) {
+    if (!groups[d.poi_id]) groups[d.poi_id] = []
+    groups[d.poi_id].push(d)
+  }
+  return groups
+})
+
+const depositSummaryBySystem = computed(() => {
+  const map = new Map<string, typeof botStore.depositSummary>()
+  for (const s of botStore.depositSummary) {
+    if (!map.has(s.system_id)) map.set(s.system_id, [])
+    map.get(s.system_id)!.push(s)
+  }
+  return map
+})
+
+const depositsSearchResults = computed(() => {
+  let items = botStore.depositSummary
+  if (depositsCategoryFilter.value) {
+    items = items.filter(d => d.category === depositsCategoryFilter.value)
+  }
+  if (depositsSearchQuery.value.trim()) {
+    const q = depositsSearchQuery.value.toLowerCase()
+    const matchingPoiIds = new Set(
+      botStore.deposits
+        .filter(d => (d.resource_name || '').toLowerCase().includes(q) || (d.resource_id || '').toLowerCase().includes(q))
+        .map(d => d.poi_id)
+    )
+    items = items.filter(d =>
+      d.system_name.toLowerCase().includes(q) ||
+      d.poi_name.toLowerCase().includes(q) ||
+      d.category.includes(q) ||
+      matchingPoiIds.has(d.poi_id)
+    )
+  }
+  return items.slice().sort((a, b) => b.total_remaining - a.total_remaining)
+})
+
+function depositCategoryIcon(cat: string): string {
+  if (cat === 'gas') return '💨'
+  if (cat === 'ice') return '❄'
+  if (cat === 'crystal') return '💎'
+  return '⛏'
+}
+function depositCategoryClass(cat: string): string {
+  if (cat === 'gas') return 'border-[#0a2a1a] bg-[#040f0a]'
+  if (cat === 'ice') return 'border-[#0a1a2a] bg-[#040a0f]'
+  if (cat === 'crystal') return 'border-[#1a0a2a] bg-[#0a040f]'
+  return 'border-[#0a1f0a] bg-[#040f04]'
+}
+function depositCategoryTextClass(cat: string): string {
+  if (cat === 'gas') return 'text-cyan-400'
+  if (cat === 'ice') return 'text-sky-400'
+  if (cat === 'crystal') return 'text-purple-400'
+  return 'text-green-400'
+}
+function depletionClass(pct: number): string {
+  if (pct > 75) return 'text-red-400'
+  if (pct > 40) return 'text-yellow-400'
+  return 'text-green-400'
+}
+function formatRemaining(n: number): string {
+  if (n >= 1_000_000) return (n / 1_000_000).toFixed(1) + 'M'
+  if (n >= 1_000) return (n / 1_000).toFixed(1) + 'K'
+  return n.toString()
+}
+function formatAge(iso: string): string {
+  if (!iso) return ''
+  const ms = Date.now() - new Date(iso).getTime()
+  const m = Math.floor(ms / 60_000)
+  if (m < 60) return `${m}m ago`
+  const h = Math.floor(m / 60)
+  if (h < 24) return `${h}h ago`
+  return `${Math.floor(h / 24)}d ago`
+}
+
 const showBuildingsPanel = ref(false)
+const showDepositsPanel = ref(false)
+const showWormholesPanel = ref(false)
+const depositsSearchQuery = ref('')
+const depositsCategoryFilter = ref('')
+const systemPanelTab = ref<'overview' | 'deposits'>('overview')
+
+const systemPanelTabs = [
+  { id: 'overview' as const, label: 'Overview' },
+  { id: 'deposits' as const, label: '⛏ Deposits' },
+]
+
+const wormholesInSelected = computed(() =>
+  selectedSystem.value
+    ? botStore.wormholes.filter(w => w.entrance_system_id === selectedSystem.value!.id)
+    : []
+)
 
 const buildingsGroupedBySystem = computed(() => {
   const groups: Record<string, typeof botStore.factionBuildings> = {}
@@ -287,6 +649,15 @@ function jumpToSystem(systemId: string) {
 }
 
 // ── Helpers ────────────────────────────────────────────────────────────
+
+/** Convert viewport clientX/Y to canvas pixel coordinates (handles canvas offset + CSS scaling) */
+function getCanvasPos(clientX: number, clientY: number) {
+  const canvas = canvasRef.value!
+  const rect = canvas.getBoundingClientRect()
+  const scaleX = canvas.width  / rect.width
+  const scaleY = canvas.height / rect.height
+  return { x: (clientX - rect.left) * scaleX, y: (clientY - rect.top) * scaleY }
+}
 
 function worldToScreen(wx: number, wy: number) {
   const canvas = canvasRef.value!
@@ -393,6 +764,61 @@ function render(ctx?: CanvasRenderingContext2D | null) {
     }
   }
 
+  // Wormhole arcs (curved one-way rifts connecting distant systems)
+  for (const wh of botStore.wormholes) {
+    if (!wh.exit_system_id) continue
+    const entrSys = state.systems.find(s => s.id === wh.entrance_system_id)
+    const exitSys = state.systems.find(s => s.id === wh.exit_system_id)
+    if (!entrSys || !exitSys) continue
+    const p1 = worldToScreen(entrSys.x, entrSys.y)
+    const p2 = worldToScreen(exitSys.x, exitSys.y)
+    const isCollapsed = wh.status === 'collapsed'
+    // Bezier control point: perpendicular offset for curve
+    const mx = (p1.x + p2.x) / 2
+    const my = (p1.y + p2.y) / 2
+    const dx = p2.x - p1.x
+    const dy = p2.y - p1.y
+    const dist = Math.sqrt(dx * dx + dy * dy)
+    const bend = Math.min(dist * 0.35, 80)
+    const cpx = mx - (dy / dist) * bend
+    const cpy = my + (dx / dist) * bend
+    // Animated dash offset for active wormholes
+    const dashOffset = isCollapsed ? 0 : -(state.animTime * 0.04) % 24
+    const alpha = isCollapsed ? 0.25 : 0.7
+    const color = isCollapsed ? `rgba(120,80,160,${alpha})` : `rgba(180,80,255,${alpha})`
+    ctx.save()
+    ctx.strokeStyle = color
+    ctx.lineWidth = isCollapsed ? 1 : 2
+    ctx.setLineDash(isCollapsed ? [3, 6] : [8, 6])
+    ctx.lineDashOffset = dashOffset
+    ctx.shadowColor = isCollapsed ? 'transparent' : 'rgba(180,80,255,0.5)'
+    ctx.shadowBlur = isCollapsed ? 0 : 6
+    ctx.beginPath()
+    ctx.moveTo(p1.x, p1.y)
+    ctx.quadraticCurveTo(cpx, cpy, p2.x, p2.y)
+    ctx.stroke()
+    ctx.restore()
+    // Arrowhead at exit end
+    if (!isCollapsed) {
+      const t = 0.95
+      const ax = (1-t)*(1-t)*p1.x + 2*(1-t)*t*cpx + t*t*p2.x
+      const ay = (1-t)*(1-t)*p1.y + 2*(1-t)*t*cpy + t*t*p2.y
+      const angle = Math.atan2(p2.y - ay, p2.x - ax)
+      const arrowLen = 7
+      ctx.save()
+      ctx.strokeStyle = `rgba(180,80,255,0.9)`
+      ctx.lineWidth = 1.5
+      ctx.setLineDash([])
+      ctx.beginPath()
+      ctx.moveTo(p2.x, p2.y)
+      ctx.lineTo(p2.x - arrowLen * Math.cos(angle - 0.4), p2.y - arrowLen * Math.sin(angle - 0.4))
+      ctx.moveTo(p2.x, p2.y)
+      ctx.lineTo(p2.x - arrowLen * Math.cos(angle + 0.4), p2.y - arrowLen * Math.sin(angle + 0.4))
+      ctx.stroke()
+      ctx.restore()
+    }
+  }
+
   // Nodes
   const bySys = botsBySystem.value
   for (const sys of state.systems) {
@@ -458,15 +884,43 @@ function render(ctx?: CanvasRenderingContext2D | null) {
     ctx.beginPath(); ctx.arc(pos.x, pos.y, nodeR * 0.35 * hoverScale, 0, Math.PI * 2); ctx.fill()
 
     // Faction building diamond marker
-    const hasFactionBuilding = buildingsBySystem.value.has(sys.id)
-    if (hasFactionBuilding) {
-      const dx = pos.x + nodeR * hoverScale + 4
-      const dy = pos.y - nodeR * hoverScale - 4
-      const s = 4
-      ctx.fillStyle = 'rgba(255,200,50,0.9)'
+    const sysBuildings = getBuildingsForSystem(sys)
+    if (sysBuildings.length > 0) {
+      const dx = pos.x + nodeR * hoverScale + 6
+      const dy = pos.y - nodeR * hoverScale - 6
+      const s = 6
+      ctx.fillStyle = 'rgba(255,200,50,0.92)'
+      ctx.strokeStyle = 'rgba(180,120,0,0.7)'
+      ctx.lineWidth = 1
       ctx.beginPath()
       ctx.moveTo(dx, dy - s); ctx.lineTo(dx + s, dy); ctx.lineTo(dx, dy + s); ctx.lineTo(dx - s, dy)
-      ctx.closePath(); ctx.fill()
+      ctx.closePath(); ctx.fill(); ctx.stroke()
+      if (sysBuildings.length > 1 && state.zoom > 0.3) {
+        ctx.font = 'bold 9px monospace'
+        ctx.fillStyle = '#050810'
+        ctx.textAlign = 'center'
+        ctx.textBaseline = 'middle'
+        ctx.fillText(sysBuildings.length.toString(), dx, dy)
+      }
+    }
+
+    // Deposit circle marker (green dot, offset opposite side from building diamond)
+    const sysDepSummary = depositSummaryBySystem.value.get(sys.id)
+    if (sysDepSummary && sysDepSummary.length > 0) {
+      const mx = pos.x - nodeR * hoverScale - 7
+      const my = pos.y - nodeR * hoverScale - 7
+      const mr = 4.5
+      const avgDepl = sysDepSummary.reduce((s, d) => s + d.avg_depletion, 0) / sysDepSummary.length
+      const green = avgDepl > 75 ? 'rgba(200,60,60,0.9)' : avgDepl > 40 ? 'rgba(220,180,40,0.9)' : 'rgba(50,200,100,0.9)'
+      ctx.fillStyle = green
+      ctx.beginPath(); ctx.arc(mx, my, mr, 0, Math.PI * 2); ctx.fill()
+      if (state.zoom > 0.4 && sysDepSummary.length > 1) {
+        ctx.font = 'bold 8px monospace'
+        ctx.fillStyle = '#050810'
+        ctx.textAlign = 'center'
+        ctx.textBaseline = 'middle'
+        ctx.fillText(sysDepSummary.length.toString(), mx, my)
+      }
     }
 
     // Bot count badge (our bots only)
@@ -509,8 +963,14 @@ function showTooltip(sys: SystemData, mx: number, my: number) {
   }
   if (tooltipBotsRef.value) {
     const n = botsBySystem.value.get(sys.id)?.length ?? 0
-    tooltipBotsRef.value.textContent = n > 0 ? `${n} bot${n > 1 ? 's' : ''} here` : ''
-    tooltipBotsRef.value.style.display = n > 0 ? '' : 'none'
+    const nb = getBuildingsForSystem(sys).length
+    const nd = depositSummaryBySystem.value.get(sys.id)?.length ?? 0
+    const parts: string[] = []
+    if (n > 0) parts.push(`${n} bot${n > 1 ? 's' : ''} here`)
+    if (nb > 0) parts.push(`🏛 ${nb} building${nb > 1 ? 's' : ''}`)
+    if (nd > 0) parts.push(`⛏ ${nd} deposit POI${nd > 1 ? 's' : ''}`)
+    tooltipBotsRef.value.textContent = parts.join(' · ')
+    tooltipBotsRef.value.style.display = parts.length > 0 ? '' : 'none'
   }
   el.style.left = (mx + 14) + 'px'
   el.style.top = (my + 14) + 'px'
@@ -581,8 +1041,10 @@ onMounted(async () => {
   generateStars()
   resizeCanvas()
 
-  // Pre-load faction buildings for map markers
+  // Pre-load faction buildings, deposits, and wormholes for map markers
   botStore.fetchFactionStorage()
+  botStore.fetchDeposits()
+  botStore.fetchWormholes(false)
 
   resizeObserver = new ResizeObserver(resizeCanvas)
   if (containerRef.value) resizeObserver.observe(containerRef.value)
@@ -615,9 +1077,10 @@ onMounted(async () => {
       state.viewY = state.viewStart.y + (e.clientY - state.dragStart.y) / state.zoom
       state.targetViewX = state.viewX; state.targetViewY = state.viewY
     } else {
-      const sys = findSystemAt(e.clientX, e.clientY)
+      const cp = getCanvasPos(e.clientX, e.clientY)
+      const sys = findSystemAt(cp.x, cp.y)
       state.hoveredSystem = sys
-      if (sys) showTooltip(sys, e.clientX, e.clientY)
+      if (sys) showTooltip(sys, e.clientX, e.clientY)  // tooltip uses viewport coords (CSS position)
       else hideTooltip()
     }
   })
@@ -625,7 +1088,8 @@ onMounted(async () => {
   canvas.addEventListener('mouseup', (e) => {
     const dx = e.clientX - state.dragStart.x, dy = e.clientY - state.dragStart.y
     if (Math.abs(dx) < 5 && Math.abs(dy) < 5) {
-      const sys = findSystemAt(e.clientX, e.clientY)
+      const cp = getCanvasPos(e.clientX, e.clientY)
+      const sys = findSystemAt(cp.x, cp.y)
       if (sys) selectedSystem.value = sys
     }
     state.isDragging = false
@@ -641,11 +1105,12 @@ onMounted(async () => {
     const factor = Math.exp(-Math.max(-100, Math.min(100, e.deltaY)) * ZOOM_SENSITIVITY)
     const newZoom = Math.max(MIN_ZOOM, Math.min(MAX_ZOOM, state.targetZoom * factor))
     const cx = canvas.width / 2, cy = canvas.height / 2
-    const wx = (e.clientX - cx) / state.zoom - state.viewX
-    const wy = (e.clientY - cy) / state.zoom - state.viewY
+    const cp = getCanvasPos(e.clientX, e.clientY)
+    const wx = (cp.x - cx) / state.zoom - state.viewX
+    const wy = (cp.y - cy) / state.zoom - state.viewY
     state.zoom = newZoom; state.targetZoom = newZoom
-    const nx = (e.clientX - cx) / state.zoom - state.viewX
-    const ny = (e.clientY - cy) / state.zoom - state.viewY
+    const nx = (cp.x - cx) / state.zoom - state.viewX
+    const ny = (cp.y - cy) / state.zoom - state.viewY
     state.targetViewX = state.viewX + (nx - wx)
     state.targetViewY = state.viewY + (ny - wy)
   }, { passive: false })
@@ -685,7 +1150,8 @@ onMounted(async () => {
     if (Date.now() - state.touchStartTime < 300 && e.changedTouches.length === 1 && state.initialTouchPos) {
       const t = e.changedTouches[0]
       if (Math.abs(t.clientX - state.initialTouchPos.x) < 10 && Math.abs(t.clientY - state.initialTouchPos.y) < 10) {
-        const sys = findSystemAt(t.clientX, t.clientY)
+        const cp = getCanvasPos(t.clientX, t.clientY)
+        const sys = findSystemAt(cp.x, cp.y)
         if (sys) selectedSystem.value = sys
       }
     }

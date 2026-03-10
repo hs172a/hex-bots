@@ -108,6 +108,16 @@
         </div>
       </div>
 
+      <!-- Rename Ship (v0.200) -->
+      <div class="card py-2 px-2">
+        <h3 class="text-xs font-semibold text-space-text-dim uppercase border-b border-space-border pb-1 mb-2">✏️ Rename Ship</h3>
+        <div class="flex gap-2 items-center">
+          <input v-model="renameShipName" type="text" maxlength="32" placeholder="New name (3–32 chars, globally unique)…" class="input text-xs flex-1 !p-1" />
+          <button @click="doRenameShip" :disabled="renameSaving || renameShipName.trim().length < 3" class="btn btn-primary text-xs px-3 py-1 shrink-0">{{ renameSaving ? '⏳' : '✏️ Save' }}</button>
+        </div>
+        <div class="text-[11px] text-space-text-dim mt-1">Send empty name to clear. Names are globally unique and visible to other players.</div>
+      </div>
+
       <!-- Buy from Market -->
       <div class="card py-2 px-2">
         <div class="flex items-center justify-between border-b border-space-border pb-1 mb-2">
@@ -167,7 +177,7 @@
     <!-- Ship class tooltip -->
     <Teleport to="body">
       <div v-if="shipTooltipVisible && shipInfo?.class_id"
-        class="fixed z-[9999] w-72 bg-[#0d1117] border border-space-border rounded-lg shadow-2xl overflow-hidden pointer-events-none"
+        class="fixed z-[9999] w-86 bg-[#0d1117] border border-space-border rounded-lg shadow-2xl overflow-hidden pointer-events-none"
         :style="{ top: shipTooltipPos.y + 'px', left: shipTooltipPos.x + 'px' }">
         <img v-if="shipCatalogEntry" :src="shipImageUrl(shipInfo?.class_id || '')" :alt="shipCatalogEntry.name" class="w-full h-28 object-cover" @error="($event.target as HTMLImageElement).style.display='none'" />
         <div class="p-2.5 space-y-2">
@@ -206,6 +216,7 @@ import { useBotStore } from '../stores/botStore';
 const props = defineProps<{ bot: any }>();
 const emit = defineEmits<{
   (e: 'notif', text: string, type: 'success' | 'warn' | 'error'): void;
+  (e: 'refresh'): void;
 }>();
 
 const botStore = useBotStore();
@@ -219,6 +230,8 @@ const shipTooltipPos = ref({ x: 0, y: 0 });
 const reloadWeapon = ref('');
 const reloadAmmo = ref('');
 const shopQty = ref<Record<string, number>>({});
+const renameShipName = ref('');
+const renameSaving = ref(false);
 
 const currentBot = computed(() => {
   const bot = botStore.bots.find(b => b.username === props.bot.username);
@@ -332,6 +345,16 @@ function processExecResult(command: string, data: any) {
       shipActionLoading.value = false;
       if (data?.message) emit('notif', data.message, command === 'install_mod' ? 'success' : 'warn');
       loadShipData();
+      emit('refresh'); // cargo changed (item added/removed) — refresh Status+Cargo panels
+      break;
+    }
+    case 'buy': {
+      emit('refresh'); // cargo changed after purchase
+      break;
+    }
+    case 'reload': {
+      shipActionLoading.value = false;
+      emit('refresh'); // ammo loaded, cargo counts changed
       break;
     }
   }
@@ -352,6 +375,23 @@ function uninstallModule(moduleId: string) {
   if (!moduleId || shipActionLoading.value) return;
   shipActionLoading.value = true;
   execCommand('uninstall_mod', { module_id: moduleId });
+}
+
+function doRenameShip() {
+  const name = renameShipName.value.trim();
+  const username = currentBot.value?.username || props.bot.username;
+  if (!username) return;
+  renameSaving.value = true;
+  botStore.sendExec(username, 'rename_ship', { name }, (result: any) => {
+    renameSaving.value = false;
+    if (result.ok) {
+      emit('notif', name ? `Ship renamed to "${name}"` : 'Ship name cleared', 'success');
+      renameShipName.value = '';
+      emit('refresh');
+    } else {
+      emit('notif', result.error || 'Rename failed', 'error');
+    }
+  });
 }
 
 function execReload() {

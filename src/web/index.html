@@ -24,7 +24,17 @@
         --glow-cyan: 0 0 30px #00d4ff80;
         --glow-orange: 0 0 30px #ff6b3580;
     }
-    body, .bg-space-bg {
+    body {
+      background-image: url('./background.png');
+      background-size: cover;
+      background-attachment: fixed;
+      background-position: center;
+      background-repeat: no-repeat;
+    }
+    .bg-space-bg {
+      background-color: transparent !important; /* (--deep-void) !important; */
+    }
+    .bg-deep-bg {
       background-color: var(--deep-void) !important;
     }
     .card, .bg-space-card {

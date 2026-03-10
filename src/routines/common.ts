@@ -80,7 +80,14 @@ export function isIceFieldPoi(type: string): boolean {
 /** Check if a POI type is purely scenic (only needs one visit). */
 export function isScenicPoi(type: string): boolean {
   const t = type.toLowerCase();
-  return t === "sun" || t === "star" || t === "wormhole" || t === "jump_gate";
+  return t === "sun" || t === "star" || t === "jump_gate";
+  // Note: wormhole POIs are handled separately by isWormholePoi
+}
+
+/** Check if a POI is a wormhole entrance or remnant. */
+export function isWormholePoi(type: string): boolean {
+  const t = type.toLowerCase();
+  return t.includes("wormhole") || t === "rift" || t.includes("spatial_anomaly") || t === "anomaly";
 }
 
 /**
@@ -206,7 +213,14 @@ export async function getSystemInfo(ctx: RoutineContext): Promise<SystemInfo> {
   const systemResp = await bot.exec("get_system");
 
   if (systemResp.result && typeof systemResp.result === "object") {
-    const info = parseSystemData(systemResp.result as Record<string, unknown>, ctx.mapStore);
+    const r = systemResp.result as Record<string, unknown>;
+    // v0.201.2: get_system returns transit status during travel instead of crashing
+    if (r.status === "in_transit" || r.in_transit === true || r.transit_type) {
+      const eta = r.eta_seconds ?? r.eta ?? r.remaining_seconds;
+      ctx.log("travel", `In transit (ETA: ${eta ?? "?"}s) — deferring system scan`);
+      return { pois: [], connections: [], systemId: bot.system };
+    }
+    const info = parseSystemData(r, ctx.mapStore);
     if (info.systemId) bot.system = info.systemId;
     return info;
   }
@@ -512,8 +526,14 @@ export async function transferStationToFaction(ctx: RoutineContext): Promise<num
   await bot.refreshStorage();
   if (bot.storage.length === 0) return 0;
 
+  // Refresh faction storage once upfront so cap pre-checks use current quantities.
+  // This single extra call avoids many expensive withdraw→fail→put-back cycles.
+  if (bot.inFaction) await bot.refreshFactionStorage();
+
   let totalTransferred = 0;
   const MAX_PASSES = 20;
+  // Track items whose faction storage slot is at cap — skip them for the whole call.
+  const capReachedItems = new Set<string>();
 
   for (let pass = 0; pass < MAX_PASSES; pass++) {
     await bot.refreshStorage();
@@ -524,6 +544,18 @@ export async function transferStationToFaction(ctx: RoutineContext): Promise<num
     let withdrawnThisPass = 0;
     for (const item of [...bot.storage]) {
       if (item.quantity <= 0) continue;
+
+      // ── Cap pre-check: skip items already at faction storage limit ──
+      if (bot.inFaction && bot.poi && !capReachedItems.has(item.itemId)) {
+        const cap = ctx.mapStore.getFactionStorageCapPerItem(bot.poi);
+        const facQty = bot.factionStorage.find(i => i.itemId === item.itemId)?.quantity ?? 0;
+        if (facQty >= cap) {
+          capReachedItems.add(item.itemId);
+          ctx.log("trade", `⛔ ${item.name ?? item.itemId}: faction storage cap (${facQty.toLocaleString()}/${cap.toLocaleString()}) — keeping in station storage`);
+          continue;
+        }
+      }
+      if (capReachedItems.has(item.itemId)) continue;
 
       const freeSpace = bot.cargoMax > 0 ? bot.cargoMax - bot.cargo : 0;
       if (freeSpace <= 0) break;
@@ -553,7 +585,7 @@ export async function transferStationToFaction(ctx: RoutineContext): Promise<num
       if (item.quantity <= 0) continue;
 
       let deposited = false;
-      if (bot.inFaction && !noFacStorage) {
+      if (bot.inFaction && !noFacStorage && !capReachedItems.has(item.itemId)) {
         const dResp = await bot.exec("faction_deposit_items", { item_id: item.itemId, quantity: item.quantity });
         if (!dResp.error) {
           if (bot.poi) ctx.mapStore.setFactionStorage(bot.poi, true);
@@ -563,7 +595,10 @@ export async function transferStationToFaction(ctx: RoutineContext): Promise<num
         } else {
           const ec = dResp.error.code ?? "";
           const em = dResp.error.message ?? "";
-          if (ec === "no_faction_storage" || em.includes("no_faction_storage") ||
+          if (ec === "storage_cap_exceeded" || em.includes("storage_cap_exceeded") || em.includes("storage cap reached")) {
+            capReachedItems.add(item.itemId);
+            ctx.log("trade", `⛔ ${item.name ?? item.itemId}: faction storage cap exceeded — returning to station storage`);
+          } else if (ec === "no_faction_storage" || em.includes("no_faction_storage") ||
               em.includes("faction_lockbox") || em.includes("storage facility") ||
               ec === "not_in_faction" || em.includes("not_in_faction")) {
             noFacStorage = true;
@@ -574,7 +609,10 @@ export async function transferStationToFaction(ctx: RoutineContext): Promise<num
       }
       if (!deposited) {
         // Fallback: return to station storage so nothing is lost
-        await bot.exec("deposit_items", { item_id: item.itemId, quantity: item.quantity });
+        const putBackResp = await bot.exec("deposit_items", { item_id: item.itemId, quantity: item.quantity });
+        if (putBackResp.error) {
+          ctx.log("error", `Cannot return ${item.quantity}x ${item.name} to storage: ${putBackResp.error.message} — item remains in cargo`);
+        }
       }
     }
 
@@ -583,6 +621,12 @@ export async function transferStationToFaction(ctx: RoutineContext): Promise<num
     // No faction storage at this station — items are back in personal storage.
     // Breaking here avoids 20 pointless withdraw→deposit-back cycles.
     if (noFacStorage) break;
+
+    // All remaining items in personal storage are at cap — no further passes needed.
+    const remainingStorage = bot.storage.filter(
+      i => i.quantity > 0 && !capReachedItems.has(i.itemId),
+    );
+    if (remainingStorage.length === 0) break;
   }
 
   if (totalTransferred > 0) {
@@ -676,7 +720,10 @@ export async function sellAllCargo(ctx: RoutineContext): Promise<number> {
   let sold = 0;
   for (const item of bot.inventory) {
     const resp = await bot.exec("sell", { item_id: item.itemId, quantity: item.quantity });
-    if (!resp.error) sold++;
+    if (!resp.error) {
+      const sr = resp.result as Record<string, unknown> | null;
+      if (sr && ((sr.quantity_sold as number) ?? 0) > 0) sold++;
+    }
   }
   return sold;
 }
@@ -1242,6 +1289,9 @@ export async function depositCargoAtHome(
   // Refuel while we're here
   await tryRefuel(ctx);
 
+  // Replenish ammo while docked
+  await ensureAmmo(ctx);
+
   // Undock
   await ensureUndocked(ctx);
 
@@ -1290,6 +1340,7 @@ export async function depositCargoLocal(
   await collectFromStorage(ctx);
   const deposited = await depositNonFuelCargo(ctx);
   await tryRefuel(ctx);
+  await ensureAmmo(ctx);
   await ensureUndocked(ctx);
 
   if (deposited) ctx.log("trade", `Deposited cargo at ${localStation.name} — resuming exploration`);
@@ -1313,6 +1364,9 @@ export async function depositNonFuelCargo(ctx: RoutineContext): Promise<boolean>
   // Pre-check cache: if faction storage is known-unavailable at this station, skip all faction attempts
   const cachedFac = bot.poi ? ctx.mapStore.hasFactionStorage(bot.poi) : null;
   let noFactionStorage = cachedFac === false;
+  const capReachedItems = new Set<string>();
+  // Refresh faction storage so cap pre-checks use current quantities
+  if (bot.inFaction && !noFactionStorage) await bot.refreshFactionStorage();
   let deposited = 0;
   for (const item of cargoItems) {
     const itemId = (item.item_id as string) || "";
@@ -1323,7 +1377,18 @@ export async function depositNonFuelCargo(ctx: RoutineContext): Promise<boolean>
 
     const displayName = (item.name as string) || itemId;
     let usedFaction = false;
-    if (bot.inFaction && !noFactionStorage) {
+    if (bot.inFaction && !noFactionStorage && !capReachedItems.has(itemId)) {
+      // Cap pre-check: skip if faction storage is already full for this item
+      if (bot.poi) {
+        const cap = ctx.mapStore.getFactionStorageCapPerItem(bot.poi);
+        const facQty = bot.factionStorage.find(i => i.itemId === itemId)?.quantity ?? 0;
+        if (facQty >= cap) {
+          capReachedItems.add(itemId);
+          ctx.log("trade", `⛔ ${displayName}: faction storage cap (${facQty.toLocaleString()}/${cap.toLocaleString()}) — depositing to station storage`);
+        }
+      }
+    }
+    if (bot.inFaction && !noFactionStorage && !capReachedItems.has(itemId)) {
       const fResp = await bot.exec("faction_deposit_items", { item_id: itemId, quantity });
       if (!fResp.error) {
         if (bot.poi) ctx.mapStore.setFactionStorage(bot.poi, true);
@@ -1333,7 +1398,10 @@ export async function depositNonFuelCargo(ctx: RoutineContext): Promise<boolean>
       } else {
         const errCode = fResp.error.code ?? "";
         const errMsg = fResp.error.message ?? "";
-        if (errCode === "no_faction_storage" || errMsg.includes("no_faction_storage") ||
+        if (errCode === "storage_cap_exceeded" || errMsg.includes("storage_cap_exceeded") || errMsg.includes("storage cap reached")) {
+          capReachedItems.add(itemId);
+          ctx.log("trade", `⛔ ${displayName}: faction storage cap exceeded — depositing to station storage`);
+        } else if (errCode === "no_faction_storage" || errMsg.includes("no_faction_storage") ||
             errMsg.includes("faction_lockbox") || errMsg.includes("storage facility") ||
             errCode === "not_in_faction" || errMsg.includes("not_in_faction")) {
           noFactionStorage = true;
@@ -1399,7 +1467,10 @@ export async function clearStartupCargo(
     return true;
   });
 
-  if (toDeposit.length === 0) return [];
+  if (toDeposit.length === 0) {
+    await ensureAmmo(ctx); // still check ammo even if no cargo to deposit
+    return [];
+  }
 
   ctx.log("system", `Startup: clearing ${toDeposit.length} cargo type(s) before starting...`);
 
@@ -1471,12 +1542,65 @@ export async function clearStartupCargo(
     await bot.refreshCargo();
   }
 
+  // Auto-replenish ammo for any fitted weapons while we are already docked
+  await ensureAmmo(ctx);
+
   return deposited;
 }
 
 // ── Navigation ───────────────────────────────────────────────
 
-/** Navigate to a target system via jump chain. Returns true if arrived. */
+/**
+ * If there is an active battle, pause the current routine and fight until
+ * the battle resolves or the bot stops/docks/dies (max 90 seconds).
+ * Designed to be called at safe yield points (e.g. after each jump).
+ * Uses `get_status` (not v2_battle_status which only works mid-battle).
+ */
+export async function handleBattleIfActive(ctx: RoutineContext): Promise<void> {
+  const { bot } = ctx;
+  if (!bot.autoFightBack || bot.docked || bot.state !== "running") return;
+
+  const statusResp = await bot.exec("get_status");
+  if (statusResp.error || !statusResp.result || typeof statusResp.result !== "object") return;
+  const st = statusResp.result as Record<string, unknown>;
+  if (!st.in_battle && !st.battle_active && !st.battle_id) return;
+
+  ctx.log("combat", "⚡ Battle detected — pausing routine to fight back");
+
+  const MAX_CYCLES = 30; // 30 × 3s = 90s max
+  for (let i = 0; i < MAX_CYCLES && bot.state === "running" && !bot.docked; i++) {
+    // Set stance: fire and advance
+    await bot.exec("battle", { action: "stance", id: "fire" });
+    await bot.exec("battle", { action: "advance" });
+
+    await sleepBot(ctx, 3000);
+
+    // Check if battle has ended
+    const checkResp = await bot.exec("get_status");
+    if (!checkResp.error && checkResp.result && typeof checkResp.result === "object") {
+      const cs = checkResp.result as Record<string, unknown>;
+      const stillInBattle = cs.in_battle || cs.battle_active || cs.battle_id;
+      if (!stillInBattle) {
+        ctx.log("combat", "⚔️ Battle resolved — resuming routine");
+        return;
+      }
+      // Update hull/shield from status
+      const hullVal = cs.hull as number | undefined;
+      if (hullVal !== undefined) bot.hull = hullVal;
+    }
+
+    // Emergency flee if hull critical
+    const hullPct = bot.maxHull > 0 ? (bot.hull / bot.maxHull) * 100 : 100;
+    if (hullPct <= 15) {
+      ctx.log("combat", `⚠️ Hull critical (${Math.round(hullPct)}%) — fleeing battle!`);
+      await bot.exec("battle", { action: "stance", id: "flee" });
+      await bot.exec("battle", { action: "retreat" });
+      return;
+    }
+  }
+  ctx.log("combat", "⚔️ Battle timeout (90s) — resuming routine");
+}
+
 export async function navigateToSystem(
   ctx: RoutineContext,
   targetSystemId: string,
@@ -1514,13 +1638,16 @@ export async function navigateToSystem(
     await bot.refreshStatus();
     if (bot.system === targetSystemId) return true;
 
-    // Plan route from current position
-    const route = ctx.mapStore.findRoute(bot.system, targetSystemId);
+    // Plan route from current position (detailed includes wormhole hop metadata)
+    const detailedRoute = ctx.mapStore.findDetailedRoute(bot.system, targetSystemId);
     let nextSystem: string | null = null;
+    let wormholeEntrancePoi: string | undefined;
 
-    if (route && route.length > 1) {
-      nextSystem = route[1];
-      ctx.log("travel", `Route: ${route.length - 1} jump${route.length - 1 !== 1 ? "s" : ""} remaining`);
+    if (detailedRoute && detailedRoute.length > 1) {
+      nextSystem = detailedRoute[1].systemId;
+      wormholeEntrancePoi = detailedRoute[1].wormholeEntrancePoi;
+      const hops = detailedRoute.length - 1;
+      ctx.log("travel", `Route: ${hops} jump${hops !== 1 ? "s" : ""} remaining${wormholeEntrancePoi ? " (wormhole next)" : ""}`);
     } else {
       ctx.log("travel", `No mapped route — querying server for route to ${targetSystemId}`);
       const routeResp = await bot.exec("find_route", { target_system: targetSystemId });
@@ -1555,15 +1682,33 @@ export async function navigateToSystem(
       return false;
     }
 
+    // Repair at the fuel stop if docked and damaged
+    if (bot.docked) await repairShip(ctx);
+
     // Re-check in case ensureFueled moved us
     await bot.refreshStatus();
     if (bot.system === targetSystemId) return true;
 
     await ensureUndocked(ctx);
 
-    // Jump
-    ctx.log("travel", `Jumping to ${nextSystem}...`);
+    // For wormhole hops: travel to the entrance POI first, then jump through
+    if (wormholeEntrancePoi) {
+      ctx.log("travel", `Traveling to wormhole entrance ${wormholeEntrancePoi}...`);
+      const travelResp = await bot.exec("travel", { target_poi: wormholeEntrancePoi });
+      if (travelResp.error && !travelResp.error.message.toLowerCase().includes("already")) {
+        ctx.log("warn", `Wormhole travel failed: ${travelResp.error.message} — trying regular jump`);
+        wormholeEntrancePoi = undefined; // fall back to normal jump
+      } else {
+        bot.poi = wormholeEntrancePoi;
+      }
+    }
+
+    // Jump — flag prevents spurious fight-back on notifications from previous system
+    const jumpLabel = wormholeEntrancePoi ? `through wormhole to ${nextSystem}` : `to ${nextSystem}`;
+    ctx.log("travel", `Jumping ${jumpLabel}...`);
+    bot.isJumping = true;
     const jumpResp = await bot.exec("jump", { target_system: nextSystem });
+    bot.isJumping = false;
     if (jumpResp.error) {
       ctx.log("error", `Jump failed: ${jumpResp.error.message}`);
       return false;
@@ -1571,6 +1716,23 @@ export async function navigateToSystem(
 
     bot.stats.totalJumps = (bot.stats.totalJumps ?? 0) + 1;
     await bot.refreshStatus();
+
+    // Post-jump combat check: pause routine and fight until battle resolves
+    if (bot.autoFightBack && !bot.docked) {
+      await handleBattleIfActive(ctx);
+    }
+
+    // Post-battle hull check: if damaged below threshold, dock and repair before next jump
+    const postBattleHull = bot.maxHull > 0 ? Math.round((bot.hull / bot.maxHull) * 100) : 100;
+    if (postBattleHull < opts.hullThresholdPct && !bot.docked) {
+      ctx.log("system", `Hull at ${postBattleHull}% after combat — finding station to repair`);
+      const docked = await ensureDocked(ctx);
+      if (docked) {
+        await repairShip(ctx);
+        await ensureFueled(ctx, opts.fuelThresholdPct, { noJettison: opts.noJettison });
+        await ensureUndocked(ctx);
+      }
+    }
 
     // Update map data for the new system
     const sysResp = await bot.exec("get_system");
@@ -2408,6 +2570,140 @@ export function findGameBestSellPrice(
     price: result.price,
     station_name: result.poiName,
   };
+}
+
+// ── Ammo management (shared by all routines) ─────────────────
+
+/** Maps weapon ammo_type → default purchasable item ID (fallback when API doesn't supply ammo_item_id). */
+export const AMMO_TYPE_TO_ITEM_ID: Record<string, string> = {
+  autocannon:    "standard_rounds_box",
+  plasma:        "plasma_cell_pack",
+  plasma_cannon: "plasma_cell_pack",
+  ion:           "ion_charge_pack",
+  ion_cannon:    "ion_charge_pack",
+  flak:          "shaped_charge_slug_case",
+  flak_cannon:   "shaped_charge_slug_case",
+  emp:           "em_charge_pack",
+  emp_cannon:    "em_charge_pack",
+  void:          "void_core_pack",
+  void_cannon:   "void_core_pack",
+  null:          "null_void_core_pack",
+  null_cannon:   "null_void_core_pack",
+  fury:          "void_core_pack",
+  fury_cannon:   "void_core_pack",
+};
+
+function resolveAmmoItemId(wep: Record<string, unknown>): string | null {
+  if (wep.ammo_item_id) return wep.ammo_item_id as string;
+  const ammoType = ((wep.ammo_type as string) ?? "").toLowerCase();
+  return AMMO_TYPE_TO_ITEM_ID[ammoType] ?? null;
+}
+
+/**
+ * Auto-replenish ammo for all fitted weapon modules when docked.
+ *
+ * Priority order per weapon:
+ *   1. Faction storage withdraw
+ *   2. Personal station storage withdraw
+ *   3. Market buy (only if weapon ammo < 25% of magazine size)
+ *   4. Reload weapon from cargo
+ *
+ * Safe to call for any routine — exits immediately if no weapons are fitted
+ * (checked via cached bot.shipModules) or if not docked.
+ *
+ * @param lowThresholdPct  Cargo ammo % of (targetMagazines × magazine) below which replenishment triggers. Default 80.
+ * @param targetMagazines  How many full magazines to keep in cargo. Default 5.
+ */
+export async function ensureAmmo(
+  ctx: RoutineContext,
+  opts: { lowThresholdPct?: number; targetMagazines?: number } = {},
+): Promise<void> {
+  const { bot } = ctx;
+  if (!bot.docked) return;
+
+  // Quick pre-check: any weapons fitted? (uses cached get_status data — no API call)
+  const cachedWeapons = bot.shipModules.filter((m) => m.ammo_type);
+  if (cachedWeapons.length === 0) return;
+
+  const targetMags = opts.targetMagazines ?? 5;
+
+  // Fetch fresh weapon modules with full ammo data
+  const shipResp = await bot.exec("get_ship");
+  const rawModules: any[] = (shipResp.result as any)?.modules ?? [];
+  const weaponMods = rawModules.filter((m: any) => m.ammo_type && m.id);
+  if (weaponMods.length === 0) return;
+
+  await bot.refreshCargo();
+
+  for (const wep of weaponMods) {
+    const ammoItemId = resolveAmmoItemId(wep);
+    if (!ammoItemId) {
+      ctx.log("ammo", `⚠ No ammo mapping for weapon type '${wep.ammo_type}' — skipping`);
+      continue;
+    }
+    const magazineSize = (wep.magazine_size as number) ?? 100;
+    const target = magazineSize * targetMags;
+    const inCargo = bot.inventory.find((i) => i.itemId === ammoItemId)?.quantity ?? 0;
+    if (inCargo >= target) continue; // already stocked
+
+    const needed = target - inCargo;
+
+    // 1. Faction storage
+    if (bot.inFaction) {
+      const facItem = bot.factionStorage.find((i) => i.itemId === ammoItemId && i.quantity > 0);
+      if (facItem) {
+        const qty = Math.min(facItem.quantity, needed);
+        const wr = await bot.exec("faction_withdraw_items", { item_id: ammoItemId, quantity: qty });
+        if (!wr.error) {
+          ctx.log("ammo", `Withdrew ${qty}x ${ammoItemId} from faction storage for ${wep.name || wep.id}`);
+          await bot.refreshCargo();
+          continue;
+        }
+      }
+    }
+
+    // 2. Personal station storage
+    const storItem = bot.storage.find((i) => i.itemId === ammoItemId && i.quantity > 0);
+    if (storItem) {
+      const qty = Math.min(storItem.quantity, needed);
+      const wr = await bot.exec("withdraw_items", { item_id: ammoItemId, quantity: qty });
+      if (!wr.error) {
+        ctx.log("ammo", `Withdrew ${qty}x ${ammoItemId} from station storage for ${wep.name || wep.id}`);
+        await bot.refreshCargo();
+        continue;
+      }
+    }
+
+    // 3. Market buy — only if weapon is critically low (<25% magazine loaded)
+    const currentLoaded = (wep.current_ammo as number) ?? 0;
+    const criticalThreshold = Math.ceil(magazineSize * 0.25);
+    if (inCargo + currentLoaded < criticalThreshold) {
+      ctx.log("ammo", `🔫 Ammo critically low (${inCargo} cargo + ${currentLoaded} loaded) — buying ${needed}x ${ammoItemId}`);
+      const resp = await bot.exec("buy", { item_id: ammoItemId, quantity: needed });
+      if (resp.error) {
+        ctx.log("ammo", `Could not buy ${ammoItemId}: ${resp.error.message}`);
+      } else {
+        ctx.log("ammo", `Bought ${needed}x ${ammoItemId}`);
+        await bot.refreshCargo();
+      }
+    }
+  }
+
+  // Reload all weapons that have cargo ammo available
+  const shipResp2 = await bot.exec("get_ship");
+  const mods2: any[] = (shipResp2.result as any)?.modules ?? [];
+  await bot.refreshCargo();
+  for (const wep of mods2.filter((m: any) => m.ammo_type && m.id)) {
+    const ammoItemId = resolveAmmoItemId(wep);
+    if (!ammoItemId) continue;
+    const cargoAmmo = bot.inventory.find((i) => i.itemId === ammoItemId);
+    if (!cargoAmmo || cargoAmmo.quantity <= 0) continue;
+    const loaded = (wep.current_ammo as number) ?? 0;
+    const magSize = (wep.magazine_size as number) ?? 100;
+    if (loaded >= magSize) continue;
+    const resp = await bot.exec("reload", { weapon_instance_id: wep.id, ammo_item_id: ammoItemId });
+    if (!resp.error) ctx.log("ammo", `Reloaded ${wep.name || wep.id}`);
+  }
 }
 
 /**

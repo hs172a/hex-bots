@@ -108,14 +108,18 @@ export const gasHarvesterRoutine: Routine = async function* (ctx: RoutineContext
         }
       } else if (settings0.depositMode === "sell") {
         const sellResp = await bot.exec("sell", { item_id: item.itemId, quantity: item.quantity });
-        if (!sellResp.error) {
+        const sr0 = (!sellResp.error && sellResp.result && typeof sellResp.result === "object")
+          ? sellResp.result as Record<string, unknown> : null;
+        const unsoldQty0 = sr0 ? ((sr0.unsold as number) ?? item.quantity) : item.quantity;
+        if (!sellResp.error && unsoldQty0 <= 0) {
           deposited = true;
         } else {
-          const sResp = await bot.exec("deposit_items", { item_id: item.itemId, quantity: item.quantity });
+          const toDeposit0 = sellResp.error ? item.quantity : unsoldQty0;
+          const sResp = await bot.exec("deposit_items", { item_id: item.itemId, quantity: toDeposit0 });
           if (!sResp.error) {
             deposited = true;
           } else {
-            const fResp = await bot.exec("faction_deposit_items", { item_id: item.itemId, quantity: item.quantity });
+            const fResp = await bot.exec("faction_deposit_items", { item_id: item.itemId, quantity: toDeposit0 });
             if (!fResp.error) deposited = true;
           }
         }
@@ -183,116 +187,143 @@ export const gasHarvesterRoutine: Routine = async function* (ctx: RoutineContext
 
     if (bot.state !== "running") break;
 
-    // ── Find gas cloud and station in current system ──
+    // ── Get system info (always needed for station routing) ──
     yield "find_gas_cloud";
     const { pois, systemId } = await getSystemInfo(ctx);
     if (systemId) bot.system = systemId;
 
-    let cloudPoi: { id: string; name: string } | null = null;
     let stationPoi: { id: string; name: string } | null = null;
-
     const station = findStation(pois);
     if (station) stationPoi = { id: station.id, name: station.name };
 
-    // Find gas cloud — prefer one with target gas if set
-    if (settings.targetGas) {
-      for (const poi of pois) {
-        if (isGasCloudPoi(poi.type)) {
-          const sysData = ctx.mapStore.getSystem(bot.system);
-          const storedPoi = sysData?.pois.find(p => p.id === poi.id);
-          if (storedPoi?.ores_found.some(o => o.item_id === settings.targetGas)) {
-            cloudPoi = { id: poi.id, name: poi.name };
-            break;
+    // Pre-harvest cargo check — if already at threshold, skip straight to unload
+    await bot.refreshStatus();
+    const preHarvestFill = bot.cargoMax > 0 ? bot.cargo / bot.cargoMax : 0;
+    const skipToUnload = preHarvestFill >= cargoThresholdRatio;
+    if (skipToUnload) {
+      ctx.log("mining", `Cargo already ${Math.round(preHarvestFill * 100)}% full — skipping to unload`);
+    }
+
+    if (!skipToUnload) {
+      let cloudPoi: { id: string; name: string } | null = null;
+
+      // Find gas cloud — prefer one with target gas if set
+      if (settings.targetGas) {
+        for (const poi of pois) {
+          if (isGasCloudPoi(poi.type)) {
+            const sysData = ctx.mapStore.getSystem(bot.system);
+            const storedPoi = sysData?.pois.find(p => p.id === poi.id);
+            if (storedPoi?.ores_found.some(o => o.item_id === settings.targetGas)) {
+              cloudPoi = { id: poi.id, name: poi.name };
+              break;
+            }
           }
         }
       }
-    }
 
-    // Fallback: any gas cloud POI
-    if (!cloudPoi) {
-      const gasCloud = pois.find(p => isGasCloudPoi(p.type));
-      if (gasCloud) cloudPoi = { id: gasCloud.id, name: gasCloud.name };
-    }
-
-    if (!cloudPoi) {
-      ctx.log("error", "No gas cloud found in this system — waiting 30s before retry");
-      await sleep(30000);
-      continue;
-    }
-
-    // ── Travel to gas cloud ──
-    yield "travel_to_cloud";
-    const travelResp = await bot.exec("travel", { target_poi: cloudPoi.id });
-    if (travelResp.error && !travelResp.error.message.includes("already")) {
-      ctx.log("error", `Travel failed: ${travelResp.error.message}`);
-      await sleep(5000);
-      continue;
-    }
-    bot.poi = cloudPoi.id;
-
-    // ── Scavenge wrecks at cloud before harvesting ──
-    yield "scavenge";
-    await scavengeWrecks(ctx);
-
-    // ── Harvest loop: mine until cargo threshold ──
-    yield "harvest_loop";
-    let harvestCycles = 0;
-    let stopReason = "";
-    const gasMinedMap = new Map<string, number>();
-
-    while (bot.state === "running") {
-      await bot.refreshStatus();
-
-      const midHull = bot.maxHull > 0 ? Math.round((bot.hull / bot.maxHull) * 100) : 100;
-      if (midHull <= 40) { stopReason = `hull critical (${midHull}%)`; break; }
-
-      const midFuel = bot.maxFuel > 0 ? Math.round((bot.fuel / bot.maxFuel) * 100) : 100;
-      if (midFuel < safetyOpts.fuelThresholdPct) { stopReason = `fuel low (${midFuel}%)`; break; }
-
-      const mineResp = await bot.exec("mine");
-
-      if (mineResp.error) {
-        const msg = mineResp.error.message.toLowerCase();
-        if (msg.includes("depleted") || msg.includes("no resources") || msg.includes("no gas") || msg.includes("no minable")) {
-          stopReason = "cloud depleted"; break;
-        }
-        if (msg.includes("cargo") && msg.includes("full")) {
-          stopReason = "cargo full"; break;
-        }
-        if (msg.includes("harvester") || msg.includes("equipment")) {
-          ctx.log("error", `Missing gas harvester module: ${mineResp.error.message}`);
-          await sleep(30000);
-          return;
-        }
-        ctx.log("error", `Harvest error: ${mineResp.error.message}`);
-        break;
+      // Fallback: any gas cloud POI
+      if (!cloudPoi) {
+        const gasCloud = pois.find(p => isGasCloudPoi(p.type));
+        if (gasCloud) cloudPoi = { id: gasCloud.id, name: gasCloud.name };
       }
 
-      harvestCycles++;
-
-      const { oreId, oreName } = parseOreFromMineResult(mineResp.result);
-      if (oreId && bot.poi) {
-        ctx.mapStore.recordMiningYield(bot.system, bot.poi, { item_id: oreId, name: oreName });
-        gasMinedMap.set(oreName, (gasMinedMap.get(oreName) || 0) + 1);
-        bot.stats.totalMined++;
+      if (!cloudPoi) {
+        ctx.log("error", "No gas cloud found in this system — waiting 30s before retry");
+        await sleep(30000);
+        continue;
       }
 
-      await bot.refreshStatus();
-      const fillRatio = bot.cargoMax > 0 ? bot.cargo / bot.cargoMax : 0;
-      if (fillRatio >= cargoThresholdRatio) {
-        stopReason = `cargo at ${Math.round(fillRatio * 100)}%`; break;
+      // ── Travel to gas cloud ──
+      yield "travel_to_cloud";
+      const travelResp = await bot.exec("travel", { target_poi: cloudPoi.id });
+      if (travelResp.error && !travelResp.error.message.includes("already")) {
+        ctx.log("error", `Travel failed: ${travelResp.error.message}`);
+        await sleep(5000);
+        continue;
+      }
+      bot.poi = cloudPoi.id;
+
+      // Report gas cloud resources to deposits DB
+      const gasPoiResp = await bot.exec("get_poi");
+      if (!gasPoiResp.error && gasPoiResp.result && typeof gasPoiResp.result === "object") {
+        const gp = gasPoiResp.result as Record<string, unknown>;
+        const gasResources = (
+          Array.isArray(gp.resources) ? gp.resources :
+          Array.isArray(gp.gases) ? gp.gases : []
+        ) as Array<Record<string, unknown>>;
+        if (gasResources.length > 0 && bot.system) {
+          const sysSt = ctx.mapStore.getSystem(bot.system);
+          ctx.mapStore.updateDeposits(
+            cloudPoi.id, bot.system, sysSt?.name ?? bot.system,
+            cloudPoi.name, "gas_cloud", gasResources, bot.username,
+          );
+        }
       }
 
-      yield "harvesting";
-    }
+      // ── Scavenge wrecks at cloud before harvesting ──
+      yield "scavenge";
+      await scavengeWrecks(ctx);
 
-    // Harvest summary
-    if (harvestCycles > 0) {
-      const gasList = [...gasMinedMap.entries()].map(([name, qty]) => `${qty}x ${name}`).join(", ");
-      ctx.log("mining", `Harvested ${harvestCycles} cycles (${gasList})${stopReason ? ` — ${stopReason}` : ""}`);
-    } else if (stopReason) {
-      ctx.log("mining", `Stopped before harvesting — ${stopReason}`);
-    }
+      // ── Harvest loop: mine until cargo threshold ──
+      yield "harvest_loop";
+      let harvestCycles = 0;
+      let stopReason = "";
+      const gasMinedMap = new Map<string, number>();
+
+      while (bot.state === "running") {
+        await bot.refreshStatus();
+
+        const midHull = bot.maxHull > 0 ? Math.round((bot.hull / bot.maxHull) * 100) : 100;
+        if (midHull <= 40) { stopReason = `hull critical (${midHull}%)`; break; }
+
+        const midFuel = bot.maxFuel > 0 ? Math.round((bot.fuel / bot.maxFuel) * 100) : 100;
+        if (midFuel < safetyOpts.fuelThresholdPct) { stopReason = `fuel low (${midFuel}%)`; break; }
+
+        const mineResp = await bot.exec("mine");
+
+        if (mineResp.error) {
+          const msg = mineResp.error.message.toLowerCase();
+          if (msg.includes("depleted") || msg.includes("no resources") || msg.includes("no gas") || msg.includes("no minable")) {
+            stopReason = "cloud depleted"; break;
+          }
+          if (msg.includes("cargo") && msg.includes("full")) {
+            stopReason = "cargo full"; break;
+          }
+          if (msg.includes("harvester") || msg.includes("equipment")) {
+            ctx.log("error", `Missing gas harvester module: ${mineResp.error.message}`);
+            await sleep(30000);
+            return;
+          }
+          ctx.log("error", `Harvest error: ${mineResp.error.message}`);
+          break;
+        }
+
+        harvestCycles++;
+
+        const { oreId, oreName } = parseOreFromMineResult(mineResp.result);
+        if (oreId && bot.poi) {
+          ctx.mapStore.recordMiningYield(bot.system, bot.poi, { item_id: oreId, name: oreName });
+          gasMinedMap.set(oreName, (gasMinedMap.get(oreName) || 0) + 1);
+          bot.stats.totalMined++;
+        }
+
+        await bot.refreshStatus();
+        const fillRatio = bot.cargoMax > 0 ? bot.cargo / bot.cargoMax : 0;
+        if (fillRatio >= cargoThresholdRatio) {
+          stopReason = `cargo at ${Math.round(fillRatio * 100)}%`; break;
+        }
+
+        yield "harvesting";
+      }
+
+      // Harvest summary
+      if (harvestCycles > 0) {
+        const gasList = [...gasMinedMap.entries()].map(([name, qty]) => `${qty}x ${name}`).join(", ");
+        ctx.log("mining", `Harvested ${harvestCycles} cycles (${gasList})${stopReason ? ` — ${stopReason}` : ""}`);
+      } else if (stopReason) {
+        ctx.log("mining", `Stopped before harvesting — ${stopReason}`);
+      }
+    } // end if (!skipToUnload)
 
     if (bot.state !== "running") break;
 
@@ -371,15 +402,22 @@ export const gasHarvesterRoutine: Routine = async function* (ctx: RoutineContext
         let deposited = false;
         if (settings.depositMode === "sell") {
           const sellResp = await bot.exec("sell", { item_id: itemId, quantity });
-          if (!sellResp.error) {
+          const sr = (!sellResp.error && sellResp.result && typeof sellResp.result === "object")
+            ? sellResp.result as Record<string, unknown> : null;
+          const unsoldQty = sr ? ((sr.unsold as number) ?? quantity) : quantity;
+
+          if (!sellResp.error && unsoldQty <= 0) {
             deposited = true;
           } else {
-            ctx.log("trade", `Sell failed for ${displayName}: ${sellResp.error.message} — trying storage`);
-            const storeResp = await bot.exec("deposit_items", { item_id: itemId, quantity });
+            // Sell returned no buyers (quantity_sold=0) OR API error — deposit the unsold items
+            const toDeposit = sellResp.error ? quantity : unsoldQty;
+            if (!sellResp.error) ctx.log("trade", `No buyers for ${displayName} (${toDeposit} unsold) — depositing to storage`);
+            else ctx.log("trade", `Sell failed for ${displayName}: ${sellResp.error.message} — depositing to storage`);
+            const storeResp = await bot.exec("deposit_items", { item_id: itemId, quantity: toDeposit });
             if (!storeResp.error) {
               deposited = true;
             } else {
-              const fResp2 = await bot.exec("faction_deposit_items", { item_id: itemId, quantity });
+              const fResp2 = await bot.exec("faction_deposit_items", { item_id: itemId, quantity: toDeposit });
               if (!fResp2.error) deposited = true;
               else ctx.log("error", `All deposit methods failed for ${displayName}: ${fResp2.error.message}`);
             }

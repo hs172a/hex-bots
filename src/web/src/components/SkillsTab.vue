@@ -1,8 +1,9 @@
 <template>
-  <div class="flex-1 flex gap-2 p-2 overflow-hidden">
+  <div class="flex-1 flex gap-2 py-2 overflow-hidden">
 
     <!-- Left: skill list -->
-    <div class="w-72 shrink-0 overflow-y-auto scrollbar-dark pr-1">
+    <div class="card p-2 w-72 shrink-0 overflow-y-auto scrollbar-dark">
+      <h3 class="text-xs font-semibold text-space-text-dim uppercase mb-2">Progress</h3>
       <div v-if="displaySkills.length === 0" class="text-xs text-space-text-dim text-center py-4">
         No skills data
         <button @click="$emit('refresh')" class="ml-2 text-space-accent hover:underline text-[11px]">🔄 Refresh</button>
@@ -49,10 +50,10 @@
     </div>
 
     <!-- Right: Radar chart -->
-    <div class="flex-1 flex flex-col items-center justify-start pt-2 overflow-hidden">
-      <div class="text-[11px] text-space-text-dim uppercase tracking-wide mb-2">Skill Radar</div>
+    <div class="card flex-1 flex flex-col items-center justify-start p-2 shrink-0 overflow-y-auto scrollbar-dark">
+      <h3 class="text-xs font-semibold text-space-text-dim uppercase mb-2">Skill Radar</h3>
       <div class="relative" :style="{ width: chartSize + 'px', height: chartSize + 'px' }">
-        <svg :width="chartSize" :height="chartSize" :viewBox="`0 0 ${chartSize} ${chartSize}`">
+        <svg :width="chartSize" :height="chartSize" :viewBox="`0 0 ${chartSize} ${chartSize}`" overflow="visible">
           <!-- Background rings -->
           <polygon v-for="r in [0.2, 0.4, 0.6, 0.8, 1.0]" :key="r"
             :points="ringPoints(r)"
@@ -133,10 +134,10 @@ const grouped = computed(() => groupSkillsByCategory(displaySkills.value));
 const radarData = computed(() => categoryRadarData(displaySkills.value));
 
 // ── SVG Radar Chart ────────────────────────────────────────────────────────
-const chartSize = 300;
+const chartSize = 380;
 const cx = chartSize / 2;
 const cy = chartSize / 2;
-const maxRadius = (chartSize / 2) - 36;
+const maxRadius = (chartSize / 2) - 40;
 const MAX_LEVEL = 10;
 
 const radarFillColor = 'rgba(88, 166, 255, 0.12)';

@@ -83,6 +83,8 @@ export const quartermasterRoutine: Routine = async function* (ctx: RoutineContex
       // Keep raw ores for crafters, keep fuel/energy for fleet
       if (lower.startsWith("ore_")) return false;
       if (lower.includes("fuel") || lower.includes("energy_cell")) return false;
+      // Never withdraw protected quest items (v0.189.0: deep core equipment)
+      if ((i as any).is_quest_item) return false;
       // Skip items reserved for active gather/crafter goals
       const res = qmReserved.get(i.id) ?? 0;
       if (i.qty <= res) return false;
@@ -113,6 +115,8 @@ export const quartermasterRoutine: Routine = async function* (ctx: RoutineContex
     await bot.refreshCargo();
     for (const cargo of bot.inventory) {
       const lower = cargo.itemId.toLowerCase();
+      // Skip quest items — game protects them from trading/selling (v0.189.0)
+      if ((cargo as any).is_quest_item) continue;
       if (!lower.startsWith("ore_") && !lower.includes("fuel") && !lower.includes("energy_cell")) {
         if (cargo.quantity >= settings.sellThreshold) {
           ctx.log("info", `Selling ${cargo.quantity}x ${cargo.name}...`);

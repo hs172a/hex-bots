@@ -1,5 +1,5 @@
 <template>
-  <div class="flex flex-col w-48 shrink-0 bg-space-card border-r border-space-border overflow-hidden">
+  <div class="flex flex-col w-40 shrink-0 bg-space-card border-r border-space-border overflow-hidden">
 
     <!-- 1-row character header (shown when a bot is selected) -->
     <div v-if="currentBot" class="px-2 py-1.5 border-b border-space-border bg-[#0d1117]">
@@ -32,7 +32,7 @@
     <!-- Bot list -->
     <div class="flex-1 overflow-y-auto scrollbar-dark py-1">
       <div
-        v-for="bot in botStore.bots"
+        v-for="bot in botStore.sortedBots"
         :key="bot.username"
         @click="select(bot.username)"
         class="flex items-center gap-1.5 w-full px-2 py-1.5 text-[11px] rounded-sm cursor-pointer mx-1 transition-colors"
