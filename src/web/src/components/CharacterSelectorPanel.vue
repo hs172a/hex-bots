@@ -2,7 +2,7 @@
   <div class="flex flex-col w-40 shrink-0 bg-space-card border-r border-space-border overflow-hidden">
 
     <!-- 1-row character header (shown when a bot is selected) -->
-    <div v-if="currentBot" class="px-2 py-1.5 border-b border-space-border bg-[#0d1117]">
+    <div v-if="currentBot" class="px-2 py-1.5 border-b border-space-border bg-[#0d1117f0]">
       <div class="flex items-center gap-1 min-w-0">
         <span class="text-base leading-none shrink-0">{{ empireIcon((currentBot as any).empire) }}</span>
         <span class="font-semibold text-space-text-bright text-[11px] truncate leading-tight">{{ currentBot.username }}</span>

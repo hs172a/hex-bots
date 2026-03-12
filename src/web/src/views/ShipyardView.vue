@@ -37,7 +37,7 @@
           <!-- ── Header ── -->
           <div class="bg-deep-bg border border-[#21262d] rounded-md overflow-hidden">
             <!-- Ship image banner -->
-            <div v-if="shipClass" class="relative h-32 bg-[#0d1117] overflow-hidden">
+            <div v-if="shipClass" class="relative h-32 bg-[#0d1117f0] overflow-hidden">
               <img :src="shipImageUrl(shipClass)" :alt="shipName"
                 class="w-full h-full object-cover opacity-70"
                 @error="($event.target as HTMLImageElement).style.display='none'" />
@@ -240,7 +240,7 @@
             </div>
             <div v-if="modules.length === 0" class="text-xs text-space-text-dim italic">No modules found</div>
             <div v-else class="grid grid-cols-[repeat(auto-fill,minmax(170px,1fr))] gap-2">
-              <div v-for="m in modules" :key="m.module_id || m.id" class="bg-[#0d1117] border border-[#21262d] rounded-md p-2">
+              <div v-for="m in modules" :key="m.module_id || m.id" class="bg-[#0d1117f0] border border-[#21262d] rounded-md p-2">
                 <div class="text-[11px] uppercase text-space-text-dim tracking-wider mb-0.5">{{ m.type || m.slot_type || m.category || m.slot || '—' }}</div>
                 <div class="text-[11px] font-medium text-space-text leading-tight">{{ moduleName(m) }}</div>
                 <div v-if="m.wear != null" class="text-[11px] text-space-text-dim mt-0.5">Wear: {{ m.wear }}{{ typeof m.wear === 'number' ? '%' : '' }}</div>
@@ -251,7 +251,7 @@
             <div v-if="isDocked && installableModules.length > 0" class="mt-3 pt-3 border-t border-[#21262d]">
               <div class="text-[11px] font-semibold text-space-text-dim uppercase tracking-wider mb-1.5">Install from Cargo</div>
               <div class="space-y-1">
-                <div v-for="m in installableModules" :key="m.itemId" class="flex items-center justify-between py-1 px-2 bg-[#0d1117] rounded border border-[#21262d] text-xs">
+                <div v-for="m in installableModules" :key="m.itemId" class="flex items-center justify-between py-1 px-2 bg-[#0d1117f0] rounded border border-[#21262d] text-xs">
                   <span class="text-space-text text-[11px]">{{ m.name }}</span>
                   <button @click="installMod(m.itemId)" :disabled="loading" class="text-[11px] px-2 py-0.5 rounded border border-space-border text-space-text-dim hover:border-space-green hover:text-space-green transition-colors">Install</button>
                 </div>
@@ -284,7 +284,7 @@
         <div v-else class="grid grid-cols-3 gap-3">
           <div v-for="s in fleet" :key="s.ship_id" class="bg-deep-bg border border-[#21262d] rounded-md text-xs overflow-hidden flex flex-col">
             <!-- Ship image strip -->
-            <div class="relative h-20 bg-[#0d1117] overflow-hidden">
+            <div class="relative h-20 bg-[#0d1117f0] overflow-hidden">
               <img :src="shipImageUrl(s.class_id)" :alt="s.class_name"
                 class="w-full h-full object-cover opacity-60"
                 @error="($event.target as HTMLImageElement).style.display='none'" />
@@ -391,7 +391,7 @@
         </div>
         <div v-else class="grid grid-cols-3 gap-2">
           <div v-for="s in [...showroom].sort((a,b) => (a.name||'').localeCompare(b.name||''))" :key="s.class_id" class="flex flex-col !mb-2 bg-deep-bg border border-[#21262d] rounded-md text-xs overflow-hidden">
-            <div class="relative h-24 bg-[#0d1117] overflow-hidden">
+            <div class="relative h-24 bg-[#0d1117f0] overflow-hidden">
               <img :src="shipImageUrl(s.class_id)" :alt="s.name"
                 class="w-full h-full object-cover opacity-65"
                 @error="($event.target as HTMLImageElement).style.display='none'" />
@@ -414,8 +414,8 @@
                   <div v-if="s.material_cost !== null" class="opacity-70">Mat: {{ fmt(s.material_cost) }} + Labor: {{ fmt(s.labor_cost) }}</div>
                 </div>
                 <button
-                  @click="buyShip(s.class_id)"
-                  :disabled="loading || botCredits < s.price"
+                  @click="buyShip(s.listing_id)"
+                  :disabled="loading || botCredits < s.price || !s.listing_id"
                   class="btn btn-primary text-xs px-3 py-0.5"
                 >Buy</button>
               </div>
@@ -445,6 +445,14 @@
             <select v-model="commissionTierFilter" class="bg-deep-bg border border-space-border rounded-md px-2 py-1 text-xs text-space-text focus:border-space-accent outline-none">
               <option value="">All tiers</option>
               <option v-for="t in allTiers" :key="t" :value="t">Tier {{ t }}</option>
+            </select>
+            <select v-if="allClasses.length" v-model="commissionClassFilter" class="bg-deep-bg border border-space-border rounded-md px-2 py-1 text-xs text-space-text focus:border-space-accent outline-none">
+              <option value="">All classes</option>
+              <option v-for="c in allClasses" :key="c" :value="c">{{ c }}</option>
+            </select>
+            <select v-if="allCategories.length" v-model="commissionCategoryFilter" class="bg-deep-bg border border-space-border rounded-md px-2 py-1 text-xs text-space-text focus:border-space-accent outline-none">
+              <option value="">All categories</option>
+              <option v-for="c in allCategories" :key="c" :value="c">{{ c }}</option>
             </select>
           </div>
 
@@ -739,6 +747,8 @@ const commissionLoading = ref(false);
 const commissionSearch = ref('');
 const commissionEmpireFilter = ref('');
 const commissionTierFilter = ref<number | ''>('');
+const commissionClassFilter = ref('');
+const commissionCategoryFilter = ref('');
 const provideMaterials = ref(false);
 const commissionStatuses = ref<any[]>([]);
 const statusLoading = ref(false);
@@ -908,11 +918,15 @@ const filteredShipsGrouped = computed(() => {
   const search = commissionSearch.value.toLowerCase().trim();
   const empire = commissionEmpireFilter.value;
   const tier = commissionTierFilter.value;
+  const cls = commissionClassFilter.value.toLowerCase();
+  const cat = commissionCategoryFilter.value.toLowerCase();
   return shipsGroupedByEmpire.value
     .filter(([emp]) => !empire || emp === empire)
     .map(([emp, ships]) => [emp, (ships as any[]).filter((s: any) => {
-      if (s.starter_ship) return false; // starter ships cannot be commissioned
+      if (s.starter_ship) return false;
       if (tier !== '' && s.tier !== Number(tier)) return false;
+      if (cls && (s.class || s.class_id || '').toLowerCase() !== cls) return false;
+      if (cat && (s.category || '').toLowerCase() !== cat) return false;
       if (search && !s.name.toLowerCase().includes(search) && !s.id.toLowerCase().includes(search)) return false;
       return true;
     })] as [string, any[]])
@@ -923,6 +937,18 @@ const allTiers = computed(() => {
   const tiers = new Set<number>();
   for (const s of botStore.publicShips) if (s.tier && !s.starter_ship) tiers.add(s.tier);
   return [...tiers].sort((a, b) => a - b);
+});
+
+const allClasses = computed(() => {
+  const set = new Set<string>();
+  for (const s of botStore.publicShips) if (!s.starter_ship && (s.class || s.class_id)) set.add(s.class || s.class_id);
+  return [...set].sort();
+});
+
+const allCategories = computed(() => {
+  const set = new Set<string>();
+  for (const s of botStore.publicShips) if (!s.starter_ship && s.category) set.add(s.category);
+  return [...set].sort();
 });
 
 const selectedShipCatalog = computed(() => {
@@ -1038,7 +1064,8 @@ function loadShowroom() {
   if (!selectedBot.value || !isDocked.value) return;
   showroomLoading.value = true;
   const username = selectedBot.value;
-  botStore.sendExec(username, 'shipyard_showroom', undefined, (result: any) => {
+  // v0.209: browse_ships replaces shipyard_showroom and includes all listed ships
+  botStore.sendExec(username, 'browse_ships', undefined, (result: any) => {
     showroomLoading.value = false;
     if (selectedBot.value !== username) return;
     if (result.ok && result.data) {
@@ -1046,12 +1073,13 @@ function loadShowroom() {
       showroomLevel.value = result.data.shipyard_level ?? null;
       const ships = result.data.ships || result.data || [];
       showroom.value = (Array.isArray(ships) ? ships : []).map((s: any) => ({
-        class_id: s.class_id,
+        listing_id: s.listing_id || s.id || '',
+        class_id: s.ship_class || s.class_id || '',
         name: s.name,
         category: s.category || 'Unknown',
         scale: s.scale || '',
         tier: s.tier || '',
-        price: s.showroom_price ?? s.price ?? 0,
+        price: s.price ?? 0,
         material_cost: s.material_cost ?? null,
         labor_cost: s.labor_cost ?? null,
         hull: s.hull ?? null,
@@ -1067,8 +1095,9 @@ function switchShip(shipId: string) {
   execCmd('switch_ship', { ship_id: shipId });
 }
 
-function buyShip(classId: string) {
-  execCmd('buy_ship', { ship_class: classId });
+// v0.209: buy_listed_ship instead of buy_ship — takes listing_id, auto-swaps the purchased ship
+function buyShip(listingId: string) {
+  execCmd('buy_listed_ship', { listing_id: listingId });
 }
 
 function installMod(moduleId: string) {
@@ -1091,7 +1120,7 @@ function transferShip(shipId: string) {
   const target = (transferTargets.value[shipId] || '').trim();
   if (!target) return;
   loading.value = true;
-  botStore.sendExec(selectedBot.value, 'gift_ship', { ship_id: shipId, target_username: target }, (result: any) => {
+  botStore.sendExec(selectedBot.value, 'send_gift', { ship_id: shipId, recipient: target }, (result: any) => {
     loading.value = false;
     if (result.ok) {
       setStatus(`Ship transferred to ${target}`, true);

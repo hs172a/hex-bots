@@ -14,7 +14,7 @@
     </div>
 
     <!-- Create form -->
-    <div v-if="creating" class="p-3 rounded bg-[#0d1117] border border-space-border">
+    <div v-if="creating" class="p-3 rounded bg-[#0d1117f0] border border-space-border">
       <div class="text-xs font-semibold text-space-text mb-2">New Note</div>
       <input
         v-model="newTitle"

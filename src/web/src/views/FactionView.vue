@@ -13,7 +13,7 @@
           <button v-if="!factionData" @click="showCreateModal = true" class="w-full text-left px-2 py-1.5 text-xs rounded-md text-space-green hover:bg-space-row-hover transition-colors">Create Faction</button>
           <button v-if="!factionData" @click="checkInvites" :disabled="loading" class="w-full text-left px-2 py-1.5 text-xs rounded-md text-space-cyan hover:bg-space-row-hover transition-colors disabled:opacity-50">Check Invites</button>
           <button v-if="factionData && isMember" @click="leaveFaction" class="w-full text-left px-2 py-1.5 text-xs rounded-md text-space-red hover:bg-space-row-hover transition-colors">Leave Faction</button>
-          <button _vif="!factionData" @click="loadFactionList" :disabled="loading" class="w-full text-left px-2 py-1.5 text-xs rounded-md text-space-text-dim hover:bg-space-row-hover hover:text-space-text transition-colors disabled:opacity-50">All Factions</button>
+          <button @click="loadFactionList" :disabled="loading" class="w-full text-left px-2 py-1.5 text-xs rounded-md text-space-text-dim hover:bg-space-row-hover hover:text-space-text transition-colors disabled:opacity-50">All Factions</button>
         </div>
       </div>
     </div>
@@ -61,17 +61,42 @@
       <!-- Viewing a foreign faction (from list) -->
       <div v-if="selectedBot && factionData && !isMember">
         <div class="mb-4">
-          <div class="flex items-start justify-between mb-2">
+          <div class="flex items-start justify-between mb-3">
             <div>
-              <h2 class="text-xl font-bold text-space-text-bright">{{ factionData.name }}</h2>
-              <div class="flex items-center gap-2 text-xs mt-1">
-                <span class="px-2 py-0.5 rounded text-space-text">[{{ factionData.tag }}]</span>
-                <span class="text-space-text-dim">Members: {{ factionData.member_count || 0 }}</span>
+              <div class="flex items-center gap-2">
+                <!-- Faction color swatches -->
+                <div v-if="factionData.primary_color" class="flex gap-0.5">
+                  <div class="w-4 h-4 rounded-full border border-white/20" :style="{ backgroundColor: factionData.primary_color || '#fff' }" :title="'Primary: ' + (factionData.primary_color || '')"></div>
+                  <div class="w-4 h-4 rounded-full border border-white/20" :style="{ backgroundColor: factionData.secondary_color || '#000' }" :title="'Secondary: ' + (factionData.secondary_color || '')"></div>
+                </div>
+                <h2 class="text-xl font-bold text-space-text-bright">{{ factionData.name }}</h2>
+                <span class="px-2 py-0.5 text-xs rounded bg-[#21262d] text-space-text-dim">[{{ factionData.tag }}]</span>
+              </div>
+              <div class="flex items-center gap-3 text-xs mt-1.5 flex-wrap">
+                <span class="text-space-text-dim">👤 {{ factionData.leader_username || factionData.leader || '—' }}</span>
+                <span class="text-space-text-dim">{{ factionData.member_count || 0 }} members</span>
+                <span v-if="factionData.owned_bases" class="text-space-text-dim">{{ factionData.owned_bases }} bases</span>
+                <span v-if="factionData.is_ally" class="px-1.5 py-0.5 rounded bg-green-900/40 text-green-300 border border-green-700/40">✓ Ally</span>
+                <span v-if="factionData.is_enemy" class="px-1.5 py-0.5 rounded bg-red-900/40 text-red-300 border border-red-700/40">✗ Enemy</span>
+                <span v-if="factionData.at_war" class="px-1.5 py-0.5 rounded bg-orange-900/40 text-orange-300 border border-orange-700/40">⚔ At War</span>
               </div>
             </div>
-            <button @click="factionData = null" class="btn text-xs px-2 py-1">← Back</button>
+            <button @click="factionData = null; isMember = false" class="btn text-xs px-2 py-1">← Back</button>
           </div>
-          <p v-if="factionData.description" class="text-xs text-space-text-dim">{{ factionData.description }}</p>
+          <p v-if="factionData.description" class="text-sm text-space-text-dim mb-2">{{ factionData.description }}</p>
+          <div v-if="factionData.charter" class="bg-deep-bg border border-[#21262d] rounded p-2 mb-2">
+            <div class="text-[11px] font-semibold text-space-text-dim uppercase mb-1">Charter</div>
+            <p class="text-xs text-space-text whitespace-pre-wrap">{{ factionData.charter }}</p>
+          </div>
+          <!-- Diplomacy quick actions -->
+          <div class="flex gap-2 mt-3 flex-wrap">
+            <button v-if="!factionData.is_ally && !factionData.at_war" @click="setAlly(factionData.id)" :disabled="diplomacyLoading" class="btn btn-secondary text-xs px-2 py-1 disabled:opacity-40">🤝 Set Ally</button>
+            <button v-if="factionData.is_ally" @click="removeAlly(factionData.id)" :disabled="diplomacyLoading" class="btn text-xs px-2 py-1 text-space-red disabled:opacity-40">✕ Remove Ally</button>
+            <button v-if="!factionData.is_enemy && !factionData.at_war" @click="setEnemy(factionData.id)" :disabled="diplomacyLoading" class="btn text-xs px-2 py-1 bg-red-900/20 text-red-300 border-red-700/30 disabled:opacity-40">⚠ Mark Enemy</button>
+            <button v-if="factionData.is_enemy" @click="removeEnemy(factionData.id)" :disabled="diplomacyLoading" class="btn text-xs px-2 py-1 disabled:opacity-40">✕ Remove Enemy</button>
+            <button v-if="!factionData.at_war" @click="declareWar(factionData.id, factionData.name)" :disabled="diplomacyLoading" class="btn text-xs px-2 py-1 bg-orange-900/20 text-orange-300 border-orange-700/30 disabled:opacity-40">⚔ Declare War</button>
+            <button v-if="factionData.at_war" @click="proposePeace(factionData.id)" :disabled="diplomacyLoading" class="btn btn-primary text-xs px-2 py-1 disabled:opacity-40">🕊 Propose Peace</button>
+          </div>
         </div>
       </div>
 
@@ -208,6 +233,15 @@
             <button @click="loadFacilities" :disabled="loading" class="btn text-xs px-2 py-1">Refresh</button>
           </div>
 
+          <!-- Under-construction progress banners -->
+          <template v-for="(prog, typeId) in buildProgress" :key="typeId">
+            <div v-if="!hasFacility(typeId as string)" class="mb-2 px-2 py-1.5 rounded border border-yellow-700/40 bg-yellow-950/20 flex items-center gap-2">
+              <span class="text-xs text-yellow-300 font-medium">🔨 {{ prog.name }} — constructing</span>
+              <span class="text-[11px] text-space-text-dim">{{ prog.buildTimeCycles }} cycles · started {{ formatConstructionAge(prog.startedAt) }}</span>
+              <button @click="delete buildProgress[typeId]; saveBuildProgress()" class="ml-auto text-space-text-dim hover:text-space-red text-[11px]">× dismiss</button>
+            </div>
+          </template>
+
           <!-- Existing facilities -->
           <h4 class="text-xs font-semibold text-space-text-dim uppercase mb-2">Active Facilities</h4>
           <div v-if="ownFacilities.length > 0" class="grid grid-cols-5 gap-2">
@@ -294,12 +328,21 @@
                   </div>
                 </div>
                 <div class="shrink-0 flex flex-col items-end gap-1">
-                  <span v-if="currentGatherGoal?.target_id === bt.id" class="text-[11px] text-space-cyan flex items-center gap-1">
+                  <span v-if="currentGatherGoals.find(g => g.target_id === bt.id && !g.pregather)" class="text-[11px] text-space-cyan flex items-center gap-1">
                     ⚙️ Gathering
-                    <button @click="clearGatherGoal()" class="text-space-red hover:text-red-400" title="Cancel">✕</button>
+                    <button @click="clearGatherGoalById(currentGatherGoals.find(g => g.target_id === bt.id && !g.pregather)?.id)" class="text-space-red hover:text-red-400" title="Cancel">✕</button>
+                  </span>
+                  <span v-else-if="currentGatherGoals.find(g => g.target_id === bt.id && g.pregather)" class="text-[11px] text-amber-400 flex items-center gap-1">
+                    ⏳ Pre-gathering
+                    <button @click="clearGatherGoalById(currentGatherGoals.find(g => g.target_id === bt.id && g.pregather)?.id)" class="text-space-red hover:text-red-400" title="Cancel">✕</button>
                   </span>
                   <button v-else-if="bt.buildable" @click="gatherFacilityMaterials(bt)"
                     class="btn btn-secondary text-[11px] px-2 py-0.5 whitespace-nowrap">📦 Gather</button>
+                  <button v-else-if="!bt.buildable && !hasFacility(bt.id) && (factionTypeCache[bt.id]?.build_materials || bt.build_materials)?.length"
+                    @click="pregatherFacilityMaterials(bt)"
+                    class="btn text-[11px] px-2 py-0.5 whitespace-nowrap bg-amber-900/30 border-amber-700/50 text-amber-400 hover:bg-amber-900/50">
+                    ⏳ Pre-gather
+                  </button>
                 </div>
               </div>
               <div v-else-if="!factionTypeCache[bt.id]" class="mt-1 text-[11px] text-space-text-dim/40 italic cursor-pointer hover:text-space-text-dim" @click="loadFacilityDetail(bt.id)">
@@ -354,23 +397,63 @@
 
         <!-- Tab: Diplomacy -->
         <div v-if="activeSection === 'diplomacy'">
-          <h3 class="text-sm font-semibold text-space-text-bright mb-3">Diplomacy</h3>
-          <div class="space-y-4">
-            <div>
-              <h4 class="text-xs font-semibold text-space-text-dim uppercase mb-2">Allies</h4>
-              <div class="flex flex-wrap gap-1">
-                <span v-for="a in (factionData.allies || [])" :key="a" class="px-2 py-0.5 text-xs bg-[#0d2818] text-space-green border border-[#1a3a2a] rounded">{{ a }}</span>
-                <span v-if="!(factionData.allies || []).length" class="text-xs text-space-text-dim italic">No allies</span>
-              </div>
+          <div class="flex items-center justify-between mb-3">
+            <h3 class="text-sm font-semibold text-space-text-bright">Diplomacy</h3>
+            <button @click="loadDiplomacyList" :disabled="diplomacyLoading" class="btn btn-secondary text-xs px-2 py-1">{{ diplomacyLoading ? '⏳' : '🔄 Load Factions' }}</button>
+          </div>
+
+          <!-- Peace proposals incoming -->
+          <div v-if="pendingPeaceProposals.length > 0" class="mb-4 p-2 bg-[#1a2d1a] border border-green-700/40 rounded-md">
+            <div class="text-xs font-semibold text-space-green mb-2">🕊 Incoming Peace Proposals</div>
+            <div v-for="p in pendingPeaceProposals" :key="p.faction_id" class="flex items-center justify-between py-1.5">
+              <span class="text-xs text-space-text">{{ p.faction_name || p.faction_id }}</span>
+              <span v-if="p.terms" class="text-xs text-space-text-dim mx-2 italic">"{{ p.terms }}"</span>
+              <button @click="acceptPeace(p.faction_id)" :disabled="diplomacyLoading" class="btn btn-primary text-xs px-2 py-0.5 disabled:opacity-40">🕊 Accept</button>
             </div>
-            <div>
-              <h4 class="text-xs font-semibold text-space-text-dim uppercase mb-2">Enemies</h4>
-              <div class="flex flex-wrap gap-1">
-                <span v-for="e in (factionData.enemies || [])" :key="e" class="px-2 py-0.5 text-xs bg-[#2d0000] text-space-red border border-[#3d1111] rounded">{{ e }}</span>
-                <span v-if="!(factionData.enemies || []).length" class="text-xs text-space-text-dim italic">No enemies</span>
+          </div>
+
+          <!-- Manage factions -->
+          <div v-if="diplomacyFactions.length > 0" class="space-y-1">
+            <div class="grid grid-cols-[1fr_auto_auto] gap-2 text-[11px] text-space-text-dim font-semibold uppercase border-b border-[#21262d] pb-1 mb-1">
+              <span>Faction</span><span class="text-center">Status</span><span class="text-center">Actions</span>
+            </div>
+            <div v-for="f in diplomacyFactions" :key="f.id"
+              class="grid grid-cols-[1fr_auto_auto] gap-2 items-center py-1.5 px-1 rounded hover:bg-space-row-hover transition-colors">
+              <div class="min-w-0">
+                <div class="flex items-center gap-1.5">
+                  <div class="w-3 h-3 rounded-full border border-white/20 shrink-0" :style="{ backgroundColor: f.primary_color || '#666' }"></div>
+                  <span class="text-xs text-space-text truncate">{{ f.name }}</span>
+                  <span class="text-[11px] text-space-text-dim">[{{ f.tag }}]</span>
+                </div>
+                <span class="text-[11px] text-space-text-dim">{{ f.member_count || 0 }} members</span>
+              </div>
+              <div class="flex gap-1 justify-center">
+                <span v-if="f.is_ally" class="px-1.5 py-0.5 text-[11px] rounded bg-green-900/40 text-green-300">Ally</span>
+                <span v-else-if="f.at_war" class="px-1.5 py-0.5 text-[11px] rounded bg-orange-900/40 text-orange-300">War</span>
+                <span v-else-if="f.is_enemy" class="px-1.5 py-0.5 text-[11px] rounded bg-red-900/40 text-red-300">Enemy</span>
+                <span v-else class="text-[11px] text-space-text-dim">Neutral</span>
+              </div>
+              <div class="flex gap-1">
+                <template v-if="f.at_war">
+                  <button @click="proposePeace(f.id)" :disabled="diplomacyLoading" class="btn text-[11px] px-1.5 py-0.5 disabled:opacity-40">🕊 Peace</button>
+                </template>
+                <template v-else-if="f.is_ally">
+                  <button @click="removeAlly(f.id)" :disabled="diplomacyLoading" class="btn text-[11px] px-1.5 py-0.5 text-red-300 disabled:opacity-40">✕ Ally</button>
+                  <button @click="declareWar(f.id, f.name)" :disabled="diplomacyLoading" class="btn text-[11px] px-1.5 py-0.5 text-orange-300 disabled:opacity-40">⚔</button>
+                </template>
+                <template v-else-if="f.is_enemy">
+                  <button @click="removeEnemy(f.id)" :disabled="diplomacyLoading" class="btn text-[11px] px-1.5 py-0.5 disabled:opacity-40">✕ Enemy</button>
+                  <button @click="declareWar(f.id, f.name)" :disabled="diplomacyLoading" class="btn text-[11px] px-1.5 py-0.5 text-orange-300 disabled:opacity-40">⚔ War</button>
+                </template>
+                <template v-else>
+                  <button @click="setAlly(f.id)" :disabled="diplomacyLoading" class="btn text-[11px] px-1.5 py-0.5 disabled:opacity-40">🤝</button>
+                  <button @click="setEnemy(f.id)" :disabled="diplomacyLoading" class="btn text-[11px] px-1.5 py-0.5 text-red-300 disabled:opacity-40">⚠</button>
+                  <button @click="declareWar(f.id, f.name)" :disabled="diplomacyLoading" class="btn text-[11px] px-1.5 py-0.5 text-orange-300 disabled:opacity-40">⚔</button>
+                </template>
               </div>
             </div>
           </div>
+          <div v-else-if="!diplomacyLoading" class="text-xs text-space-text-dim italic py-4 text-center">Click "Load Factions" to manage diplomacy.</div>
         </div>
 
         <!-- Tab: All Faction Storages (global DB view) -->
@@ -470,7 +553,7 @@
             <Transition enter-active-class="transition-opacity duration-200" enter-from-class="opacity-0" enter-to-class="opacity-100"
               leave-active-class="transition-opacity duration-150" leave-from-class="opacity-100" leave-to-class="opacity-0">
               <div v-if="showPostMissionModal" class="fixed inset-0 z-50 flex items-center justify-center bg-black/60" @click.self="showPostMissionModal = false">
-                <div class="bg-[#0d1117] border border-space-border rounded-lg shadow-2xl w-full max-w-lg mx-4 p-5 overflow-auto max-h-[90vh]">
+                <div class="bg-[#0d1117f0] border border-space-border rounded-lg shadow-2xl w-full max-w-lg mx-4 p-5 overflow-auto max-h-[90vh]">
                   <div class="flex items-center justify-between mb-4">
                     <h3 class="text-sm font-semibold text-space-text-bright">Post Faction Mission</h3>
                     <button @click="showPostMissionModal = false" class="text-space-text-dim hover:text-space-text-bright">×</button>
@@ -580,8 +663,8 @@
                 <input v-model="submitIntel.item_id" type="text" placeholder="iron_ore" class="input text-xs w-full" />
               </div>
               <div>
-                <label class="text-[11px] text-space-text-dim block mb-1">System ID</label>
-                <input v-model="submitIntel.system_id" type="text" placeholder="sol_star" class="input text-xs w-full" />
+                <label class="text-[11px] text-space-text-dim block mb-1">Station ID (base_id)</label>
+                <input v-model="submitIntel.base_id" type="text" placeholder="sol_central" class="input text-xs w-full" />
               </div>
               <div>
                 <label class="text-[11px] text-space-text-dim block mb-1">Buy Price</label>
@@ -670,7 +753,34 @@ const facilityDetail = ref<any>(null);
 const factionTypeCache = ref<Record<string, any>>({});
 const factionActionLoading = ref<string | null>(null);
 const factionBuildErrors = ref<Record<string, string>>({});
+
+// Construction progress: keyed by facility_type → { name, startedAt, buildTimeCycles, completedAt? }
+const buildProgress = ref<Record<string, { name: string; startedAt: number; buildTimeCycles: number; completedAt?: number }>>(JSON.parse(localStorage.getItem('hex_build_progress') || '{}'));
+const buildProgressNow = ref(Date.now()); // ticks every second for live countdown
+let buildProgressTimer: ReturnType<typeof setInterval> | null = null;
+
+function startBuildProgressTimer() {
+  if (buildProgressTimer) return;
+  buildProgressTimer = setInterval(() => { buildProgressNow.value = Date.now(); }, 1_000);
+}
+function stopBuildProgressTimer() {
+  if (buildProgressTimer) { clearInterval(buildProgressTimer); buildProgressTimer = null; }
+}
+function saveBuildProgress() {
+  localStorage.setItem('hex_build_progress', JSON.stringify(buildProgress.value));
+}
+function formatConstructionAge(startedAt: number): string {
+  const s = Math.floor((buildProgressNow.value - startedAt) / 1000);
+  if (s < 60) return `${s}s ago`;
+  if (s < 3600) return `${Math.floor(s / 60)}m ago`;
+  return `${Math.floor(s / 3600)}h ago`;
+}
 const factionUpgradeMap = ref<Record<string, any[]>>({}); // facility_id → upgrade options
+
+// Diplomacy
+const diplomacyLoading = ref(false);
+const diplomacyFactions = ref<any[]>([]);
+const pendingPeaceProposals = ref<any[]>([]);
 
 function getBotGoalsForUser(username: string): any[] {
   const s = (botStore.settings as any)?.[username] || {};
@@ -714,8 +824,9 @@ watch(activeSection, (sec) => {
 // Pre-load on mount so data is ready if user opens the tab
 onMounted(() => {
   botStore.fetchFactionStorage();
-  // Auto-sync: if a bot was selected via profile, pre-select it here
   if (botStore.selectedBot && !selectedBot.value) selectBot(botStore.selectedBot);
+  // Restart timer if there are in-progress builds from a previous session
+  if (Object.keys(buildProgress.value).length > 0) startBuildProgressTimer();
 });
 // Keep in sync when user opens a profile while this tab is visible
 watch(() => botStore.selectedBot, (username) => {
@@ -851,7 +962,7 @@ const intelQuery = ref('');
 const intelResults = ref<any[]>([]);
 const intelQueried = ref(false);
 const submittingIntel = ref(false);
-const submitIntel = ref({ item_id: '', system_id: '', buy_price: 0, sell_price: 0 });
+const submitIntel = ref({ item_id: '', base_id: '', station_name: '', buy_price: 0 as number | null, sell_price: 0 as number | null });
 
 async function loadIntelStatus() {
   intelLoading.value = true;
@@ -877,13 +988,24 @@ async function queryIntel() {
 }
 
 async function doSubmitIntel() {
-  if (!submitIntel.value.item_id) return;
+  const s = submitIntel.value;
+  if (!s.item_id || !s.base_id) return;
   submittingIntel.value = true;
-  const r = await execAsync('faction_submit_trade_intel', { ...submitIntel.value });
+  const r = await execAsync('faction_submit_trade_intel', {
+    stations: [{
+      base_id: s.base_id,
+      station_name: s.station_name || s.base_id,
+      items: [{
+        item_id:    s.item_id,
+        best_buy:   s.buy_price  ?? null,
+        best_sell:  s.sell_price ?? null,
+      }],
+    }],
+  });
   submittingIntel.value = false;
   if (r.ok) {
     setStatus('Trade intel submitted');
-    submitIntel.value = { item_id: '', system_id: '', buy_price: 0, sell_price: 0 };
+    submitIntel.value = { item_id: '', base_id: '', station_name: '', buy_price: 0, sell_price: 0 };
   } else {
     setError(r.error || 'Failed to submit intel');
   }
@@ -1087,6 +1209,18 @@ function loadFacilities() {
     facilitiesLoaded.value = true;
     if (result.ok && result.data) {
       factionFacilities.value = result.data.faction_facilities || [];
+      // Auto-clear construction progress for any facility that is now active
+      let progressChanged = false;
+      for (const typeId of Object.keys(buildProgress.value)) {
+        if (hasFacility(typeId)) {
+          delete buildProgress.value[typeId];
+          progressChanged = true;
+        }
+      }
+      if (progressChanged) {
+        saveBuildProgress();
+        if (Object.keys(buildProgress.value).length === 0) stopBuildProgressTimer();
+      }
     }
     loadBuildableTypes();
     loadFactionUpgrades();
@@ -1187,28 +1321,48 @@ function gatherFacilityMaterials(bt: any) {
         const info = { ...raw, id: raw.id || raw.type_id || bt.id };
         factionTypeCache.value[bt.id] = info;
         if (!info.build_materials?.length) { setError('No build materials defined'); return; }
-        doSaveGatherGoal(bt.id, bt.name, info.build_materials);
+        doSaveGatherGoal(bt.id, bt.name, info.build_materials, false);
       }
     });
     return;
   }
-  doSaveGatherGoal(bt.id, bt.name, mats);
+  doSaveGatherGoal(bt.id, bt.name, mats, false);
 }
 
-function doSaveGatherGoal(typeId: string, typeName: string, mats: any[]) {
+function pregatherFacilityMaterials(bt: any) {
+  const cached = factionTypeCache.value[bt.id];
+  const mats = cached?.build_materials || bt.build_materials;
+  if (!mats?.length) {
+    if (!selectedBot.value) return;
+    botStore.sendExec(selectedBot.value, 'facility', { action: 'types', facility_type: bt.id }, (result: any) => {
+      if (result.ok && result.data) {
+        const raw = (result.data.types || [])[0] ?? result.data;
+        const info = { ...raw, id: raw.id || raw.type_id || bt.id };
+        factionTypeCache.value[bt.id] = info;
+        if (!info.build_materials?.length) { setError('No build materials found'); return; }
+        doSaveGatherGoal(bt.id, bt.name, info.build_materials, true);
+      }
+    });
+    return;
+  }
+  doSaveGatherGoal(bt.id, bt.name, mats, true);
+}
+
+function doSaveGatherGoal(typeId: string, typeName: string, mats: any[], pregather: boolean) {
   if (!selectedBot.value) return;
   const botStatus = botStore.bots.find(b => b.username === selectedBot.value) as any;
   if (!botStatus?.poi || !botStatus?.system) {
     setStatus('⚠ Bot must be docked at the target station to set a Build goal');
     return;
   }
-  const newGoal = {
-    id: `faction_${typeId}_${Date.now()}`,
+  const newGoal: any = {
+    id: `faction_${pregather ? 'pre_' : ''}${typeId}_${Date.now()}`,
     target_id: typeId,
     target_name: typeName,
     goal_type: 'build',
     target_poi: botStatus.poi,
     target_system: botStatus.system,
+    pregather: pregather || undefined,
     materials: mats.map((m: any) => ({
       item_id: m.item_id,
       item_name: m.name || m.item_name,
@@ -1217,7 +1371,15 @@ function doSaveGatherGoal(typeId: string, typeName: string, mats: any[]) {
   };
   const existing = getBotGoalsForUser(selectedBot.value);
   botStore.saveSettings(selectedBot.value, { goals: [...existing, newGoal], goal: null });
-  setStatus(`📦 Gather goal added: ${typeName} @ ${botStatus.poi}`);
+  setStatus(pregather
+    ? `⏳ Pre-gather goal added: ${typeName} @ ${botStatus.poi} (materials only, no build trigger)`
+    : `📦 Gather goal added: ${typeName} @ ${botStatus.poi}`);
+}
+
+function clearGatherGoalById(goalId?: string) {
+  if (!goalId || !selectedBot.value) return;
+  const filtered = getBotGoalsForUser(selectedBot.value).filter((g: any) => g.id !== goalId);
+  botStore.saveSettings(selectedBot.value, { goals: filtered, goal: null });
 }
 
 function clearGatherGoal(goalId?: string) {
@@ -1237,7 +1399,16 @@ async function buildFacility(facilityTypeId: string, facilityName?: string): Pro
   try {
     const res = await execAsync('facility', { action: 'faction_build', facility_type: facilityTypeId });
     if (res.ok) {
-      setStatus(`${facilityName || facilityTypeId} built!`);
+      const d = res.data as any;
+      const buildTimeCycles = d?.build_time ?? d?.time_remaining ?? d?.facility?.build_time ?? factionTypeCache.value[facilityTypeId]?.build_time ?? 0;
+      if (buildTimeCycles > 0) {
+        buildProgress.value[facilityTypeId] = { name: facilityName || facilityTypeId, startedAt: Date.now(), buildTimeCycles };
+        saveBuildProgress();
+        startBuildProgressTimer();
+        setStatus(`🔨 ${facilityName || facilityTypeId} construction started — ${buildTimeCycles} cycle(s) remaining`);
+      } else {
+        setStatus(`${facilityName || facilityTypeId} built!`);
+      }
       loadFacilities();
     } else {
       const cleaned = parseBuildError(res.error || 'Build failed');
@@ -1262,7 +1433,7 @@ function formatBuildCost(cost: any): string {
   return String(cost);
 }
 
-// ── Faction list (only on demand) ───────────────────────────
+// ── Faction list (only on demand) ───────────────────────
 function loadFactionList() {
   if (!selectedBot.value || loading.value) return;
   loading.value = true;
@@ -1271,9 +1442,147 @@ function loadFactionList() {
     loading.value = false;
     if (selectedBot.value !== username) return;
     if (result.ok && result.data) {
-      factionList.value = result.data.factions || (Array.isArray(result.data) ? result.data : []);
+      const raw: any[] = result.data.factions || (Array.isArray(result.data) ? result.data : []);
+      // Sort by member_count desc, then alphabetically
+      factionList.value = raw.sort((a, b) => {
+        const diff = (b.member_count || 0) - (a.member_count || 0);
+        return diff !== 0 ? diff : (a.name || '').localeCompare(b.name || '');
+      });
     }
   });
+}
+
+// ── Diplomacy ─────────────────────────────────────────
+async function loadDiplomacyList() {
+  if (!selectedBot.value || diplomacyLoading.value) return;
+  diplomacyLoading.value = true;
+  try {
+    // Load full faction list for diplomacy management
+    const listRes = await execAsync('faction_list', { limit: 100, offset: 0 });
+    if (listRes.ok && listRes.data) {
+      const raw: any[] = listRes.data.factions || (Array.isArray(listRes.data) ? listRes.data : []);
+      // Enrich with own diplomacy status from faction_info
+      const myInfo = factionData.value;
+      const myId = myInfo?.id;
+      const allyIds = new Set<string>((myInfo?.allies || []).map((a: any) => a.faction_id || a.id || a));
+      const enemyIds = new Set<string>((myInfo?.enemies || []).map((e: any) => e.faction_id || e.id || e));
+      const warIds = new Set<string>((myInfo?.wars || myInfo?.at_war_with || []).map((w: any) => w.faction_id || w.id || w));
+      diplomacyFactions.value = raw
+        .filter((f: any) => f.id !== myId)
+        .sort((a: any, b: any) => {
+          const diff = (b.member_count || 0) - (a.member_count || 0);
+          return diff !== 0 ? diff : (a.name || '').localeCompare(b.name || '');
+        })
+        .map((f: any) => ({
+          ...f,
+          is_ally: allyIds.has(f.id),
+          is_enemy: enemyIds.has(f.id),
+          at_war: warIds.has(f.id),
+        }));
+      // Extract pending peace proposals from faction_info
+      pendingPeaceProposals.value = myInfo?.peace_proposals || myInfo?.incoming_peace || [];
+    }
+  } finally {
+    diplomacyLoading.value = false;
+  }
+}
+
+function updateDiplomacyEntry(factionId: string, patch: Partial<{ is_ally: boolean; is_enemy: boolean; at_war: boolean }>) {
+  const idx = diplomacyFactions.value.findIndex((f: any) => f.id === factionId);
+  if (idx >= 0) {
+    diplomacyFactions.value[idx] = { ...diplomacyFactions.value[idx], is_ally: false, is_enemy: false, at_war: false, ...patch };
+  }
+  // Also update factionData if viewing that faction
+  if (factionData.value?.id === factionId) {
+    factionData.value = { ...factionData.value, is_ally: false, is_enemy: false, at_war: false, ...patch };
+  }
+}
+
+async function setAlly(factionId: string) {
+  diplomacyLoading.value = true;
+  const r = await execAsync('faction_set_ally', { target_faction_id: factionId });
+  diplomacyLoading.value = false;
+  if (r.ok) {
+    updateDiplomacyEntry(factionId, { is_ally: true });
+    setStatus('Set as ally');
+  } else {
+    setError(r.error || 'Failed to set ally');
+  }
+}
+
+async function removeAlly(factionId: string) {
+  diplomacyLoading.value = true;
+  // The API uses faction_set_ally / faction_set_enemy for status changes; removing ally = set neutral
+  // Use faction_info refresh since there's no explicit "remove ally" command
+  const r = await execAsync('faction_set_enemy', { target_faction_id: factionId });
+  // If that fails too, just mark neutral optimistically
+  diplomacyLoading.value = false;
+  if (!r.ok) {
+    // No direct API to unset ally — reflect it locally anyway
+    updateDiplomacyEntry(factionId, {});
+    setStatus('Ally status cleared (local only)');
+  } else {
+    updateDiplomacyEntry(factionId, { is_enemy: true });
+    setStatus('Set as enemy (removed ally)');
+  }
+}
+
+async function setEnemy(factionId: string) {
+  diplomacyLoading.value = true;
+  const r = await execAsync('faction_set_enemy', { target_faction_id: factionId });
+  diplomacyLoading.value = false;
+  if (r.ok) {
+    updateDiplomacyEntry(factionId, { is_enemy: true });
+    setStatus('Marked as enemy');
+  } else {
+    setError(r.error || 'Failed to mark enemy');
+  }
+}
+
+async function removeEnemy(factionId: string) {
+  // No direct "remove enemy" API endpoint — reflect locally
+  updateDiplomacyEntry(factionId, {});
+  setStatus('Enemy status cleared');
+}
+
+async function declareWar(factionId: string, factionName: string) {
+  const reason = prompt(`Declare war on ${factionName}?\nOptional: enter a reason (casus belli) or leave blank:`);
+  if (reason === null) return; // cancelled
+  diplomacyLoading.value = true;
+  const r = await execAsync('faction_declare_war', { target_faction_id: factionId, reason: reason || undefined });
+  diplomacyLoading.value = false;
+  if (r.ok) {
+    updateDiplomacyEntry(factionId, { at_war: true, is_ally: false, is_enemy: false });
+    setStatus(`War declared on ${factionName}`);
+  } else {
+    setError(r.error || 'Failed to declare war');
+  }
+}
+
+async function proposePeace(factionId: string) {
+  const terms = prompt('Propose peace?\nOptional: enter peace terms or leave blank:');
+  if (terms === null) return; // cancelled
+  diplomacyLoading.value = true;
+  const r = await execAsync('faction_propose_peace', { target_faction_id: factionId, terms: terms || undefined });
+  diplomacyLoading.value = false;
+  if (r.ok) {
+    setStatus('Peace proposal sent');
+  } else {
+    setError(r.error || 'Failed to propose peace');
+  }
+}
+
+async function acceptPeace(factionId: string) {
+  diplomacyLoading.value = true;
+  const r = await execAsync('faction_accept_peace', { target_faction_id: factionId });
+  diplomacyLoading.value = false;
+  if (r.ok) {
+    updateDiplomacyEntry(factionId, { at_war: false });
+    pendingPeaceProposals.value = pendingPeaceProposals.value.filter((p: any) => p.faction_id !== factionId);
+    setStatus('Peace accepted — war ended');
+  } else {
+    setError(r.error || 'Failed to accept peace');
+  }
 }
 
 // ── View foreign faction details ────────────────────────────

@@ -15,6 +15,13 @@ export interface CargoItem {
   size?: number;
 }
 
+/** Built-in ship capability from ship class (v0.208.0) */
+export interface InherentCapability {
+  type: string;
+  value?: number;
+  flag?: string;
+}
+
 export interface ShipModule {
   id: string;
   type_id: string;
@@ -147,6 +154,7 @@ export interface BotStatus {
   utilitySlots: number;
   installedMods: string[];
   shipModules: ShipModule[];
+  inherentCapabilities: InherentCapability[];
   empire: string;
   homeBase: string;
   homeSystem: string;
@@ -154,11 +162,16 @@ export interface BotStatus {
   factionId: string;
   factionRank: string;
   isCloaked: boolean;
+  navigating: boolean;
   tradingRestrictedUntil: Date | null;
   empireRep: Record<string, unknown> | null;
   inventory: CargoItem[];
   storage: CargoItem[];
   factionStorage: CargoItem[];
+  /** v0.210: Carrier ship bay — ships loaded in bay */
+  carriedShips: string[];
+  bayUsed: number;
+  bayCapacity: number;
   stats: BotStats;
   playerStats: PlayerStats;
   skills: SkillEntry[];
@@ -267,8 +280,15 @@ export class Bot extends EventEmitter {
   /** Full module objects from last get_status. */
   shipModules: ShipModule[] = [];
 
+  /** Built-in ship class capabilities (v0.208.0): yield bonuses, integrated cloak/scanner, etc. */
+  inherentCapabilities: InherentCapability[] = [];
+
   /** Cached inventory items from last get_cargo. */
   inventory: CargoItem[] = [];
+  /** v0.210: Carrier ship bay data from last get_cargo. */
+  carriedShips: string[] = [];
+  bayUsed = 0;
+  bayCapacity = 0;
 
   /** Cached station storage items from last view_storage. */
   storage: CargoItem[] = [];
@@ -278,6 +298,9 @@ export class Bot extends EventEmitter {
 
   /** Whether the bot's ship is currently cloaked. */
   isCloaked = false;
+
+  /** True while navigateToSystem is actively jumping (drives dashboard LRT badge). */
+  _navigating = false;
 
   /** ISO timestamp until which trading/gifting is restricted (null = unrestricted). */
   tradingRestrictedUntil: Date | null = null;
@@ -822,6 +845,13 @@ export class Bot extends EventEmitter {
     const resp = await this.exec("get_cargo");
     // Always update inventory — even if response is empty/null, clear stale data
     this.inventory = this.parseItemList(resp.result);
+    // v0.210: parse carrier ship bay fields
+    const r = resp.result as Record<string, unknown> | undefined;
+    if (r) {
+      if (typeof r.bay_used === "number") this.bayUsed = r.bay_used;
+      if (typeof r.bay_capacity === "number") this.bayCapacity = r.bay_capacity;
+      if (Array.isArray(r.carried_ships)) this.carriedShips = r.carried_ships as string[];
+    }
   }
 
   /** Fetch station storage contents and cache them. Pass station_id to check remotely. */
@@ -951,7 +981,7 @@ export class Bot extends EventEmitter {
     this.log("system", "Routine finished");
   }
 
-  /** Fetch ship modules and cache installed mod IDs. */
+  /** Fetch ship modules and cache installed mod IDs. Also parses inherent_capabilities (v0.208.0). */
   async refreshShipMods(): Promise<string[]> {
     const resp = await this.exec("get_ship");
     if (resp.result && typeof resp.result === "object") {
@@ -968,8 +998,29 @@ export class Bot extends EventEmitter {
         if (typeof m === "string") return m;
         return (m.mod_id as string) || (m.id as string) || (m.name as string) || "";
       }).filter(Boolean);
+
+      // Parse inherent_capabilities from ship class (v0.208.0)
+      const cls = (ship.class as Record<string, unknown>) || {};
+      const rawCaps: unknown[] =
+        (Array.isArray(ship.inherent_capabilities) ? ship.inherent_capabilities : null) ??
+        (Array.isArray(cls.inherent_capabilities) ? cls.inherent_capabilities : null) ?? [];
+      this.inherentCapabilities = (rawCaps as Array<Record<string, unknown>>).map(c => ({
+        type: (c.type as string) || "",
+        value: c.value as number | undefined,
+        flag: c.flag as string | undefined,
+      })).filter(c => c.type);
     }
     return this.installedMods;
+  }
+
+  /** Check if the ship has a built-in capability of the given type (v0.208.0). */
+  hasInherentCapability(type: string): boolean {
+    return this.inherentCapabilities.some(c => c.type === type);
+  }
+
+  /** Get numeric value for an inherent capability (e.g. ore_yield_bonus → 15 for +15%). Returns 0 if absent. */
+  getInherentCapabilityValue(type: string): number {
+    return this.inherentCapabilities.find(c => c.type === type)?.value ?? 0;
   }
 
   /** Get the current cached level for a skill. Returns 0 if unknown. Call checkSkills() first to populate. */
@@ -1334,6 +1385,7 @@ export class Bot extends EventEmitter {
       utilitySlots: this.utilitySlots,
       installedMods: [...this.installedMods],
       shipModules: [...this.shipModules],
+      inherentCapabilities: [...this.inherentCapabilities],
       empire: this.empire,
       homeBase: this.homeBase,
       homeSystem: this.homeSystem,
@@ -1341,8 +1393,12 @@ export class Bot extends EventEmitter {
       factionId: this.factionId,
       factionRank: this.factionRank,
       isCloaked: this.isCloaked,
+      navigating: this._navigating,
       tradingRestrictedUntil: this.tradingRestrictedUntil,
       empireRep: this.empireRep,
+      carriedShips: [...this.carriedShips],
+      bayUsed: this.bayUsed,
+      bayCapacity: this.bayCapacity,
       inventory: this.inventory,
       storage: this.storage,
       factionStorage: this.factionStorage,

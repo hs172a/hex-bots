@@ -33,6 +33,7 @@ import {
   maxItemsForCargo,
   sleep,
   readSettings,
+  writeSettings,
   isMinablePoi,
   safetyCheck,
 } from "./common.js";
@@ -41,6 +42,7 @@ import {
   claimGatherComponent, releaseGatherClaim, releaseAllGatherClaims,
   getClaimedQuantityByOthers,
 } from "../swarmcoord.js";
+import { removeCraftGoalsByItemId } from "./crafter.js";
 
 // ── Types ─────────────────────────────────────────────────────
 
@@ -134,6 +136,16 @@ function getThresholds(): { refuelThreshold: number; repairThreshold: number } {
     refuelThreshold: (g.refuelThreshold as number) || 30,
     repairThreshold: (g.repairThreshold as number) || 40,
   };
+}
+
+/** Remove a completed gather goal from settings.json so it doesn't re-run. */
+function removeGoalFromSettings(username: string, goalId: string): void {
+  const all = readSettings();
+  const us = all[username] as Record<string, unknown> | undefined;
+  if (!us) return;
+  const existing = Array.isArray(us.goals) ? (us.goals as any[]) : (us.goal ? [us.goal] : []);
+  const filtered = existing.filter((g: any) => g.id !== goalId);
+  writeSettings({ [username]: { ...us, goals: filtered, goal: null } });
 }
 
 /**
@@ -388,6 +400,8 @@ async function buyItem(
     const msg = resp.error.message.toLowerCase();
     if (msg.includes("not_available") || msg.includes("no_stock") || msg.includes("out of stock")) {
       ctx.mapStore.removeMarketItem(bot.system, bot.poi, itemId);
+      // Also purge from SQLite market_prices so findCheapestBuySource won't return this station again
+      getMarketPricesStore()?.removeItemAtStation(bot.poi, itemId);
       ctx.log("warn", `${itemName} not available here — removing from market cache`);
     } else {
       ctx.log("error", `Buy failed for ${itemName}: ${resp.error.message}`);
@@ -527,9 +541,31 @@ async function buildDeliveryPlan(
 
   const tasks: DeliveryTask[] = [];
 
+  // Read craft overstock threshold once for the entire plan pass
+  const allCfg = readSettings();
+  const crafterCfg = allCfg.crafter as Record<string, unknown> | undefined;
+  const maxFactionPerItem: number = (crafterCfg?.maxFactionStoragePerItem as number) ?? 30000;
+
   for (const { goal, owner_bot } of allGoals) {
     // Skip goals where THIS bot is the crafter — crafter handles its own delivery
     if (goal.crafter_bot === bot.username) continue;
+
+    // Craft overstock guard: if the output item is already >= threshold in faction storage,
+    // remove the goal from settings so it no longer generates courier demand.
+    if (
+      maxFactionPerItem > 0 &&
+      (goal.goal_type === 'craft' || goal.goal_type === 'crafter') &&
+      goal.target_id
+    ) {
+      const outputInFaction = ctx.mapStore
+        .getFactionStorageItemsForPoi(goal.target_poi ?? "")
+        .find((i: any) => i.item_id === goal.target_id)?.quantity ?? 0;
+      if (outputInFaction >= maxFactionPerItem) {
+        ctx.log("craft", `Craft goal '${goal.target_name}' overstocked: ${goal.target_id} has ${outputInFaction}/${maxFactionPerItem} in faction storage — removing goal`);
+        removeCraftGoalsByItemId(owner_bot, goal.target_id);
+        continue;
+      }
+    }
 
     const station = resolveTargetStation(goal, owner_bot, ctx);
     if (!station) {
@@ -642,6 +678,14 @@ async function depositAllToTargets(
   }
 
   let totalDeposited = 0;
+  // Track per-goal: total tasks vs delivered tasks (for auto-delete when fully delivered)
+  const goalStats = new Map<string, { total: number; ok: number; ownerBot: string; name: string }>();
+  for (const task of tasks) {
+    if (!goalStats.has(task.goalId)) {
+      goalStats.set(task.goalId, { total: 0, ok: 0, ownerBot: task.owner_bot, name: task.target_name });
+    }
+    goalStats.get(task.goalId)!.total++;
+  }
 
   for (const [, stationTasks] of byDest) {
     const first = stationTasks[0];
@@ -657,6 +701,8 @@ async function depositAllToTargets(
     await repairShip(ctx);
     await recordMarketData(ctx);
     await bot.refreshCargo();
+    // Refresh faction storage so cap pre-checks use current quantities at this station
+    if (bot.inFaction) await bot.refreshFactionStorage();
 
     for (const task of stationTasks) {
       const inv = bot.inventory.find((i: any) => (i.itemId || i.item_id) === task.item_id);
@@ -668,6 +714,7 @@ async function depositAllToTargets(
           ctx.log("trade", `Gifted ${inv.quantity}x ${task.item_name} → ${task.gift_target}`);
           totalDeposited += inv.quantity;
           releaseGatherClaim(bot.username, task.item_id, task.goalId);
+          goalStats.get(task.goalId)!.ok++;
         } else ctx.log("error", `Gift failed for ${task.item_name}: ${r.error.message}`);
       } else {
         // 'build' goals (default) → faction storage so any bot can access the materials.
@@ -676,14 +723,43 @@ async function depositAllToTargets(
         let depositOk = false;
         let depositErrMsg = "";
         if (useFaction) {
-          const rf = await bot.exec("faction_deposit_items", { item_id: task.item_id, quantity: inv.quantity });
-          if (!rf.error) {
-            depositOk = true;
+          // Cap pre-check: avoid calling faction_deposit_items when near-cap (prevents [error] log spam)
+          let capBlocked = false;
+          if (bot.poi) {
+            const cap = ctx.mapStore.getFactionStorageCapPerItem(bot.poi);
+            const facEntry = bot.factionStorage.find((i: any) => (i.itemId || i.item_id) === task.item_id);
+            const facQty = (facEntry as any)?.quantity ?? 0;
+            if (facQty + (inv.quantity as number) > cap) {
+              ctx.log("trade", `⛔ ${task.item_name}: faction storage near-cap (${facQty.toLocaleString()}/${cap.toLocaleString()}) — using personal storage`);
+              capBlocked = true;
+            }
+          }
+          if (!capBlocked) {
+            const rf = await bot.exec("faction_deposit_items", { item_id: task.item_id, quantity: inv.quantity });
+            if (!rf.error) {
+              depositOk = true;
+            } else {
+              const rfEc = rf.error.code ?? "";
+              const rfEm = rf.error.message ?? "";
+              if (rfEc === "storage_cap_exceeded" || rfEm.includes("storage_cap_exceeded") || rfEm.includes("storage cap reached")) {
+                ctx.log("trade", `⛔ ${task.item_name}: faction cap hit — updating cache, using personal storage`);
+                // Update local factionStorage cache so next pre-check catches it immediately
+                if (bot.poi) {
+                  const cap = ctx.mapStore.getFactionStorageCapPerItem(bot.poi);
+                  const le = bot.factionStorage.find((i: any) => (i.itemId || i.item_id) === task.item_id);
+                  if (le) (le as any).quantity = cap;
+                }
+              } else {
+                ctx.log("warn", `Faction deposit failed for ${task.item_name} (${rf.error.message}) — falling back to personal storage`);
+              }
+              const rp = await bot.exec("deposit_items", { item_id: task.item_id, quantity: inv.quantity });
+              depositOk = !rp.error;
+              depositErrMsg = rp.error?.message ?? rf.error.message;
+            }
           } else {
-            ctx.log("warn", `Faction deposit failed for ${task.item_name} (${rf.error.message}) — falling back to personal storage`);
             const rp = await bot.exec("deposit_items", { item_id: task.item_id, quantity: inv.quantity });
             depositOk = !rp.error;
-            depositErrMsg = rp.error?.message ?? rf.error.message;
+            depositErrMsg = rp.error?.message ?? "";
           }
         } else {
           const rp = await bot.exec("deposit_items", { item_id: task.item_id, quantity: inv.quantity });
@@ -695,12 +771,21 @@ async function depositAllToTargets(
           totalDeposited += inv.quantity;
           releaseGatherClaim(bot.username, task.item_id, task.goalId);
           clearMaterialNeed(bot.username, task.item_id);
+          goalStats.get(task.goalId)!.ok++;
         } else {
           ctx.log("error", `Deposit failed for ${task.item_name}: ${depositErrMsg}`);
         }
       }
     }
     await bot.refreshCargo();
+  }
+
+  // Auto-remove goals whose every delivery task succeeded
+  for (const [goalId, stats] of goalStats) {
+    if (stats.ok >= stats.total && stats.total > 0) {
+      ctx.log("system", `Goal '${stats.name}' fully delivered — removing from settings`);
+      removeGoalFromSettings(stats.ownerBot, goalId);
+    }
   }
 
   return totalDeposited;
@@ -764,13 +849,26 @@ async function craftOwnGoals(
       continue;
     }
 
-    // Find the recipe — prefer the explicitly configured recipe_id
-    const recipe = rawRecipes.find(r =>
-      (goal.recipe_id && r.recipe_id === goal.recipe_id) ||
-      r.output_item_id === goal.target_id ||
-      r.recipe_id === goal.target_id ||
-      (goal.target_name && (r.name === goal.target_name || r.output_name === goal.target_name)),
-    ) as (RawRecipe & {
+    // Find the recipe — prefer the explicitly configured recipe_id.
+    // Catalog recipes use {id, outputs:[{item_id,...}]} while legacy API recipes use
+    // {recipe_id, output_item_id}. We check all variations.
+    const recipe = rawRecipes.find(r => {
+      const rId = ((r.recipe_id ?? r.id) as string | undefined) || "";
+      if (goal.recipe_id && rId === goal.recipe_id) return true;
+      if (rId === goal.target_id) return true;
+      // output item id — flat field or first element of outputs array
+      const firstOut = Array.isArray(r.outputs) ? (r.outputs[0] as Record<string, unknown>) : (r.output as Record<string, unknown> | undefined);
+      const outItemId = (r.output_item_id ?? firstOut?.item_id) as string | undefined;
+      if (outItemId && outItemId === goal.target_id) return true;
+      // name comparison (case-insensitive) against recipe name or output name
+      if (goal.target_name) {
+        const tName = goal.target_name.toLowerCase();
+        const outName = (r.output_name ?? firstOut?.name) as string | undefined;
+        if ((r.name as string | undefined)?.toLowerCase() === tName) return true;
+        if (outName?.toLowerCase() === tName) return true;
+      }
+      return false;
+    }) as (RawRecipe & {
       recipe_id: string;
       name?: string;
       output_item_id?: string;
@@ -780,11 +878,13 @@ async function craftOwnGoals(
       required_skill?: { id?: string; skill_id?: string; name?: string; skill_name?: string; level: number };
     }) | undefined;
 
-    if (!recipe?.recipe_id) {
+    const resolvedRecipeId = recipe ? ((recipe.recipe_id ?? recipe.id) as string | undefined) : undefined;
+    if (!recipe || !resolvedRecipeId) {
       ctx.log("warn", `[CraftOwn] No recipe found for '${goal.target_name}' — skipping`);
       continue;
     }
-    if (!recipe.components?.length) continue;
+    const components = (recipe.components ?? (recipe as any).inputs ?? (recipe as any).ingredients) as Array<{ item_id: string; name?: string; quantity: number }> | undefined;
+    if (!components?.length) continue;
 
     // Skill check
     if (recipe.required_skill) {
@@ -817,7 +917,6 @@ async function craftOwnGoals(
     await bot.refreshFactionStorage();
 
     // Verify materials are actually present in faction storage now
-    const components = recipe.components;
     const allAvail = components.every(c => {
       const entry = bot.factionStorage.find((i: any) => (i.itemId || i.item_id) === c.item_id);
       return entry && (entry.quantity ?? 0) >= c.quantity;
@@ -840,7 +939,7 @@ async function craftOwnGoals(
       }
     }
 
-    const craftResp = await bot.exec("craft", { recipe_id: recipe.recipe_id, count: 1 });
+    const craftResp = await bot.exec("craft", { recipe_id: resolvedRecipeId, count: 1 });
     if (craftResp.error) {
       ctx.log("error", `[CraftOwn] Craft '${recipe.name}' failed: ${craftResp.error.message}`);
     } else {
@@ -880,6 +979,7 @@ async function executeBuildGoals(
   const ownBuildGoals = allGoals.filter(({ goal, owner_bot }) =>
     owner_bot === bot.username &&
     (!goal.goal_type || goal.goal_type === 'build') &&
+    !(goal as any).pregather &&   // skip pre-gather goals — materials accumulate but build not triggered
     goal.target_id &&
     (goal.materials?.length ?? 0) > 0 &&
     !builtGoalIds.has(goal.id),
@@ -951,11 +1051,12 @@ async function executeBuildGoals(
     if (buildResp.error) {
       ctx.log("error", `[Build] Build '${goal.target_name}' failed: ${buildResp.error.message}`);
     } else {
-      ctx.log("system", `[Build] '${goal.target_name}' built successfully!`);
+      ctx.log("system", `[Build] '${goal.target_name}' built successfully! — removing goal from settings`);
       didBuild = true;
       const r = buildResp.result as any;
       const built = r?.facility ?? r?.faction_facility ?? r;
       if (built?.facility_id) ctx.mapStore.updateFactionBuildings([built]);
+      removeGoalFromSettings(bot.username, goal.id);
     }
     builtGoalIds.add(goal.id); // mark whether success or failure — don't retry this run
   }
@@ -1151,6 +1252,10 @@ export const gathererRoutine: Routine = async function* (ctx: RoutineContext) {
           buyTask.acquired += bought;
           if (bought > 0) {
             ctx.log("trade", `Loaded ${bought}x ${buyTask.item_name} for '${buyTask.target_name}' (${buyTask.acquired}/${buyTask.quantity})`);
+          } else {
+            // Buy failed (not_available or cargo full) — skip this task so we don't re-dock at same station
+            buyTask.skipped = true;
+            buyTask.source = 'search'; // will re-probe on next buildDeliveryPlan
           }
         }
         await ensureUndocked(ctx);
@@ -1255,32 +1360,81 @@ export function scoreGatherer(ctx: RoutineContext): number {
   const goals = getAllGoalsAcrossFleet();
   if (goals.length === 0) return 0;
 
-  // Highest priority: own build goals with all materials confirmed in faction storage DB.
+  // Highest priority: own build goals with all materials confirmed in faction storage.
   // This means the build command can execute immediately — no courier work needed.
+  // Score 300 beats trader (≤200) so SmartSelector always picks gatherer first.
   for (const { goal, owner_bot } of goals) {
     if (owner_bot !== ctx.bot.username) continue;
     if (goal.goal_type && goal.goal_type !== 'build') continue;
-    if (!goal.target_id || !goal.materials?.length || !goal.target_poi) continue;
-    const facDbItems = ctx.mapStore.getFactionStorageItemsForPoi(goal.target_poi);
-    const allReady = goal.materials.every(mat => {
-      const entry = facDbItems.find((i: any) => i.item_id === mat.item_id);
-      return entry && (entry.quantity ?? 0) >= mat.quantity_needed;
-    });
-    if (allReady) return 90; // Ready to build — beat trader/miner, run immediately
+    if (!goal.target_id || !goal.materials?.length) continue;
+
+    let allReady = false;
+
+    // Check 1: per-poi DB cache (most accurate — same station as the build target)
+    if (goal.target_poi) {
+      const facDbItems = ctx.mapStore.getFactionStorageItemsForPoi(goal.target_poi);
+      if (facDbItems.length > 0) {
+        allReady = goal.materials.every(mat => {
+          const entry = facDbItems.find((i: any) => i.item_id === mat.item_id);
+          return entry && (entry.quantity ?? 0) >= mat.quantity_needed;
+        });
+      }
+    }
+
+    // Check 2: fallback — total quantity across ALL faction storage POIs.
+    // Handles the case where no view_faction_storage has been called for this specific POI yet,
+    // or goal.target_poi is unset. Materials for a build goal are always delivered to one station,
+    // so if the total is sufficient it's safe to attempt the build.
+    if (!allReady) {
+      allReady = goal.materials.every(
+        mat => ctx.mapStore.getFactionStorageTotalFor(mat.item_id) >= mat.quantity_needed,
+      );
+    }
+
+    if (allReady) return 300; // Beat any other routine score, including trader
   }
 
+  const FACTION_DB_MAX_AGE_MS = 30 * 60 * 1000;
   let pendingMaterials = 0;
+
   for (const { goal, owner_bot } of goals) {
     if (!goal.materials?.length) continue;
-    // Goals where this bot is the crafter are handled by the crafter routine, not gatherer
     if (goal.crafter_bot === ctx.bot.username) continue;
-    // Own build goals with materials configured: count them so gatherer gets selected
-    // and can verify/transfer materials then execute the build
-    if (owner_bot === ctx.bot.username && (!goal.goal_type || goal.goal_type === 'build') && goal.target_id) {
-      pendingMaterials += goal.materials.length;
-      continue;
+
+    // Own build goals: gatherer handles the build execution itself.
+    // Count only materials not yet in faction storage at target POI.
+    const isOwnBuild = owner_bot === ctx.bot.username &&
+      (!goal.goal_type || goal.goal_type === 'build') && !!goal.target_id;
+
+    for (const mat of goal.materials) {
+      // Subtract materials already present in faction storage at the delivery POI
+      let alreadyPresent = 0;
+      if (goal.target_poi) {
+        const facDbItems = ctx.mapStore.getFactionStorageItemsForPoi(goal.target_poi);
+        const facDbEntry = facDbItems.find((i: any) => i.item_id === mat.item_id);
+        if (facDbEntry && (facDbEntry.quantity ?? 0) > 0) {
+          const ageMs = Date.now() - new Date(facDbEntry.updated_at).getTime();
+          if (ageMs <= FACTION_DB_MAX_AGE_MS) alreadyPresent = facDbEntry.quantity;
+        }
+      }
+
+      const toAcquire = Math.max(0, mat.quantity_needed - alreadyPresent);
+      if (toAcquire <= 0) continue; // already satisfied in faction storage
+
+      if (isOwnBuild) {
+        // Build goals are always counted regardless of source — gatherer executes the build
+        pendingMaterials++;
+        continue;
+      }
+
+      // Courier goals: only count if there is a known buy or mine source.
+      // If no source is known, the gatherer can't help — don't inflate the score.
+      const hasSource = !!(
+        findCheapestBuySource(mat.item_id, ctx.mapStore) ||
+        findMineSource(mat.item_id, ctx.mapStore, ctx)
+      );
+      if (hasSource) pendingMaterials++;
     }
-    pendingMaterials += goal.materials.length;
   }
 
   if (pendingMaterials === 0) return 0;

@@ -8,12 +8,12 @@
     </div>
 
     <!-- Stats (top-left) -->
-    <div class="absolute top-2 left-2 bg-[#0d1117cc] border border-space-border rounded-md px-3 py-1.5 text-xs space-y-0.5 pointer-events-none">
+    <div class="absolute top-2 left-2 bg-[#0d1117cc] border border-space-border rounded-md px-2 py-1.5 text-xs space-y-0.5 pointer-events-none">
       <div class="flex items-center gap-1.5 mb-1">
         <span class="w-2 h-2 rounded-full bg-space-green animate-pulse inline-block"></span>
         <span class="text-space-text-dim font-semibold">Live</span>
       </div>
-      <div class="flex gap-3 text-space-text-dim">
+      <div class="flex gap-2 text-space-text-dim">
         <span>Systems: <span class="text-space-text font-semibold">{{ totalSystems }}</span></span>
         <span>Our bots: <span class="text-space-accent font-semibold">{{ botStore.bots.length }}</span></span>
       </div>
@@ -64,7 +64,7 @@
     <div v-if="showDepositsPanel"
       class="absolute top-10 right-2 w-80 max-h-[75vh] bg-[#0d1117f0] border border-space-border rounded-lg flex flex-col overflow-hidden"
     >
-      <div class="px-3 py-2 border-b border-space-border flex items-center justify-between shrink-0">
+      <div class="px-2 py-2 border-b border-space-border flex items-center justify-between shrink-0">
         <span class="text-xs font-semibold text-green-400">⛏ Resource Deposits ({{ botStore.depositSummary.length }} POIs)</span>
         <button @click="showDepositsPanel = false" class="text-space-text-dim hover:text-space-text text-lg leading-none">×</button>
       </div>
@@ -73,9 +73,9 @@
         <input
           v-model="depositsSearchQuery"
           placeholder="Search resource or system…"
-          class="flex-1 text-xs bg-[#0d1117] border border-space-border rounded px-2 py-1 text-space-text placeholder-space-text-dim/50 outline-none focus:border-green-700"
+          class="flex-1 text-xs bg-[#0d1117f0] border border-space-border rounded px-2 py-1 text-space-text placeholder-space-text-dim/50 outline-none focus:border-green-700"
         />
-        <select v-model="depositsCategoryFilter" class="text-xs bg-[#0d1117] border border-space-border rounded px-1 py-1 text-space-text outline-none">
+        <select v-model="depositsCategoryFilter" class="text-xs bg-[#0d1117f0] border border-space-border rounded px-1 py-1 text-space-text outline-none">
           <option value="">All</option>
           <option value="ore">⛏ Ore</option>
           <option value="gas">💨 Gas</option>
@@ -115,7 +115,7 @@
       class="absolute top-10 w-80 max-h-[75vh] bg-[#0d1117f0] border border-space-border rounded-lg flex flex-col overflow-hidden"
       :style="showDepositsPanel ? 'right: 336px' : showBuildingsPanel ? 'right: 296px' : 'right: 8px'"
     >
-      <div class="px-3 py-2 border-b border-space-border flex items-center justify-between shrink-0">
+      <div class="px-2 py-2 border-b border-space-border flex items-center justify-between shrink-0">
         <span class="text-xs font-semibold text-purple-300">🌀 Known Wormholes ({{ botStore.wormholes.length }})</span>
         <button @click="showWormholesPanel = false" class="text-space-text-dim hover:text-space-text text-lg leading-none">×</button>
       </div>
@@ -157,19 +157,23 @@
       class="absolute top-10 w-72 max-h-[70vh] bg-[#0d1117f0] border border-space-border rounded-lg flex flex-col overflow-hidden"
       :style="showDepositsPanel ? 'right: 336px' : 'right: 8px'"
     >
-      <div class="px-3 py-2 border-b border-space-border flex items-center justify-between shrink-0">
+      <div class="px-2 py-2 border-b border-space-border flex items-center justify-between shrink-0">
         <span class="text-xs font-semibold text-yellow-400">🏛 Faction Buildings ({{ botStore.factionBuildings.length }})</span>
         <button @click="showBuildingsPanel = false" class="text-space-text-dim hover:text-space-text text-lg leading-none">×</button>
+      </div>
+      <!-- Search -->
+      <div class="px-2 py-1.5 border-b border-space-border shrink-0">
+        <input v-model="buildingsSearch" type="text" placeholder="Search name, faction, POI, system…"
+          class="w-full text-[11px] bg-[#0d1117f0] border border-space-border rounded px-2 py-1 text-space-text placeholder:text-space-text-dim outline-none focus:border-yellow-700/60" />
       </div>
       <div v-if="botStore.factionBuildings.length === 0" class="p-4 text-xs text-space-text-dim italic text-center">
         No faction buildings recorded yet.<br/>
         <span class="text-[11px]">Bots update this when running the facility command.</span>
       </div>
+      <div v-else-if="Object.keys(buildingsGroupedBySystem).length === 0" class="p-4 text-xs text-space-text-dim italic text-center">No results</div>
       <div v-else class="flex-1 overflow-auto p-2 scrollbar-dark">
         <div v-for="(group, sysName) in buildingsGroupedBySystem" :key="sysName" class="mb-3">
-          <div class="text-[10px] font-semibold uppercase tracking-wider text-space-text-dim mb-1 px-1">
-            {{ sysName }}
-          </div>
+          <div class="text-[10px] font-semibold uppercase tracking-wider text-space-text-dim mb-1 px-1">{{ sysName }}</div>
           <div v-for="b in group" :key="b.facility_id"
             class="mb-1 px-2 py-1.5 rounded border border-[#2a2200] bg-[#18150a] text-xs cursor-pointer hover:border-yellow-700/60 transition-colors"
             @click="jumpToSystem(b.system_id)"
@@ -177,6 +181,14 @@
             <div class="flex items-start justify-between gap-1">
               <span class="text-yellow-300 font-medium truncate">{{ b.facility_name || b.facility_type }}</span>
               <span v-if="b.level" class="text-[10px] text-space-text-dim shrink-0">Lv{{ b.level }}</span>
+            </div>
+            <!-- Faction badge -->
+            <div v-if="factionForBuilding(b)" class="flex items-center gap-1 mt-0.5">
+              <div class="w-2.5 h-2.5 rounded-full border border-white/20 shrink-0"
+                :style="{ backgroundColor: factionForBuilding(b)?.primary_color || '#7c3aed' }"></div>
+              <span class="text-[10px] text-purple-300 truncate">{{ factionForBuilding(b)?.name }}
+                <span v-if="factionForBuilding(b)?.tag" class="text-space-text-dim">[{{ factionForBuilding(b)?.tag }}]</span>
+              </span>
             </div>
             <div class="text-[11px] text-space-text-dim mt-0.5">{{ b.poi_name }}</div>
             <div v-if="b.faction_service" class="text-[11px] text-space-cyan/70 mt-0.5">{{ b.faction_service }}</div>
@@ -207,6 +219,18 @@
         <span class="text-space-text-dim">Has deposits</span>
       </div>
       <div class="flex items-center gap-1.5">
+        <svg width="11" height="11" viewBox="-5.5 -5.5 11 11">
+          <circle cx="0" cy="0" r="4.5" fill="none" stroke="rgba(255,200,60,0.95)" stroke-width="1.5"/>
+          <line x1="-4.5" y1="0" x2="4.5" y2="0" stroke="rgba(255,200,60,0.95)" stroke-width="1.5"/>
+          <line x1="0" y1="-4.5" x2="0" y2="4.5" stroke="rgba(255,200,60,0.95)" stroke-width="1.5"/>
+        </svg>
+        <span class="text-space-text-dim">Mining target</span>
+      </div>
+      <div class="flex items-center gap-1.5">
+        <div class="w-2 h-2 rounded-full" style="background:rgba(255,255,255,0.85);box-shadow:0 0 3px rgba(100,150,200,0.8)"></div>
+        <span class="text-space-text-dim">Other players</span>
+      </div>
+      <div class="flex items-center gap-1.5">
         <svg width="18" height="6" viewBox="0 0 18 6">
           <path d="M0,3 Q9,0 18,3" stroke="rgba(180,80,255,0.8)" stroke-width="1.5" fill="none" stroke-dasharray="4 3"/>
           <polygon points="18,3 15,1 15,5" fill="rgba(180,80,255,0.8)"/>
@@ -224,7 +248,7 @@
 
     <!-- System detail panel (right side, shown on click) -->
     <div v-if="selectedSystem" class="absolute top-0 right-0 h-full w-72 bg-[#0d1117f0] border-l border-space-border flex flex-col overflow-hidden">
-      <div class="px-3 py-2 border-b border-space-border flex items-center justify-between shrink-0">
+      <div class="px-2 py-2 border-b border-space-border flex items-center justify-between shrink-0">
         <div>
           <div class="text-sm font-semibold" :style="{ color: selectedSystem.empire_color || '#e8f4f8' }">{{ selectedSystem.name }}</div>
           <div v-if="selectedSystem.empire" class="text-[11px] text-space-text-dim">{{ EMPIRE_NAMES[selectedSystem.empire] || selectedSystem.empire }}</div>
@@ -243,16 +267,37 @@
 
         <!-- OVERVIEW tab -->
         <template v-if="systemPanelTab === 'overview'">
-          <!-- Faction buildings -->
-          <div v-if="buildingsInSelected.length" class="mb-3">
-            <div class="text-[10px] font-semibold text-space-yellow uppercase tracking-wider mb-1 px-1">🏛 Faction Buildings</div>
-            <div v-for="b in buildingsInSelected" :key="b.facility_id"
-              class="mb-1 px-2 py-1 rounded border border-[#2a2200] bg-[#18150a] text-xs">
-              <div class="text-space-yellow font-medium truncate">{{ b.facility_name || b.facility_type }}</div>
-              <div class="text-[11px] text-space-text-dim flex gap-2 mt-0.5">
-                <span>{{ b.poi_name }}</span>
-                <span v-if="b.faction_service" class="text-space-text-dim/70">· {{ b.faction_service }}</span>
-              </div>
+          <!-- ── Mini System Map ───────────────────────── -->
+          <div v-if="poisInSelected.length" class="mb-3 px-1">
+            <div class="text-[10px] font-semibold text-space-text-dim uppercase tracking-wider mb-1.5">System View</div>
+            <svg viewBox="0 0 200 200" class="w-full h-44 bg-[#060b10] rounded-lg border border-space-border/40" style="display:block">
+              <!-- Orbital rings -->
+              <circle cx="100" cy="100" r="28" fill="none" stroke="#ffffff08" stroke-width="1"/>
+              <circle cx="100" cy="100" r="54" fill="none" stroke="#ffffff06" stroke-width="1"/>
+              <circle cx="100" cy="100" r="82" fill="none" stroke="#ffffff05" stroke-width="1"/>
+              <!-- Central star -->
+              <circle cx="100" cy="100" r="8" :fill="selectedSystem?.empire_color || '#ffd700'" opacity="0.9"/>
+              <circle cx="100" cy="100" r="13" :fill="selectedSystem?.empire_color || '#ffd700'" opacity="0.15"/>
+              <!-- POIs -->
+              <g v-for="p in systemMiniMapPois" :key="p.id">
+                <circle :cx="p.x" :cy="p.y" :r="p.r" :fill="p.color" :opacity="p.opacity"/>
+                <!-- Deposit indicator -->
+                <circle v-if="depositsForPoi(p.id).length" :cx="p.x + p.r" :cy="p.y - p.r" r="2" fill="#4ade80"/>
+                <!-- Bot indicator -->
+                <circle v-if="botsAtPoi(p.id).length" :cx="p.x - p.r" :cy="p.y - p.r" r="2" fill="#4ecdc4"/>
+                <!-- Label (only for stations or bots present) -->
+                <text v-if="p.label" :x="p.x" :y="p.y + p.r + 7"
+                  text-anchor="middle" font-size="6" fill="#8899aa" class="pointer-events-none">
+                  {{ p.label.length > 14 ? p.label.slice(0,13)+'…' : p.label }}
+                </text>
+              </g>
+            </svg>
+            <div class="flex flex-wrap gap-x-3 gap-y-0.5 mt-1.5 text-[9px] text-space-text-dim">
+              <span class="flex items-center gap-0.5"><span class="inline-block w-2 h-2 rounded-full" style="background:#5b8dd9"></span> Station</span>
+              <span class="flex items-center gap-0.5"><span class="inline-block w-2 h-2 rounded-full" style="background:#8b6914"></span> Asteroid</span>
+              <span class="flex items-center gap-0.5"><span class="inline-block w-2 h-2 rounded-full" style="background:#4b7a60"></span> Planet</span>
+              <span class="flex items-center gap-0.5"><span class="inline-block w-2 h-2 rounded-full" style="background:#7b5ea7"></span> Gas/Ice</span>
+              <span class="flex items-center gap-0.5"><span class="inline-block w-2 h-2 rounded-full" style="background:#4ecdc4"></span> Bot here</span>
             </div>
           </div>
           <!-- POIs from map data -->
@@ -287,8 +332,62 @@
               <div class="text-[10px] text-space-text-dim/60 mt-0.5">Last seen {{ formatAge(wh.last_seen_at) }}</div>
             </div>
           </div>
+          <!-- Other players observed in this system -->
+          <div v-if="playersInSelected.length" class="mb-3">
+            <div class="text-[10px] font-semibold text-white/70 uppercase tracking-wider mb-1 px-1">👤 Other Players ({{ playersInSelected.length }})</div>
+            <div v-for="p in playersInSelected.slice(0, 20)" :key="p.player_id"
+              class="mb-1 px-2 py-1 rounded border border-white/10 bg-white/5 text-xs">
+              <div class="flex items-center gap-2">
+                <span v-if="!p.anonymous" class="font-medium text-space-text-bright truncate">{{ p.username || '(unknown)' }}</span>
+                <span v-else class="text-space-text-dim italic">anonymous</span>
+                <span v-if="p.faction_tag" class="text-[10px] text-space-text-dim shrink-0">[{{ p.faction_tag }}]</span>
+                <span v-if="p.in_combat" class="text-[10px] text-red-400 shrink-0">⚔️ Combat</span>
+                <span class="ml-auto text-[10px] text-space-text-dim shrink-0">{{ p.ship_class }}</span>
+              </div>
+              <div v-if="p.status_message" class="text-[10px] text-space-text-dim/80 mt-0.5 truncate italic">“{{ p.status_message }}”</div>
+              <div class="text-[10px] text-space-text-dim/50 mt-0.5">{{ p.last_poi_name || p.last_poi_id }} · {{ formatAge(p.last_seen_at) }} ago</div>
+            </div>
+            <div v-if="playersInSelected.length > 20" class="text-[10px] text-space-text-dim italic px-2">+ {{ playersInSelected.length - 20 }} more…</div>
+          </div>
+
+          <!-- Pinned mining targets -->
+          <div v-if="pinnedTargetsInSelected.length" class="mb-3">
+            <div class="text-[10px] font-semibold text-yellow-400/90 uppercase tracking-wider mb-1 px-1">🎯 Mining Targets</div>
+            <div v-for="t in pinnedTargetsInSelected" :key="t.username"
+              class="mb-1 px-2 py-1 rounded border border-yellow-700/30 bg-yellow-950/20 text-xs flex items-center gap-2">
+              <span class="text-yellow-300 font-medium">{{ t.username }}</span>
+              <span class="text-[10px] text-space-text-dim">
+                {{ t.type === 'ice' ? '🧊 Ice' : t.type === 'gas' ? '💨 Gas' : '⛏ Ore' }}
+              </span>
+            </div>
+          </div>
+
+          <!-- Faction buildings -->
+          <div v-if="buildingsInSelected.length" class="mb-3">
+            <div class="text-[10px] font-semibold text-space-yellow uppercase tracking-wider mb-1 px-1">🏛 Faction Buildings</div>
+            <div v-for="b in buildingsInSelected" :key="b.facility_id"
+              class="mb-1 px-2 py-1 rounded border border-[#2a2200] bg-[#18150a] text-xs">
+              <div class="flex items-start justify-between gap-1">
+                <span class="text-space-yellow font-medium truncate">{{ b.facility_name || b.facility_type }}</span>
+                <span v-if="b.level" class="text-[10px] text-space-text-dim shrink-0">Lv{{ b.level }}</span>
+              </div>
+              <!-- Faction badge -->
+              <div v-if="factionForBuilding(b)" class="flex items-center gap-1 mt-0.5">
+                <div class="w-2.5 h-2.5 rounded-full border border-white/20 shrink-0"
+                  :style="{ backgroundColor: factionForBuilding(b)?.primary_color || '#7c3aed' }"></div>
+                <span class="text-[10px] text-purple-300">{{ factionForBuilding(b)?.name }}
+                  <span v-if="factionForBuilding(b)?.tag" class="text-space-text-dim">[{{ factionForBuilding(b)?.tag }}]</span>
+                </span>
+              </div>
+              <div class="text-[11px] text-space-text-dim flex gap-2 mt-0.5">
+                <span>{{ b.poi_name }}</span>
+                <span v-if="b.faction_service" class="text-space-text-dim/70">· {{ b.faction_service }}</span>
+              </div>
+            </div>
+          </div>
+
           <!-- No content -->
-          <div v-if="botsInSelected.length === 0 && buildingsInSelected.length === 0 && depositsInSelected.length === 0 && poisInSelected.length === 0 && wormholesInSelected.length === 0" class="text-xs text-space-text-dim italic py-4 text-center">Nothing recorded in this system</div>
+          <div v-if="botsInSelected.length === 0 && buildingsInSelected.length === 0 && depositsInSelected.length === 0 && poisInSelected.length === 0 && wormholesInSelected.length === 0 && pinnedTargetsInSelected.length === 0 && playersInSelected.length === 0" class="text-xs text-space-text-dim italic py-4 text-center">Nothing recorded in this system</div>
           <!-- Bots not at any specific POI (in transit) -->
           <div v-if="botsInSelected.filter(b => !(b as any).poi || !poisInSelected.find(p => p.id === (b as any).poi)).length" class="mb-2">
             <div class="text-[10px] font-semibold text-space-text-dim uppercase tracking-wider mb-1 px-1">🚀 Bots in transit</div>
@@ -334,7 +433,7 @@
                 <span class="font-medium">{{ dep.resource_name || dep.resource_id }}</span>
                 <span class="text-[10px]" :class="depletionClass(dep.depletion_pct)">{{ Math.round(dep.depletion_pct) }}%</span>
               </div>
-              <div class="flex gap-3 text-[11px] text-space-text-dim mt-0.5">
+              <div class="flex gap-2 text-[11px] text-space-text-dim mt-0.5">
                 <span>{{ formatRemaining(dep.remaining) }} left</span>
                 <span v-if="dep.quality > 0">Q{{ dep.quality.toFixed(0) }}</span>
                 <span class="ml-auto">{{ formatAge(dep.last_seen_at) }}</span>
@@ -454,8 +553,47 @@ const botsBySystem = computed(() => {
   return map
 })
 
+/** Maps system_id → count of recently-seen other players */
+const playerCountBySystem = computed(() => {
+  const map = new Map<string, number>()
+  const ourUsernames = new Set(botStore.bots.map(b => (b as any).username))
+  for (const p of botStore.onlinePlayers) {
+    if (!p.last_system_id || (!p.username && !p.player_id)) continue
+    if (ourUsernames.has(p.username)) continue // skip our own bots
+    map.set(p.last_system_id, (map.get(p.last_system_id) ?? 0) + 1)
+  }
+  return map
+})
+
+/** Maps system_id → list of {username, type} for bots with a pinned mining target there */
+const pinnedTargetsBySystem = computed(() => {
+  const map = new Map<string, Array<{ username: string; type: 'ore' | 'ice' | 'gas' }>>()
+  const s = botStore.settings as Record<string, any>
+  for (const [username, cfg] of Object.entries(s)) {
+    if (!cfg || typeof cfg !== 'object') continue
+    for (const [key, targetType] of [['miner_target', 'ore'], ['ice_target', 'ice'], ['gas_target', 'gas']] as const) {
+      const t = cfg[key] as { system_id?: string } | null | undefined
+      if (t?.system_id) {
+        if (!map.has(t.system_id)) map.set(t.system_id, [])
+        map.get(t.system_id)!.push({ username, type: targetType })
+      }
+    }
+  }
+  return map
+})
+
 const botsInSelected = computed(() =>
   selectedSystem.value ? (botsBySystem.value.get(selectedSystem.value.id) || []) : []
+)
+
+const pinnedTargetsInSelected = computed(() =>
+  selectedSystem.value ? (pinnedTargetsBySystem.value.get(selectedSystem.value.id) || []) : []
+)
+
+const playersInSelected = computed(() =>
+  selectedSystem.value
+    ? botStore.onlinePlayers.filter(p => p.last_system_id === selectedSystem.value!.id)
+    : []
 )
 
 const buildingsBySystem = computed(() => {
@@ -487,6 +625,54 @@ function getBuildingsForSystem(sys: SystemData): typeof botStore.factionBuilding
 const buildingsInSelected = computed(() =>
   selectedSystem.value ? getBuildingsForSystem(selectedSystem.value) : []
 )
+
+// ── Mini system map ───────────────────────────────────────────────────────────
+const POI_RINGS: Record<string, number> = {
+  station: 0, space_station: 0, outpost: 0, trading_post: 0,
+  asteroid_belt: 1, asteroid_field: 1, moon: 1,
+  planet: 2, gas_cloud: 2, gas_giant: 2, ice_field: 2, nebula: 2, anomaly: 2, wormhole: 2,
+}
+const POI_COLOR: Record<string, string> = {
+  station: '#5b8dd9', space_station: '#5b8dd9', outpost: '#7ba7e0', trading_post: '#5b8dd9',
+  asteroid_belt: '#8b6914', asteroid_field: '#8b6914', moon: '#7a7a8a',
+  planet: '#4b7a60', gas_cloud: '#7b5ea7', gas_giant: '#9b7a4a', ice_field: '#88c8e0',
+  nebula: '#7b5ea7', anomaly: '#e07b5b', wormhole: '#a855f7',
+}
+const RING_RADII = [28, 54, 82]
+
+const systemMiniMapPois = computed(() => {
+  if (!selectedSystem.value || !poisInSelected.value.length) return []
+  const cx = 100, cy = 100
+  // Group POIs into rings
+  const rings: Array<Array<{ id: string; name: string; type: string }>> = [[], [], []]
+  for (const poi of poisInSelected.value) {
+    const ringIdx = POI_RINGS[poi.type] ?? 2
+    rings[ringIdx].push(poi)
+  }
+  const result: Array<{ id: string; x: number; y: number; r: number; color: string; opacity: number; label: string | null }> = []
+  for (let ri = 0; ri < 3; ri++) {
+    const pois = rings[ri]
+    if (!pois.length) continue
+    const radius = RING_RADII[ri]
+    pois.forEach((poi, i) => {
+      const angle = (2 * Math.PI * i) / pois.length - Math.PI / 2
+      const x = cx + radius * Math.cos(angle)
+      const y = cy + radius * Math.sin(angle)
+      const isStation = POI_RINGS[poi.type] === 0
+      const hasBots = (botsBySystem.value.get(selectedSystem.value!.id) || []).some(b => (b as any).poi === poi.id)
+      result.push({
+        id: poi.id,
+        x: Math.round(x * 10) / 10,
+        y: Math.round(y * 10) / 10,
+        r: isStation ? 4 : (ri === 2 ? 3.5 : 2.5),
+        color: hasBots ? '#4ecdc4' : (POI_COLOR[poi.type] ?? '#5a6a7a'),
+        opacity: 0.9,
+        label: isStation || hasBots ? poi.name : null,
+      })
+    })
+  }
+  return result
+})
 
 const depositsBySystem = computed(() => {
   const map = new Map<string, typeof botStore.deposits>()
@@ -616,6 +802,29 @@ const showDepositsPanel = ref(false)
 const showWormholesPanel = ref(false)
 const depositsSearchQuery = ref('')
 const depositsCategoryFilter = ref('')
+const buildingsSearch = ref('')
+
+// Faction info cache (from /api/factions)
+const cachedFactions = ref<Record<string, { id: string; name: string; tag: string; primary_color: string }>>({}) 
+async function loadFactionCache() {
+  try {
+    const r = await fetch('/api/factions')
+    if (r.ok) {
+      const list: any[] = await r.json()
+      const map: Record<string, any> = {}
+      for (const f of list) if (f.id) map[f.id] = f
+      cachedFactions.value = map
+    }
+  } catch { /* silent */ }
+}
+function factionForBuilding(b: any): { name: string; tag: string; primary_color: string } | null {
+  const id = b.faction_id
+  if (!id) return null
+  const c = cachedFactions.value[id]
+  if (c) return c
+  if (b.faction_name) return { name: b.faction_name, tag: '', primary_color: '' }
+  return null
+}
 const systemPanelTab = ref<'overview' | 'deposits'>('overview')
 
 const systemPanelTabs = [
@@ -630,8 +839,17 @@ const wormholesInSelected = computed(() =>
 )
 
 const buildingsGroupedBySystem = computed(() => {
+  const q = buildingsSearch.value.toLowerCase().trim()
+  const src = q
+    ? botStore.factionBuildings.filter(b =>
+        (b.facility_name || '').toLowerCase().includes(q) ||
+        (b.faction_name || '').toLowerCase().includes(q) ||
+        (b.poi_name || '').toLowerCase().includes(q) ||
+        (b.system_name || '').toLowerCase().includes(q)
+      )
+    : botStore.factionBuildings
   const groups: Record<string, typeof botStore.factionBuildings> = {}
-  for (const b of botStore.factionBuildings) {
+  for (const b of src) {
     const key = b.system_name || b.system_id || 'Unknown'
     if (!groups[key]) groups[key] = []
     groups[key].push(b)
@@ -923,6 +1141,45 @@ function render(ctx?: CanvasRenderingContext2D | null) {
       }
     }
 
+    // Other players dot (white circle, top-right of node)
+    const pCount = playerCountBySystem.value.get(sys.id) ?? 0
+    if (pCount > 0 && state.zoom > 0.12) {
+      const ox = pos.x + nodeR * hoverScale + 7
+      const oy = pos.y - nodeR * hoverScale - 7
+      ctx.fillStyle = 'rgba(255,255,255,0.85)'
+      ctx.strokeStyle = 'rgba(100,150,200,0.6)'
+      ctx.lineWidth = 1
+      ctx.beginPath(); ctx.arc(ox, oy, 4, 0, Math.PI * 2); ctx.fill(); ctx.stroke()
+      if (pCount > 1 && state.zoom > 0.4) {
+        ctx.font = 'bold 7px monospace'
+        ctx.fillStyle = '#050810'
+        ctx.textAlign = 'center'
+        ctx.textBaseline = 'middle'
+        ctx.fillText(pCount.toString(), ox, oy)
+      }
+    }
+
+    // Pinned mining target marker (⊕ crosshair, bottom-right of node)
+    const pinTargets = pinnedTargetsBySystem.value.get(sys.id)
+    if (pinTargets && pinTargets.length > 0) {
+      const px = pos.x + nodeR * hoverScale + 7
+      const py = pos.y + nodeR * hoverScale + 7
+      const pr = 5
+      const pinColor = pinTargets.some(t => t.type === 'ice') ? 'rgba(120,200,255,0.95)'
+        : pinTargets.some(t => t.type === 'gas') ? 'rgba(200,150,255,0.95)'
+        : 'rgba(255,200,60,0.95)'
+      ctx.strokeStyle = pinColor
+      ctx.lineWidth = 1.5
+      ctx.shadowColor = pinColor
+      ctx.shadowBlur = 4
+      ctx.beginPath(); ctx.arc(px, py, pr, 0, Math.PI * 2); ctx.stroke()
+      ctx.beginPath()
+      ctx.moveTo(px - pr, py); ctx.lineTo(px + pr, py)
+      ctx.moveTo(px, py - pr); ctx.lineTo(px, py + pr)
+      ctx.stroke()
+      ctx.shadowBlur = 0
+    }
+
     // Bot count badge (our bots only)
     if (hasOurBots) {
       const text = botCount.toString()
@@ -969,6 +1226,10 @@ function showTooltip(sys: SystemData, mx: number, my: number) {
     if (n > 0) parts.push(`${n} bot${n > 1 ? 's' : ''} here`)
     if (nb > 0) parts.push(`🏛 ${nb} building${nb > 1 ? 's' : ''}`)
     if (nd > 0) parts.push(`⛏ ${nd} deposit POI${nd > 1 ? 's' : ''}`)
+    const np = pinnedTargetsBySystem.value.get(sys.id)?.length ?? 0
+    if (np > 0) parts.push(`🎯 ${np} mining target${np > 1 ? 's' : ''}`)
+    const npl = playerCountBySystem.value.get(sys.id) ?? 0
+    if (npl > 0) parts.push(`👤 ${npl} player${npl > 1 ? 's' : ''} nearby`)
     tooltipBotsRef.value.textContent = parts.join(' · ')
     tooltipBotsRef.value.style.display = parts.length > 0 ? '' : 'none'
   }
@@ -1025,6 +1286,7 @@ let animFrameId = 0
 let resizeObserver: ResizeObserver | null = null
 
 onMounted(async () => {
+  loadFactionCache()
   const canvas = canvasRef.value!
   const ctx = canvas.getContext('2d')!
 
@@ -1041,10 +1303,11 @@ onMounted(async () => {
   generateStars()
   resizeCanvas()
 
-  // Pre-load faction buildings, deposits, and wormholes for map markers
+  // Pre-load faction buildings, deposits, wormholes, and online players for map markers
   botStore.fetchFactionStorage()
   botStore.fetchDeposits()
   botStore.fetchWormholes(false)
+  botStore.fetchOnlinePlayers(48)
 
   resizeObserver = new ResizeObserver(resizeCanvas)
   if (containerRef.value) resizeObserver.observe(containerRef.value)

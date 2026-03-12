@@ -28,12 +28,12 @@
           <!-- Filters inline -->
           <div class="flex items-center gap-2 ml-auto">
             <select v-model="typeFilter"
-              class="text-xs bg-[#0d1117] border border-space-border rounded px-2 py-1 text-space-text focus:outline-none focus:border-space-accent">
+              class="text-xs bg-[#0d1117f0] border border-space-border rounded px-2 py-1 text-space-text focus:outline-none focus:border-space-accent">
               <option value="all">All Types</option>
               <option v-for="t in allTypes" :key="t" :value="t">{{ typeConfig(t).icon }} {{ t }}</option>
             </select>
             <select v-model="diffFilter"
-              class="text-xs bg-[#0d1117] border border-space-border rounded px-2 py-1 text-space-text focus:outline-none focus:border-space-accent">
+              class="text-xs bg-[#0d1117f0] border border-space-border rounded px-2 py-1 text-space-text focus:outline-none focus:border-space-accent">
               <option value="all">All Difficulties</option>
               <option value="1">Easy</option>
               <option value="2">Medium</option>
@@ -52,7 +52,7 @@
         </div>
 
         <!-- Tab bar -->
-        <div class="flex border-b border-space-border flex-shrink-0 bg-[#0d1117]/40">
+        <div class="flex border-b border-space-border flex-shrink-0 bg-[#0d1117f0]/40">
           <button
             v-for="tab in missionTabs"
             :key="tab.id"
@@ -79,7 +79,7 @@
           <div v-if="missionTab === 'active'">
             <div v-if="loading" class="text-xs text-space-text-dim italic py-8 text-center">Loading…</div>
             <div v-else-if="filteredActive.length === 0"
-              class="text-xs text-space-text-dim italic py-6 text-center bg-[#0d1117] rounded-lg">
+              class="text-xs text-space-text-dim italic py-6 text-center bg-[#0d1117f0] rounded-lg">
               {{ activeMissions.length === 0 ? 'No active missions' : 'No missions match the filter' }}
             </div>
             <div v-else class="grid grid-cols-4 gap-2.5">
@@ -196,11 +196,11 @@
           <!-- ═══ AVAILABLE MISSIONS ═══ -->
           <div v-if="missionTab === 'available'">
             <div v-if="availableMissions.length === 0"
-              class="text-xs text-space-text-dim italic py-6 text-center bg-[#0d1117] rounded-lg">
+              class="text-xs text-space-text-dim italic py-6 text-center bg-[#0d1117f0] rounded-lg">
               No missions found in explored systems. Missions appear when bots visit stations.
             </div>
             <div v-else-if="filteredAvailableCount === 0"
-              class="text-xs text-space-text-dim italic py-6 text-center bg-[#0d1117] rounded-lg">
+              class="text-xs text-space-text-dim italic py-6 text-center bg-[#0d1117f0] rounded-lg">
               No missions match the current filter.
             </div>
             <div v-else>
@@ -396,12 +396,12 @@
         <div v-if="completedDetail.dialog?.offer || completedDetail.offer_dialog" class="space-y-2">
           <h3 class="text-[11px] font-bold text-space-text-dim uppercase tracking-wider">NPC Dialog</h3>
           <div v-if="completedDetail.dialog?.offer || completedDetail.offer_dialog"
-            class="bg-[#0d1117] border border-space-border rounded-lg p-3 text-xs text-space-text leading-relaxed italic">
+            class="bg-[#0d1117f0] border border-space-border rounded-lg p-3 text-xs text-space-text leading-relaxed italic">
             <span class="text-space-text-dim not-italic text-[10px] font-bold uppercase tracking-wide block mb-1">📨 Offer</span>
             {{ completedDetail.dialog?.offer || completedDetail.offer_dialog }}
           </div>
           <div v-if="completedDetail.dialog?.accept || completedDetail.accept_dialog"
-            class="bg-[#0d1117] border border-space-border rounded-lg p-3 text-xs text-space-text leading-relaxed italic">
+            class="bg-[#0d1117f0] border border-space-border rounded-lg p-3 text-xs text-space-text leading-relaxed italic">
             <span class="text-green-400 not-italic text-[10px] font-bold uppercase tracking-wide block mb-1">✅ Accept</span>
             {{ completedDetail.dialog?.accept || completedDetail.accept_dialog }}
           </div>
@@ -411,7 +411,7 @@
             {{ completedDetail.dialog?.complete || completedDetail.complete_dialog }}
           </div>
           <div v-if="completedDetail.dialog?.decline || completedDetail.decline_dialog"
-            class="bg-[#0d1117] border border-space-border rounded-lg p-3 text-xs text-space-text-dim leading-relaxed italic opacity-60">
+            class="bg-[#0d1117f0] border border-space-border rounded-lg p-3 text-xs text-space-text-dim leading-relaxed italic opacity-60">
             <span class="not-italic text-[10px] font-bold uppercase tracking-wide block mb-1">✕ Decline</span>
             {{ completedDetail.dialog?.decline || completedDetail.decline_dialog }}
           </div>
@@ -422,7 +422,7 @@
           <h3 class="text-[11px] font-bold text-space-text-dim uppercase tracking-wider mb-2">Objectives</h3>
           <ul class="space-y-1">
             <li v-for="(obj, i) in completedDetail.objectives" :key="i"
-              class="flex items-start gap-2 text-xs text-space-text bg-[#0d1117] rounded px-3 py-1.5">
+              class="flex items-start gap-2 text-xs text-space-text bg-[#0d1117f0] rounded px-3 py-1.5">
               <span class="text-green-400 mt-0.5 shrink-0">✓</span>
               <span>{{ obj.description || fmtObj(obj) }}<span v-if="obj.quantity || obj.required" class="text-space-text-dim"> ×{{ obj.quantity ?? obj.required }}</span></span>
             </li>

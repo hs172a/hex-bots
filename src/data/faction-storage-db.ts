@@ -22,6 +22,20 @@ export interface FactionStorageEntry {
   updated_at: string;
 }
 
+export interface FactionEntry {
+  id: string;
+  name: string;
+  tag: string;
+  description: string;
+  charter: string;
+  leader_username: string;
+  member_count: number;
+  primary_color: string;
+  secondary_color: string;
+  owned_bases: number;
+  updated_at: string;
+}
+
 export interface FactionBuildingEntry {
   facility_id: string;
   faction_id: string;
@@ -214,5 +228,65 @@ export class FactionStorageDb {
       .query("SELECT * FROM faction_buildings WHERE poi_id = ? ORDER BY facility_name")
       .all(poiId)
       .map((r: any) => ({ ...r, active: r.active === 1 })) as FactionBuildingEntry[];
+  }
+
+  // ── Factions ─────────────────────────────────────────────────
+
+  /** Upsert a faction summary (from faction_list or faction_info responses). */
+  upsertFaction(f: {
+    id: string;
+    name: string;
+    tag?: string;
+    description?: string;
+    charter?: string;
+    leader_username?: string;
+    leader?: string;
+    member_count?: number;
+    primary_color?: string;
+    secondary_color?: string;
+    owned_bases?: number;
+  }): void {
+    const now = new Date().toISOString();
+    this.db.run(
+      `INSERT OR REPLACE INTO factions
+         (id, name, tag, description, charter, leader_username, member_count,
+          primary_color, secondary_color, owned_bases, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      [
+        f.id,
+        f.name,
+        f.tag ?? '',
+        f.description ?? '',
+        f.charter ?? '',
+        f.leader_username ?? f.leader ?? '',
+        f.member_count ?? 0,
+        f.primary_color ?? '',
+        f.secondary_color ?? '',
+        f.owned_bases ?? 0,
+        now,
+      ],
+    );
+  }
+
+  /** Bulk upsert from faction_list result. */
+  upsertFactions(factions: Parameters<FactionStorageDb['upsertFaction']>[0][]): void {
+    const tx = this.db.transaction(() => {
+      for (const f of factions) this.upsertFaction(f);
+    });
+    tx();
+  }
+
+  /** Return all cached factions ordered by member_count desc then name. */
+  getAllFactions(): FactionEntry[] {
+    return this.db
+      .query("SELECT * FROM factions ORDER BY member_count DESC, name")
+      .all() as FactionEntry[];
+  }
+
+  /** Return a single cached faction by id. */
+  getFaction(id: string): FactionEntry | null {
+    return this.db
+      .query("SELECT * FROM factions WHERE id = ?")
+      .get(id) as FactionEntry | null;
   }
 }

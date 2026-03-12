@@ -90,12 +90,16 @@ function getAiSettings(): {
 
 // ── Memory ────────────────────────────────────────────────────
 
-const MEMORY_FILE = join(process.cwd(), "data", "ai_memory.json");
+function memoryFile(username?: string): string {
+  const safe = (username || 'default').replace(/[^a-zA-Z0-9_-]/g, '_');
+  return join(process.cwd(), "data", `ai_memory_${safe}.json`);
+}
 
-function loadMemory(): AiMemory {
+function loadMemory(username?: string): AiMemory {
   try {
-    if (existsSync(MEMORY_FILE)) {
-      return JSON.parse(readFileSync(MEMORY_FILE, "utf-8")) as AiMemory;
+    const f = memoryFile(username);
+    if (existsSync(f)) {
+      return JSON.parse(readFileSync(f, "utf-8")) as AiMemory;
     }
   } catch { /* start fresh */ }
   return {
@@ -108,10 +112,10 @@ function loadMemory(): AiMemory {
   };
 }
 
-function saveMemory(mem: AiMemory): void {
+function saveMemory(mem: AiMemory, username?: string): void {
   const dir = join(process.cwd(), "data");
   if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
-  writeFileSync(MEMORY_FILE, JSON.stringify(mem, null, 2) + "\n", "utf-8");
+  writeFileSync(memoryFile(username), JSON.stringify(mem, null, 2) + "\n", "utf-8");
 }
 
 // ── Game documentation ────────────────────────────────────────
@@ -185,7 +189,7 @@ async function callLlm(
 // ── Command cheatsheet injected into every prompt ─────────────
 
 const COMMAND_CHEATSHEET = `
-## Exact API Command Reference (v1 parameter names)
+## Exact API Command Reference (v0.203 parameter names)
 
 INFO / QUERY (no params needed, call any time):
   game_exec("get_status")       — your full state: credits, location, fuel, hull, cargo
@@ -195,7 +199,7 @@ INFO / QUERY (no params needed, call any time):
   game_exec("get_ship")         — ship stats (modules, fuel capacity, hull, shields)
   game_exec("get_skills")       — your skill levels
   game_exec("get_nearby")       — players and NPCs at your current location
-  game_exec("survey_system")    — scan system for resource info (requires scanner module)
+  game_exec("survey_system")    — scan system for resource info (scout/explorer ships have integrated scanner; others require a survey scanner module)
   game_exec("search_systems", {text: "name"})  — find a system by name
   game_exec("find_route", {target_system: "sys_id"})  — server-side route calculation
 
@@ -231,6 +235,14 @@ MISSIONS (must be docked):
   game_exec("complete_mission", {mission_id: "id"})
   game_exec("abandon_mission",  {mission_id: "id"})
 
+FACTION (must be docked at faction station):
+  game_exec("view_faction_storage")                            — view faction shared storage
+  game_exec("faction_deposit_items",  {item_id: "id", quantity: 5})
+  game_exec("faction_withdraw_items", {item_id: "id", quantity: 5})
+  game_exec("faction_info")                                    — your faction details
+  game_exec("facility", {action: "faction_list"})              — faction facilities + status
+  game_exec("facility", {action: "faction_toggle", facility_id: "id"})  — toggle on/off
+
 SOCIAL:
   game_exec("chat", {channel: "system", content: "Hello!"})  — channels: system, faction, local
   game_exec("captains_log_add", {entry: "text"})
@@ -242,6 +254,7 @@ CRITICAL RULES — get these wrong and commands will fail:
   - Must be UNDOCKED to travel/jump/mine; must be DOCKED to sell/buy/refuel/repair
   - After get_system, look at the "pois" array for travel targets and "connections" for jump targets
   - mine() must be called multiple times to fill cargo — each call mines one batch
+  - faction_toggle toggles a faction production facility on/off; service facilities always stay on
 `.trim();
 
 // ── Inline tool-call parser (fallback for models without proper function calling) ──
@@ -460,8 +473,8 @@ const TOOL_HANDLERS: Record<string, ToolHandler> = {
     return compact(result);
   },
 
-  memory_update: async (args) => {
-    const mem = loadMemory();
+  memory_update: async (args, ctx) => {
+    const mem = loadMemory(ctx.bot.username);
     if (Array.isArray(args.goals)) {
       mem.goals = (args.goals as string[]).slice(0, 5);
     }
@@ -477,8 +490,64 @@ const TOOL_HANDLERS: Record<string, ToolHandler> = {
       });
       if (mem.decisions.length > 30) mem.decisions = mem.decisions.slice(0, 30);
     }
-    saveMemory(mem);
+    saveMemory(mem, ctx.bot.username);
     return compact({ ok: true });
+  },
+
+  map_get_deposits: async (args) => {
+    const systemId = args.system_id as string | undefined;
+    const resourceId = args.resource_id as string | undefined;
+    if (systemId) {
+      const deps = mapStore.getDepositsInSystem(systemId);
+      if (deps.length === 0) return compact({ error: `No deposits recorded for system '${systemId}'` });
+      return compact(deps.map(d => ({
+        poi_id: d.poi_id, poi_name: d.poi_name, resource_id: d.resource_id, resource_name: d.resource_name,
+        category: d.category, remaining: d.remaining, quality: d.quality,
+        depletion_pct: d.depletion_pct, last_seen_at: d.last_seen_at,
+      })).slice(0, 20));
+    }
+    if (resourceId) {
+      const best = mapStore.findBestDeposit(resourceId);
+      return best ? compact(best) : compact({ error: `No deposit data for '${resourceId}'` });
+    }
+    const summary = mapStore.getDepositsSummary().slice(0, 20);
+    return compact(summary);
+  },
+
+  map_get_nearby_players: async (args, ctx) => {
+    const systemId = (args.system_id as string) || ctx.bot.system || '';
+    if (!systemId) return compact({ error: 'No system known' });
+    const players = mapStore.getOnlinePlayersBySystem(systemId);
+    if (players.length === 0) return compact({ message: 'No other players recorded in this system recently' });
+    return compact(players.slice(0, 20).map(p => ({
+      username: p.anonymous ? '(anonymous)' : p.username,
+      ship_class: p.ship_class, faction_tag: p.faction_tag,
+      status_message: p.status_message, in_combat: p.in_combat,
+      last_poi: p.last_poi_name || p.last_poi_id, last_seen: p.last_seen_at,
+    })));
+  },
+
+  map_get_needs_matrix: async () => {
+    const deficits = mapStore.getTopNeedsMatrixDeficits('mine', 10);
+    if (deficits.length === 0) return compact({ message: 'No mining targets recorded yet (coordinator not running)' });
+    return compact(deficits.map(d => ({
+      item_id: d.item_id, item_name: d.item_name,
+      target_qty: d.target_qty, current_qty: d.current_qty,
+      deficit: d.target_qty - d.current_qty, priority: d.priority,
+    })));
+  },
+
+  map_get_wormholes: async (args) => {
+    const systemId = args.system_id as string | undefined;
+    const wormholes = systemId
+      ? mapStore.getWormholesBySystem(systemId)
+      : mapStore.getActiveWormholes();
+    if (wormholes.length === 0) return compact({ message: 'No active wormholes recorded' });
+    return compact(wormholes.slice(0, 10).map(w => ({
+      entrance_poi: w.entrance_poi_id, entrance_system: w.entrance_system_name || w.entrance_system_id,
+      exit_system: w.exit_system_name || w.exit_system_id, status: w.status,
+      last_seen: w.last_seen_at,
+    })));
   },
 };
 
@@ -623,6 +692,57 @@ const TOOLS: ToolDefinition[] = [
   {
     type: "function",
     function: {
+      name: "map_get_deposits",
+      description: "Get resource deposit data (quality, remaining amount, depletion %) for mining targets. More accurate than map_find_ore_locations as it includes live deposit conditions.",
+      parameters: {
+        type: "object",
+        properties: {
+          system_id: { type: "string", description: "Filter to deposits in a specific system. Omit for global summary." },
+          resource_id: { type: "string", description: "Get the best deposit for a specific resource (e.g. 'iron_ore')." },
+        },
+        required: [],
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "map_get_nearby_players",
+      description: "Get recently observed players in the current or specified system. Useful for social interaction or avoiding conflict.",
+      parameters: {
+        type: "object",
+        properties: {
+          system_id: { type: "string", description: "System to look up. Defaults to current system." },
+        },
+        required: [],
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "map_get_needs_matrix",
+      description: "Get fleet mining needs — top ore deficits from the coordinator. Use this to decide WHAT to mine based on what the fleet actually needs.",
+      parameters: { type: "object", properties: {}, required: [] },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "map_get_wormholes",
+      description: "Get known active wormholes for fast travel to distant systems. Wormholes are one-way shortcuts.",
+      parameters: {
+        type: "object",
+        properties: {
+          system_id: { type: "string", description: "Filter to wormholes in a specific system. Omit for all active wormholes." },
+        },
+        required: [],
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
       name: "memory_update",
       description:
         "Update your persistent memory that survives across play sessions. " +
@@ -675,7 +795,7 @@ export const aiRoutine: Routine = async function* (ctx: RoutineContext) {
       continue;
     }
 
-    const mem = loadMemory();
+    const mem = loadMemory(bot.username);
     mem.cycleCount++;
     mem.lastCycle = new Date().toISOString();
 
@@ -685,15 +805,18 @@ export const aiRoutine: Routine = async function* (ctx: RoutineContext) {
 
     await bot.refreshStatus();
 
+    const cargoFull = bot.cargoMax > 0 && bot.cargo / bot.cargoMax >= 0.9;
     const statusSummary = [
       `Credits: ${bot.credits}`,
       `System: ${bot.system}`,
       `POI: ${bot.poi || "unknown"}`,
       `Docked: ${bot.docked}`,
-      `Fuel: ${bot.fuel}/${bot.maxFuel}`,
-      `Hull: ${bot.hull}/${bot.maxHull}`,
+      `Fuel: ${bot.fuel}/${bot.maxFuel}${bot.fuel / bot.maxFuel < 0.25 ? " [LOW]" : ""}`,
+      `Hull: ${bot.hull}/${bot.maxHull}${bot.hull / bot.maxHull < 0.3 ? " [DAMAGED]" : ""}`,
       `Shield: ${bot.shield}/${bot.maxShield}`,
-      `Cargo: ${bot.cargo}/${bot.cargoMax}`,
+      `Cargo: ${bot.cargo}/${bot.cargoMax}${cargoFull ? " [FULL - SELL NOW]" : ""}`,
+      `Ship: ${(bot as any).shipClass || "unknown"}`,
+      `Faction: ${(bot as any).factionTag || "none"}`,
       `Inventory: ${bot.inventory.length > 0 ? bot.inventory.map(i => `${i.quantity}x ${i.name}`).join(", ") : "empty"}`,
       `Storage: ${bot.storage.length > 0 ? bot.storage.map(i => `${i.quantity}x ${i.name}`).join(", ") : "empty"}`,
     ].join(" | ");
@@ -731,6 +854,10 @@ export const aiRoutine: Routine = async function* (ctx: RoutineContext) {
       "  map_get_all_known_ores()",
       "  map_get_buy_demand()",
       "  map_find_best_sell_price(item_id)",
+      "  map_get_deposits(system_id?, resource_id?) — live deposit quality/remaining data",
+      "  map_get_nearby_players(system_id?)         — other players in a system",
+      "  map_get_needs_matrix()                     — fleet ore deficits (what to mine)",
+      "  map_get_wormholes(system_id?)              — shortcut wormhole connections",
       "  catalog_lookup(type, id)      — type = item | ship | skill | recipe",
       "  memory_update(goals?, insight?, decision?, reason?)",
       "",
@@ -762,8 +889,11 @@ export const aiRoutine: Routine = async function* (ctx: RoutineContext) {
       ``,
       `## Instructions`,
       "Play SpaceMolt right now. Use tools to take REAL actions — do not describe plans.",
-      "Pick a mine-able POI from the list above, travel there, mine repeatedly, then return to a station to sell.",
+      cargoFull
+        ? "PRIORITY: Your cargo is FULL. Dock at a station and sell your inventory before mining more."
+        : "Pick a mine-able POI from the list above (or use map_get_deposits/map_get_needs_matrix to pick the best target), travel there, mine repeatedly, then return to a station to sell.",
       "mine() takes NO parameters. Never pass target_poi or any params to mine().",
+      "If you have faction membership, consider depositing ores to faction_storage instead of selling.",
       "When you have genuinely finished a round of gameplay, summarise what you achieved.",
     ].join("\n");
 
@@ -849,10 +979,10 @@ export const aiRoutine: Routine = async function* (ctx: RoutineContext) {
     }
 
     // Save cycle metadata without overwriting insights/goals written by memory_update tool
-    const latestMem = loadMemory();
+    const latestMem = loadMemory(bot.username);
     latestMem.cycleCount = mem.cycleCount;
     latestMem.lastCycle = mem.lastCycle;
-    saveMemory(latestMem);
+    saveMemory(latestMem, bot.username);
 
     if (mem.cycleCount % settings.captainsLogEveryN === 0 && lastText) {
       const entry = `AI Cycle ${mem.cycleCount} — ${lastText.slice(0, 400)}`;

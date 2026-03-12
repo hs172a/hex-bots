@@ -2,10 +2,10 @@
   <div class="flex-1 flex flex-col overflow-hidden">
     <!-- Tab bar -->
     <div class="flex border-b border-space-border bg-space-card px-3 shrink-0">
-      <button v-for="t in ['galaxy', 'explorer']" :key="t" @click="mapTab = t"
+        <button v-for="t in ['galaxy', 'explorer', 'analytics']" :key="t" @click="mapTab = t"
         class="px-4 py-2 text-xs font-medium border-b-2 transition-all capitalize"
         :class="mapTab === t ? 'text-space-text-bright border-space-accent' : 'text-space-text-dim border-transparent hover:text-space-text'">
-        {{ t === 'galaxy' ? '🗺️ Galaxy Map' : '📋 Explorer Data' }}
+        {{ t === 'galaxy' ? '🗺️ Galaxy Map' : t === 'explorer' ? '📋 Explorer Data' : '📈 Analytics' }}
       </button>
     </div>
 
@@ -13,7 +13,7 @@
     <GalaxyMapCanvas v-if="mapTab === 'galaxy'" class="flex-1" />
 
     <!-- Explorer Data tab -->
-    <div v-else class="flex-1 flex gap-2 p-2 overflow-hidden">
+    <div v-if="mapTab === 'explorer'" class="flex-1 min-h-0 flex gap-2 p-2 overflow-hidden">
     <!-- Filters Sidebar -->
     <div class="w-56 bg-space-card border border-space-border rounded-lg flex flex-col overflow-hidden flex-shrink-0">
       <div class="px-3 py-2 border-b border-space-border">
@@ -28,8 +28,8 @@
       <!-- Filters -->
       <div class="flex-1 overflow-auto p-3 space-y-3 scrollbar-dark">
         <div>
-          <label class="block text-xs text-space-text-dim mb-1">Search System</label>
-          <input v-model="searchQuery" type="text" placeholder="System name..." class="input w-full text-xs" />
+          <label class="block text-xs text-space-text-dim mb-1">Search System / POI</label>
+          <input v-model="searchQuery" type="text" placeholder="System or POI name..." class="input w-full text-xs" />
         </div>
         <div>
           <label class="block text-xs text-space-text-dim mb-1">Security Level</label>
@@ -54,7 +54,7 @@
     </div>
 
     <!-- Map Content -->
-    <div class="flex-1 bg-space-card border border-space-border rounded-lg overflow-auto p-3 scrollbar-dark">
+    <div class="flex-1 min-h-0 bg-space-card border border-space-border rounded-lg overflow-auto p-3 scrollbar-dark">
       <div v-if="displayedSystems.length === 0" class="text-center text-space-text-dim italic py-10">
         {{ totalSystems === 0 ? 'No map data yet. Start a bot to begin exploring!' : 'No systems match your filters' }}
       </div>
@@ -124,6 +124,96 @@
       </div>
     </div>
     </div>
+
+    <!-- Analytics tab -->
+    <div v-if="mapTab === 'analytics'" class="flex-1 overflow-auto p-3 space-y-4 scrollbar-dark">
+      <!-- Summary row -->
+      <div class="grid grid-cols-2 md:grid-cols-4 gap-2">
+        <div class="card py-2 px-3">
+          <div class="text-[11px] text-space-text-dim uppercase tracking-wider mb-0.5">Systems explored</div>
+          <div class="text-2xl font-bold text-space-text-bright">{{ totalSystems }}</div>
+        </div>
+        <div class="card py-2 px-3">
+          <div class="text-[11px] text-space-text-dim uppercase tracking-wider mb-0.5">Total POIs</div>
+          <div class="text-2xl font-bold text-space-text-bright">{{ totalPois }}</div>
+        </div>
+        <div class="card py-2 px-3">
+          <div class="text-[11px] text-space-text-dim uppercase tracking-wider mb-0.5">Faction buildings</div>
+          <div class="text-2xl font-bold text-yellow-400">{{ (botStore.factionBuildings || []).length }}</div>
+        </div>
+        <div class="card py-2 px-3">
+          <div class="text-[11px] text-space-text-dim uppercase tracking-wider mb-0.5">Factions tracked</div>
+          <div class="text-2xl font-bold text-purple-400">{{ factionBuildingStats.length }}</div>
+        </div>
+      </div>
+
+      <div class="grid grid-cols-1 md:grid-cols-2 gap-3">
+        <!-- Buildings per faction -->
+        <div class="card py-2 px-3">
+          <h3 class="text-xs font-semibold text-space-text-bright mb-3">🏛 Buildings per Faction</h3>
+          <div v-if="!factionBuildingStats.length" class="text-xs text-space-text-dim italic">No faction buildings recorded yet.</div>
+          <div v-else class="space-y-1.5">
+            <div v-for="f in factionBuildingStats" :key="f.faction_id" class="flex items-center gap-2">
+              <div class="w-2.5 h-2.5 rounded-full shrink-0 border border-white/20"
+                :style="{ backgroundColor: f.color || '#7c3aed' }"></div>
+              <span class="text-xs text-space-text min-w-[120px] truncate">{{ f.name }}</span>
+              <div class="flex-1 h-2 bg-[#21262d] rounded-full overflow-hidden">
+                <div class="h-full rounded-full transition-all"
+                  :style="{ width: (f.count / factionBuildingStats[0].count * 100) + '%', backgroundColor: f.color || '#7c3aed' }"></div>
+              </div>
+              <span class="text-xs text-space-text-dim shrink-0 w-8 text-right">{{ f.count }}</span>
+            </div>
+          </div>
+        </div>
+
+        <!-- Top systems by building count -->
+        <div class="card py-2 px-3">
+          <h3 class="text-xs font-semibold text-space-text-bright mb-3">🏗️ Top Systems by Buildings</h3>
+          <div v-if="!topBuildingSystems.length" class="text-xs text-space-text-dim italic">No faction buildings recorded yet.</div>
+          <div v-else class="space-y-1.5">
+            <div v-for="s in topBuildingSystems" :key="s.system_id" class="flex items-center gap-2">
+              <span class="text-xs text-space-text min-w-[120px] truncate">{{ s.system_name }}</span>
+              <div class="flex-1 h-2 bg-[#21262d] rounded-full overflow-hidden">
+                <div class="h-full bg-yellow-500 rounded-full transition-all"
+                  :style="{ width: (s.count / topBuildingSystems[0].count * 100) + '%' }"></div>
+              </div>
+              <span class="text-xs text-space-text-dim shrink-0 w-8 text-right">{{ s.count }}</span>
+            </div>
+          </div>
+        </div>
+
+        <!-- Building types breakdown -->
+        <div class="card py-2 px-3">
+          <h3 class="text-xs font-semibold text-space-text-bright mb-3">⚙️ Building Types</h3>
+          <div v-if="!buildingTypeStats.length" class="text-xs text-space-text-dim italic">No faction buildings recorded yet.</div>
+          <div v-else class="space-y-1.5">
+            <div v-for="t in buildingTypeStats" :key="t.type" class="flex items-center gap-2">
+              <span class="text-xs text-space-text min-w-[140px] truncate">{{ t.type }}</span>
+              <div class="flex-1 h-2 bg-[#21262d] rounded-full overflow-hidden">
+                <div class="h-full bg-space-accent rounded-full transition-all"
+                  :style="{ width: (t.count / buildingTypeStats[0].count * 100) + '%' }"></div>
+              </div>
+              <span class="text-xs text-space-text-dim shrink-0 w-8 text-right">{{ t.count }}</span>
+            </div>
+          </div>
+        </div>
+
+        <!-- Security level breakdown -->
+        <div class="card py-2 px-3">
+          <h3 class="text-xs font-semibold text-space-text-bright mb-3">🛡️ Systems by Security</h3>
+          <div class="space-y-1.5">
+            <div v-for="s in securityStats" :key="s.level" class="flex items-center gap-2">
+              <span class="text-xs min-w-[100px]" :class="s.cls">{{ s.label }}</span>
+              <div class="flex-1 h-2 bg-[#21262d] rounded-full overflow-hidden">
+                <div class="h-full rounded-full transition-all" :class="s.barCls"
+                  :style="{ width: totalSystems > 0 ? (s.count / totalSystems * 100) + '%' : '0%' }"></div>
+              </div>
+              <span class="text-xs text-space-text-dim shrink-0 w-8 text-right">{{ s.count }}</span>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
   </div>
 </template>
 
@@ -133,8 +223,8 @@ import { useBotStore } from '../stores/botStore';
 import GalaxyMapCanvas from '../components/GalaxyMapCanvas.vue';
 
 const mapTab = ref('galaxy');
-
 const botStore = useBotStore();
+
 const searchQuery = ref('');
 const secFilter = ref('');
 const sortBy = ref('name');
@@ -175,6 +265,53 @@ function secOrder(level: string): number {
 }
 
 const allSystems = computed(() => Object.entries(botStore.mapData).map(([id, sys]) => ({ id, ...(sys as any) })));
+
+// ── Analytics computeds ──────────────────────────────────────────
+const factionBuildingStats = computed(() => {
+  const counts: Record<string, { name: string; color: string; count: number; faction_id: string }> = {};
+  for (const b of (botStore.factionBuildings || [])) {
+    const key = b.faction_id || b.faction_name || 'unknown';
+    if (!counts[key]) counts[key] = { faction_id: key, name: b.faction_name || key, color: '', count: 0 };
+    counts[key].count++;
+  }
+  return Object.values(counts).sort((a, b) => b.count - a.count);
+});
+
+const topBuildingSystems = computed(() => {
+  const counts: Record<string, { system_id: string; system_name: string; count: number }> = {};
+  for (const b of (botStore.factionBuildings || [])) {
+    const key = b.system_id || b.system_name || 'unknown';
+    if (!counts[key]) counts[key] = { system_id: key, system_name: b.system_name || key, count: 0 };
+    counts[key].count++;
+  }
+  return Object.values(counts).sort((a, b) => b.count - a.count).slice(0, 10);
+});
+
+const buildingTypeStats = computed(() => {
+  const counts: Record<string, number> = {};
+  for (const b of (botStore.factionBuildings || [])) {
+    const key = (b.facility_type || 'unknown').replace(/_/g, ' ');
+    counts[key] = (counts[key] || 0) + 1;
+  }
+  return Object.entries(counts).map(([type, count]) => ({ type, count })).sort((a, b) => b.count - a.count).slice(0, 10);
+});
+
+const securityStats = computed(() => {
+  const groups = [
+    { level: 'high',    label: 'High Security',  cls: 'text-space-green', barCls: 'bg-green-500', count: 0 },
+    { level: 'medium',  label: 'Medium Security', cls: 'text-yellow-400',  barCls: 'bg-yellow-500', count: 0 },
+    { level: 'low',     label: 'Low Security',    cls: 'text-red-400',     barCls: 'bg-red-500', count: 0 },
+    { level: 'unknown', label: 'Unknown',          cls: 'text-space-text-dim', barCls: 'bg-[#5a6a7a]', count: 0 },
+  ];
+  for (const s of allSystems.value) {
+    const sl = ((s as any).security_level || '').toLowerCase();
+    if (sl.includes('high') || sl.includes('safe')) groups[0].count++;
+    else if (sl && !sl.includes('low') && !sl.includes('danger')) groups[1].count++;
+    else if (sl.includes('low') || sl.includes('danger')) groups[2].count++;
+    else groups[3].count++;
+  }
+  return groups;
+});
 const totalSystems = computed(() => allSystems.value.length);
 const totalPois = computed(() => allSystems.value.reduce((s, sys) => s + (sys.pois || []).length, 0));
 const totalStations = computed(() => allSystems.value.reduce((s, sys) => s + (sys.pois || []).filter((p: any) => p.has_base).length, 0));
@@ -182,7 +319,11 @@ const totalStations = computed(() => allSystems.value.reduce((s, sys) => s + (sy
 const displayedSystems = computed(() => {
   let filtered = allSystems.value;
   const q = searchQuery.value.toLowerCase();
-  if (q) filtered = filtered.filter(s => (s.name || s.id || '').toLowerCase().includes(q) || (s.id || '').toLowerCase().includes(q));
+  if (q) filtered = filtered.filter(s =>
+    (s.name || s.id || '').toLowerCase().includes(q) ||
+    (s.id || '').toLowerCase().includes(q) ||
+    (s.pois || []).some((p: any) => (p.name || p.id || '').toLowerCase().includes(q))
+  );
   if (secFilter.value) {
     filtered = filtered.filter(s => {
       const sl = (s.security_level || '').toLowerCase();

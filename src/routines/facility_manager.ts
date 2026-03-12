@@ -55,10 +55,15 @@ interface Facility {
 
 interface FactionFacility {
   id: string;
+  facility_id: string;
   name: string;
   type: string;
   tier: number;
   base_id: string;
+  /** v0.202.0: 'active' | 'inactive' | 'under_construction' */
+  status?: string;
+  /** v0.202.0: ticks remaining until construction completes */
+  ticks_until_complete?: number;
   upgrades?: Array<{ type: string; name: string; skill_locked?: boolean }>;
 }
 
@@ -78,12 +83,13 @@ function parseFacilities(result: unknown): Facility[] {
 function parseFactionFacilities(result: unknown): FactionFacility[] {
   if (!result || typeof result !== "object") return [];
   const r = result as Record<string, unknown>;
-  const raw =
+  const raw: any[] =
     Array.isArray(r) ? r :
     Array.isArray(r.facilities) ? r.facilities :
     Array.isArray(r.items) ? r.items :
     [];
-  return raw as FactionFacility[];
+  // Normalise: ensure facility_id is always set (API returns either 'id' or 'facility_id')
+  return raw.map(f => ({ ...f, facility_id: f.facility_id || f.id || '', id: f.id || f.facility_id || '' })) as FactionFacility[];
 }
 
 function ticksRemaining(facility: Facility): number {
@@ -196,9 +202,20 @@ export const facilityManagerRoutine: Routine = async function* (ctx: RoutineCont
       const factionFacilities = parseFactionFacilities(factionListResp.result);
 
       if (!factionListResp.error && factionFacilities.length > 0) {
-        ctx.log("system", `FacilityManager: ${factionFacilities.length} faction facility/facilities`);
+        const underConst = factionFacilities.filter(f => f.status === "under_construction");
+        const inactive = factionFacilities.filter(f => f.status === "inactive");
+        ctx.log("system", `FacilityManager: ${factionFacilities.length} faction facility/facilities` +
+          (underConst.length ? ` (${underConst.length} building)` : "") +
+          (inactive.length ? ` (${inactive.length} inactive)` : ""));
 
         for (const fac of factionFacilities) {
+          // v0.202.0: log under_construction with ETA
+          if (fac.status === "under_construction") {
+            const eta = fac.ticks_until_complete !== undefined ? ` (~${fac.ticks_until_complete} ticks)` : "";
+            ctx.log("system", `FacilityManager: ${fac.name} — under construction${eta}`);
+            continue;
+          }
+
           if (!Array.isArray(fac.upgrades) || fac.upgrades.length === 0) continue;
 
           const available = fac.upgrades.filter(u => !u.skill_locked);
@@ -207,18 +224,18 @@ export const facilityManagerRoutine: Routine = async function* (ctx: RoutineCont
           ctx.log("system", `FacilityManager: ${fac.name} (tier ${fac.tier ?? "?"}) — ${available.length} upgrade(s) available`);
 
           if (settings.autoUpgradeFacilities) {
-            yield `upgrade_${fac.id}`;
+            yield `upgrade_${fac.facility_id}`;
             for (const upgrade of available) {
               const upResp = await bot.exec("facility", {
                 action: "faction_upgrade",
-                facility_id: fac.id,
+                facility_id: fac.facility_id,
                 facility_type: upgrade.type,
               });
               if (!upResp.error) {
                 ctx.log("system", `FacilityManager: upgraded ${fac.name} → ${upgrade.name}`);
                 logAgentEvent(ctx, "economy", "info",
                   `Faction facility upgraded: ${fac.name} → ${upgrade.name}`,
-                  { facility_id: fac.id, upgrade_type: upgrade.type },
+                  { facility_id: fac.facility_id, upgrade_type: upgrade.type },
                 );
               } else {
                 ctx.log("warn", `FacilityManager: upgrade ${upgrade.name} failed: ${upResp.error.message}`);
@@ -228,6 +245,27 @@ export const facilityManagerRoutine: Routine = async function* (ctx: RoutineCont
           } else {
             ctx.log("system", `FacilityManager: upgrades available for ${fac.name} — set autoUpgradeFacilities=true to apply`);
           }
+        }
+      }
+    }
+
+    // ── Step 4.4 — Faction facility toggle (v0.202.0) ────────
+    // Re-activate inactive production facilities if autoUpgrade is on (indicates active management)
+    if (bot.factionId && settings.autoUpgradeFacilities) {
+      yield "check_inactive";
+      const reListResp = await bot.exec("facility", { action: "faction_list" });
+      const reFacilities = parseFactionFacilities(reListResp.result);
+      const inactiveProd = reFacilities.filter(f =>
+        f.status === "inactive" && f.facility_id &&
+        !['intel', 'storage', 'admin', 'market'].some(svc => (f.type || '').toLowerCase().includes(svc))
+      );
+      for (const fac of inactiveProd) {
+        ctx.log("system", `FacilityManager: faction_toggle ON for inactive ${fac.name}`);
+        const togResp = await bot.exec("facility", { action: "faction_toggle", facility_id: fac.facility_id });
+        if (!togResp.error) {
+          logAgentEvent(ctx, "economy", "info", `Faction facility toggled on: ${fac.name}`, { facility_id: fac.facility_id });
+        } else {
+          ctx.log("warn", `FacilityManager: faction_toggle failed for ${fac.name}: ${togResp.error.message}`);
         }
       }
     }

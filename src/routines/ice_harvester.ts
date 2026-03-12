@@ -13,6 +13,7 @@ import {
   refuelAtStation,
   factionDonateProfit,
   readSettings,
+  writeSettings,
   scavengeWrecks,
   detectAndRecoverFromDeath,
   getSystemInfo,
@@ -33,6 +34,8 @@ function getIceSettings(username?: string): {
   system: string;
   depositBot: string;
   targetIce: string;
+  /** Per-bot pinned harvest system. Overrides global system setting. */
+  ice_target: { system_id: string; system_name: string } | null;
 } {
   const all = readSettings();
   const m = all.ice_harvester || {};
@@ -46,7 +49,7 @@ function getIceSettings(username?: string): {
   return {
     depositMode:
       parseDepositMode(botOverrides.depositMode) ??
-      parseDepositMode(m.depositMode) ?? "storage",
+      parseDepositMode(m.depositMode) ?? "faction",
     depositFallback:
       parseDepositMode(botOverrides.depositFallback) ??
       parseDepositMode(m.depositFallback) ?? "storage",
@@ -57,6 +60,12 @@ function getIceSettings(username?: string): {
     system: (m.system as string) || "",
     depositBot: (botOverrides.depositBot as string) || (m.depositBot as string) || "",
     targetIce: (botOverrides.targetIce as string) || (m.targetIce as string) || "",
+    ice_target: (() => {
+      const raw = botOverrides.ice_target as Record<string, unknown> | undefined;
+      return raw?.system_id
+        ? { system_id: raw.system_id as string, system_name: (raw.system_name as string) || "" }
+        : null;
+    })(),
   };
 }
 
@@ -67,7 +76,23 @@ export const iceHarvesterRoutine: Routine = async function* (ctx: RoutineContext
 
   await bot.refreshStatus();
   const settings0 = getIceSettings(bot.username);
-  const homeSystem = settings0.homeSystem || bot.system;
+
+  // ── Remember launch station ───────────────────────────────────────────
+  const allBotSettings = readSettings();
+  const botSettings0 = (allBotSettings[bot.username] || {}) as Record<string, unknown>;
+  let launchStationPoi = (botSettings0.launchStationPoi as string) || "";
+
+  if (!launchStationPoi && bot.docked && bot.poi) {
+    launchStationPoi = bot.poi;
+    writeSettings({ [bot.username]: { launchStationPoi, launchSystem: bot.system } });
+    ctx.log("system", `Launch station recorded: ${launchStationPoi} (${bot.system})`);
+  }
+
+  const persistedLaunchSystem = (botSettings0.launchSystem as string) || "";
+  // bot.homeSystem is populated from get_status (home_system field) — use it as a fallback
+  // before bot.system so the harvester returns to the correct system after a server restart
+  // where launchStationPoi/launchSystem were not persisted (e.g. bot was in space at restart).
+  const homeSystem = settings0.homeSystem || persistedLaunchSystem || bot.homeSystem || bot.system;
 
   // ── Startup: return home and dump non-fuel cargo to storage ──
   await bot.refreshCargo();
@@ -83,19 +108,62 @@ export const iceHarvesterRoutine: Routine = async function* (ctx: RoutineContext
         await navigateToSystem(ctx, homeSystem, { fuelThresholdPct: 50, hullThresholdPct: 30 });
       }
     }
-    await ensureDocked(ctx);
-    for (const item of nonFuelCargo) {
-      if (settings0.depositMode === "faction") {
-        const fResp = await bot.exec("faction_deposit_items", { item_id: item.itemId, quantity: item.quantity });
-        if (fResp.error) {
-          await bot.exec("deposit_items", { item_id: item.itemId, quantity: item.quantity });
+    // Navigate to station POI in current system before docking
+    if (!bot.docked) {
+      const { pois: startupPois } = await getSystemInfo(ctx);
+      const startupStation = findStation(startupPois);
+      if (startupStation) {
+        const travelResp = await bot.exec("travel", { target_poi: startupStation.id });
+        if (travelResp.error && !travelResp.error.message.includes("already")) {
+          ctx.log("error", `Startup: travel to station failed: ${travelResp.error.message}`);
         }
-      } else {
-        await bot.exec("deposit_items", { item_id: item.itemId, quantity: item.quantity });
       }
     }
-    const names = nonFuelCargo.map(i => `${i.quantity}x ${i.name}`).join(", ");
-    ctx.log("harvesting", `Startup: deposited ${names} — cargo clear for harvesting`);
+    await ensureDocked(ctx);
+    const startupUnloaded: string[] = [];
+    for (const item of nonFuelCargo) {
+      let deposited = false;
+      if (settings0.depositMode === "faction") {
+        const fResp = await bot.exec("faction_deposit_items", { item_id: item.itemId, quantity: item.quantity });
+        if (!fResp.error) {
+          deposited = true;
+        } else {
+          const sResp = await bot.exec("deposit_items", { item_id: item.itemId, quantity: item.quantity });
+          if (!sResp.error) deposited = true;
+        }
+      } else if (settings0.depositMode === "sell") {
+        const sellResp = await bot.exec("sell", { item_id: item.itemId, quantity: item.quantity });
+        const sr0 = (!sellResp.error && sellResp.result && typeof sellResp.result === "object")
+          ? sellResp.result as Record<string, unknown> : null;
+        const unsoldQty0 = sr0 ? ((sr0.unsold as number) ?? item.quantity) : item.quantity;
+        if (!sellResp.error && unsoldQty0 <= 0) {
+          deposited = true;
+        } else {
+          const toDeposit0 = sellResp.error ? item.quantity : unsoldQty0;
+          const sResp = await bot.exec("deposit_items", { item_id: item.itemId, quantity: toDeposit0 });
+          if (!sResp.error) {
+            deposited = true;
+          } else {
+            const fResp = await bot.exec("faction_deposit_items", { item_id: item.itemId, quantity: toDeposit0 });
+            if (!fResp.error) deposited = true;
+          }
+        }
+      } else {
+        const sResp = await bot.exec("deposit_items", { item_id: item.itemId, quantity: item.quantity });
+        if (!sResp.error) {
+          deposited = true;
+        } else {
+          const fResp = await bot.exec("faction_deposit_items", { item_id: item.itemId, quantity: item.quantity });
+          if (!fResp.error) deposited = true;
+        }
+      }
+      if (deposited) startupUnloaded.push(`${item.quantity}x ${item.name}`);
+    }
+    if (startupUnloaded.length > 0) {
+      ctx.log("harvesting", `Startup: deposited ${startupUnloaded.join(", ")} — cargo clear for harvesting`);
+    } else {
+      ctx.log("error", `Startup: failed to deposit cargo — will retry in main loop`);
+    }
   }
 
   while (bot.state === "running") {
@@ -133,8 +201,10 @@ export const iceHarvesterRoutine: Routine = async function* (ctx: RoutineContext
     await ensureUndocked(ctx);
 
     // ── Navigate to target system if configured ──
-    const targetSystemId = settings.system || "";
+    // Priority: per-bot ice_target > global system setting
+    const targetSystemId = settings.ice_target?.system_id || settings.system || "";
     if (targetSystemId && targetSystemId !== bot.system) {
+      if (settings.ice_target) ctx.log("harvesting", `Pinned target: ${settings.ice_target.system_name || targetSystemId}`);
       yield "navigate_to_target";
       const arrived = await navigateToSystem(ctx, targetSystemId, safetyOpts);
       if (!arrived) {
@@ -299,11 +369,22 @@ export const iceHarvesterRoutine: Routine = async function* (ctx: RoutineContext
       }
 
       const { pois: homePois } = await getSystemInfo(ctx);
-      const homeStation = findStation(homePois);
-      stationPoi = homeStation ? { id: homeStation.id, name: homeStation.name } : null;
+      // Prefer the recorded launch station; fallback to any station in homeSystem
+      if (launchStationPoi && homePois.some(p => p.id === launchStationPoi)) {
+        stationPoi = { id: launchStationPoi, name: launchStationPoi };
+      } else {
+        const homeStation = findStation(homePois);
+        stationPoi = homeStation ? { id: homeStation.id, name: homeStation.name } : null;
+      }
+    } else if (bot.system === homeSystem && launchStationPoi && !stationPoi) {
+      // Already in home system — use the launch station if it's available
+      const { pois: curPois } = await getSystemInfo(ctx);
+      if (curPois.some(p => p.id === launchStationPoi)) {
+        stationPoi = { id: launchStationPoi, name: launchStationPoi };
+      }
     }
 
-    // ── Travel to station ──
+    // ── Travel to station (preferred POI if known) ──
     yield "travel_to_station";
     if (stationPoi) {
       const travelStationResp = await bot.exec("travel", { target_poi: stationPoi.id });
@@ -312,12 +393,12 @@ export const iceHarvesterRoutine: Routine = async function* (ctx: RoutineContext
       }
     }
 
-    // ── Dock ──
+    // ── Dock (ensureDocked handles BFS to nearest station if none locally) ──
     yield "dock";
-    const dockResp = await bot.exec("dock");
-    if (dockResp.error && !dockResp.error.message.includes("already")) {
-      ctx.log("error", `Dock failed: ${dockResp.error.message}`);
-      await sleep(5000);
+    const docked = await ensureDocked(ctx);
+    if (!docked) {
+      ctx.log("error", "Cannot dock anywhere — waiting 30s before retry");
+      await sleep(20000);
       continue;
     }
     bot.docked = true;
@@ -328,14 +409,20 @@ export const iceHarvesterRoutine: Routine = async function* (ctx: RoutineContext
 
     yield "unload_cargo";
     const cargoResp = await bot.exec("get_cargo");
+    let cargoItems: Array<Record<string, unknown>>;
     if (cargoResp.result && typeof cargoResp.result === "object") {
       const result = cargoResp.result as Record<string, unknown>;
-      const cargoItems = (
+      cargoItems = (
         Array.isArray(result) ? result :
         Array.isArray(result.items) ? result.items :
         Array.isArray(result.cargo) ? result.cargo : []
       ) as Array<Record<string, unknown>>;
+    } else {
+      if (cargoResp.error) ctx.log("error", `get_cargo failed: ${cargoResp.error.message} — using cached inventory`);
+      cargoItems = bot.inventory.map(i => ({ item_id: i.itemId, name: i.name, quantity: i.quantity } as Record<string, unknown>));
+    }
 
+    if (cargoItems.length > 0) {
       const modeLabel: Record<string, string> = {
         storage: "station storage", faction: "faction storage", sell: "market",
       };
@@ -360,12 +447,14 @@ export const iceHarvesterRoutine: Routine = async function* (ctx: RoutineContext
           if (!sellResp.error && unsoldQty <= 0) {
             deposited = true;
           } else {
+            // Sell returned no buyers (quantity_sold=0) OR API error — deposit the unsold items
             const toDeposit = sellResp.error ? quantity : unsoldQty;
             if (!sellResp.error) ctx.log("trade", `No buyers for ${displayName} (${toDeposit} unsold) — depositing to storage`);
             else ctx.log("trade", `Sell failed for ${displayName}: ${sellResp.error.message} — depositing to storage`);
             const storeResp = await bot.exec("deposit_items", { item_id: itemId, quantity: toDeposit });
-            if (!storeResp.error) deposited = true;
-            else {
+            if (!storeResp.error) {
+              deposited = true;
+            } else {
               const fResp2 = await bot.exec("faction_deposit_items", { item_id: itemId, quantity: toDeposit });
               if (!fResp2.error) deposited = true;
               else ctx.log("error", `All deposit methods failed for ${displayName}: ${fResp2.error.message}`);
@@ -376,6 +465,7 @@ export const iceHarvesterRoutine: Routine = async function* (ctx: RoutineContext
           if (!fResp.error) {
             deposited = true;
           } else {
+            ctx.log("trade", `Faction deposit failed for ${displayName}: ${fResp.error.message} — trying station storage`);
             const storeResp = await bot.exec("deposit_items", { item_id: itemId, quantity });
             if (!storeResp.error) deposited = true;
             else ctx.log("error", `All deposit methods failed for ${displayName}: ${storeResp.error.message}`);
@@ -385,9 +475,11 @@ export const iceHarvesterRoutine: Routine = async function* (ctx: RoutineContext
           if (!gResp.error) {
             deposited = true;
           } else {
+            ctx.log("trade", `Gift to ${settings.depositBot} failed for ${displayName}: ${gResp.error.message} — trying storage`);
             const storeResp = await bot.exec("deposit_items", { item_id: itemId, quantity });
-            if (!storeResp.error) deposited = true;
-            else {
+            if (!storeResp.error) {
+              deposited = true;
+            } else {
               const fResp2 = await bot.exec("faction_deposit_items", { item_id: itemId, quantity });
               if (!fResp2.error) deposited = true;
               else ctx.log("error", `All deposit methods failed for ${displayName}: ${fResp2.error.message}`);
@@ -403,6 +495,7 @@ export const iceHarvesterRoutine: Routine = async function* (ctx: RoutineContext
             else ctx.log("error", `All deposit methods failed for ${displayName}: ${fResp2.error.message}`);
           }
         }
+
         if (deposited) {
           unloadedItems.push(`${quantity}x ${displayName}`);
         }

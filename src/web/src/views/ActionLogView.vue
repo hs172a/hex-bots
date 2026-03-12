@@ -47,7 +47,7 @@
         <!-- Log entries -->
         <div class="flex-1 overflow-auto px-3 py-2 space-y-1 scrollbar-dark" ref="logContainerRef">
           <div v-if="loading && entries.length === 0" class="text-xs text-space-text-dim italic py-8 text-center">Loading…</div>
-          <div v-else-if="entries.length === 0" class="text-xs text-space-text-dim italic py-8 text-center bg-[#0d1117] rounded-lg">
+          <div v-else-if="entries.length === 0" class="text-xs text-space-text-dim italic py-8 text-center bg-[#0d1117f0] rounded-lg">
             No action log entries found.
           </div>
 
@@ -239,7 +239,7 @@ const STYLE_MAP: Record<string, { icon: string; card: string; badge: string }> =
   mission:  { icon: '🎯',  card: 'bg-indigo-950/20 border-indigo-800/40', badge: 'bg-indigo-500/20 text-indigo-300' },
   skill:    { icon: '⭐',  card: 'bg-cyan-950/20 border-cyan-800/40',     badge: 'bg-cyan-500/20 text-cyan-300' },
   salvage:  { icon: '♻️',  card: 'bg-lime-950/20 border-lime-800/40',     badge: 'bg-lime-500/20 text-lime-300' },
-  other:    { icon: '📋',  card: 'bg-[#0d1117] border-[#30363d]',         badge: 'bg-[#21262d] text-space-text-dim' },
+  other:    { icon: '📋',  card: 'bg-[#0d1117f0] border-[#30363d]',         badge: 'bg-[#21262d] text-space-text-dim' },
 };
 
 function categoryStyle(cat: string) {

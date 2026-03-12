@@ -119,31 +119,33 @@ export const shipUpgradeRoutine: Routine = async function* (ctx: RoutineContext)
     }
   }
 
-  // Buy from shipyard
+  // v0.209: Use browse_ships (shows both station-built and player listings) + buy_listed_ship
   yield "check_shipyard";
-  ctx.log("info", `Checking shipyard for ${settings.targetShipClass}...`);
-  const showroomResp = await bot.exec("shipyard_showroom");
-  if (showroomResp.error) {
-    ctx.log("error", `Shipyard unavailable: ${showroomResp.error.message}`);
+  ctx.log("info", `Browsing ship market for ${settings.targetShipClass}...`);
+  const browseResp = await bot.exec("browse_ships");
+  if (browseResp.error) {
+    ctx.log("error", `Ship market unavailable: ${browseResp.error.message}`);
     return;
   }
 
-  const showroom = (Array.isArray(showroomResp.result) ? showroomResp.result :
-    (showroomResp.result as Record<string, unknown>)?.ships as unknown[] || []) as Array<Record<string, unknown>>;
+  const rawListings = browseResp.result as Record<string, unknown> | undefined;
+  const listings = (Array.isArray(rawListings?.ships) ? rawListings!.ships :
+    Array.isArray(rawListings) ? rawListings : []) as Array<Record<string, unknown>>;
 
-  const targetShip = showroom.find(s => {
-    const classId = (s.class_id as string) || (s.classId as string) || (s.id as string) || "";
+  const targetListing = listings.find(s => {
+    const classId = (s.ship_class as string) || (s.class_id as string) || (s.id as string) || "";
     return classId === settings.targetShipClass;
   });
 
-  if (!targetShip) {
-    ctx.log("error", `${settings.targetShipClass} not available at this shipyard.`);
+  if (!targetListing) {
+    ctx.log("error", `${settings.targetShipClass} not available at this station.`);
     return;
   }
 
-  const price = (targetShip.price as number) || (targetShip.base_price as number) || 0;
-  if (price <= 0) {
-    ctx.log("error", `Invalid price for ${settings.targetShipClass}`);
+  const listingId = (targetListing.listing_id as string) || (targetListing.id as string) || "";
+  const price = (targetListing.price as number) || 0;
+  if (!listingId || price <= 0) {
+    ctx.log("error", `Invalid listing for ${settings.targetShipClass}`);
     return;
   }
 
@@ -153,35 +155,16 @@ export const shipUpgradeRoutine: Routine = async function* (ctx: RoutineContext)
     return;
   }
 
-  // Buy the ship
+  // Buy the ship — v0.209: buy_listed_ship auto-swaps, no switch_ship needed
   yield "buy_ship";
-  ctx.log("info", `Buying ${settings.targetShipClass} for ${price}cr...`);
-  const buyResp = await bot.exec("buy_ship", { ship_class: settings.targetShipClass });
+  ctx.log("info", `Buying ${settings.targetShipClass} for ${price}cr (listing: ${listingId})...`);
+  const buyResp = await bot.exec("buy_listed_ship", { listing_id: listingId });
   if (buyResp.error) {
     ctx.log("error", `Buy failed: ${buyResp.error.message}`);
     return;
   }
   await bot.refreshStatus();
-
-  // Switch to new ship if not auto-switched
-  if (bot.shipClassId !== settings.targetShipClass) {
-    yield "switch_ship";
-    const shipsResp2 = await bot.exec("list_ships");
-    if (!shipsResp2.error && shipsResp2.result) {
-      const ships2 = (Array.isArray(shipsResp2.result) ? shipsResp2.result :
-        (shipsResp2.result as Record<string, unknown>).ships as unknown[] || []) as Array<Record<string, unknown>>;
-      const newShip = ships2.find(s => {
-        const classId = (s.class_id as string) || (s.classId as string) || "";
-        const shipId = (s.ship_id as string) || (s.id as string) || "";
-        return classId === settings.targetShipClass && shipId !== oldShipId;
-      });
-      if (newShip) {
-        const newId = (newShip.ship_id as string) || (newShip.id as string) || "";
-        await bot.exec("switch_ship", { ship_id: newId });
-        await bot.refreshStatus();
-      }
-    }
-  }
+  // Auto-swap confirms active ship is the purchased one — no manual switch_ship required
 
   // Sell old ship if requested
   if (settings.sellOldShip && oldShipId && bot.shipId !== oldShipId) {

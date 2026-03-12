@@ -242,6 +242,9 @@ export class WebServer {
   onRefreshCatalog: (() => Promise<string>) | null = null;
   onRefreshMap: (() => Promise<string>) | null = null;
 
+  // Smart craft — set by botmanager: auto-collect ingredients then craft
+  onSmartCraft: ((bot: string, recipeId: string, count: number) => Promise<{ ok: boolean; crafted: number; message?: string }>) | null = null;
+
   /** Set by botmanager on client VMs: forwards every broadcast message to master hub. */
   hubClientPush: ((msg: Record<string, unknown>) => void) | null = null;
   /** Returns the current init payload for hub registration (used by HubClientConnector on connect). */
@@ -526,10 +529,47 @@ export class WebServer {
         }
 
         if (url.pathname === "/api/faction-storage") {
-          return Response.json(mapStore.getAllFactionStorageItems());
+          const allItems = mapStore.getAllFactionStorageItems();
+          // Faction storage is faction-wide (same inventory regardless of which station you query it from).
+          // Multiple bots docked at different POIs in the same system each write the same data under their
+          // own poi_id → duplicated groups. Keep only the most-recently-updated POI per system_id.
+          const bestPoiBySystem = new Map<string, { poiId: string; ts: string }>();
+          for (const item of allItems) {
+            const existing = bestPoiBySystem.get(item.system_id);
+            if (!existing || item.updated_at > existing.ts) {
+              bestPoiBySystem.set(item.system_id, { poiId: item.poi_id, ts: item.updated_at });
+            }
+          }
+          const deduped = allItems.filter(item =>
+            bestPoiBySystem.get(item.system_id)?.poiId === item.poi_id
+          );
+          return Response.json(deduped);
+        }
+        if (url.pathname === "/api/smart-craft" && req.method === "POST") {
+          if (!this.onSmartCraft) return Response.json({ ok: false, message: 'Not available' }, { status: 503 });
+          try {
+            const body = await req.json() as { bot: string; recipe_id: string; count?: number };
+            if (!body.bot || !body.recipe_id) return Response.json({ ok: false, message: 'Missing bot or recipe_id' }, { status: 400 });
+            const result = await this.onSmartCraft(body.bot, body.recipe_id, body.count ?? 1);
+            return Response.json(result);
+          } catch (e: any) {
+            return Response.json({ ok: false, message: e.message || 'Internal error' }, { status: 500 });
+          }
         }
         if (url.pathname === "/api/faction-buildings") {
-          return Response.json(mapStore.getAllFactionBuildings());
+          const allBuildings = mapStore.getAllFactionBuildings();
+          // Deduplicate: same (facility_type + poi_id + faction_id) = same physical building.
+          // Multiple bots or re-indexed facility_ids can create apparent duplicates; keep newest.
+          const seen = new Map<string, typeof allBuildings[0]>();
+          for (const b of allBuildings) {
+            const key = `${b.facility_type}|${b.poi_id}|${b.faction_id}`;
+            const existing = seen.get(key);
+            if (!existing || b.updated_at > existing.updated_at) seen.set(key, b);
+          }
+          return Response.json([...seen.values()]);
+        }
+        if (url.pathname === "/api/factions") {
+          return Response.json(mapStore.getAllFactions());
         }
         if (url.pathname === "/api/deposits") {
           const systemId = url.searchParams.get("system");
@@ -546,6 +586,22 @@ export class WebServer {
         }
         if (url.pathname === "/api/deposits/systems") {
           return Response.json(mapStore.getSystemsWithDeposits());
+        }
+
+        if (url.pathname === "/api/nearby-systems") {
+          const fromId = url.searchParams.get("from") || "";
+          const maxJumps = Math.min(parseInt(url.searchParams.get("jumps") || "3", 10), 10);
+          if (!fromId) return Response.json({ error: "?from= required" }, { status: 400 });
+          return Response.json(mapStore.getSystemsWithinJumps(fromId, maxJumps));
+        }
+
+        if (url.pathname === "/api/online-players") {
+          const systemId = url.searchParams.get("system");
+          const poiId = url.searchParams.get("poi");
+          const hours = Math.min(parseInt(url.searchParams.get("hours") || "24", 10), 168);
+          if (systemId) return Response.json(mapStore.getOnlinePlayersBySystem(systemId));
+          if (poiId) return Response.json(mapStore.getOnlinePlayersByPoi(poiId));
+          return Response.json(mapStore.getRecentOnlinePlayers(hours));
         }
 
         if (url.pathname === "/api/wormholes") {

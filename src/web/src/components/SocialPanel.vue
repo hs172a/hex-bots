@@ -18,7 +18,7 @@
       </div>
       <div v-if="trades.length === 0 && !loading" class="text-xs text-space-text-dim text-center py-8">No pending trade offers</div>
       <div class="flex-1 overflow-auto space-y-2">
-        <div v-for="tr in trades" :key="tr.trade_id" class="p-3 rounded bg-[#0d1117] border border-space-border">
+        <div v-for="tr in trades" :key="tr.trade_id" class="p-3 rounded bg-[#0d1117f0] border border-space-border">
           <div class="flex items-start justify-between gap-2">
             <div class="flex-1 min-w-0">
               <div class="flex items-center gap-2 mb-1">
@@ -51,7 +51,7 @@
 
     <!-- ── New Trade Offer ── -->
     <div v-else-if="tab === 'offer'" class="flex-1 overflow-auto">
-      <div class="p-3 rounded bg-[#0d1117] border border-space-border space-y-3">
+      <div class="p-3 rounded bg-[#0d1117f0] border border-space-border space-y-3">
         <div class="text-xs font-semibold text-space-text">New Trade Offer</div>
         <div v-if="!bot.docked" class="text-xs text-yellow-500">⚠️ Both players must be docked at the same POI to trade.</div>
 
@@ -77,7 +77,7 @@
 
     <!-- ── Send Gift ── -->
     <div v-else-if="tab === 'gift'" class="flex-1 overflow-auto">
-      <div class="p-3 rounded bg-[#0d1117] border border-space-border space-y-3">
+      <div class="p-3 rounded bg-[#0d1117f0] border border-space-border space-y-3">
         <div class="text-xs font-semibold text-space-text">Send Gift</div>
         <p class="text-xs text-space-text-dim">Transfer credits or items to another player's storage at this station. They don't need to be online.</p>
         <div v-if="!bot.docked" class="text-xs text-yellow-500">⚠️ Must be docked at a station with storage service.</div>

@@ -5,6 +5,147 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [2.5.6] - 2026-03-12
+
+### Added
+
+#### Global craft-overstock limit (`src/routines/crafter.ts`, `gatherer.ts`, `SettingsView.vue`)
+- New crafter setting `maxFactionStoragePerItem` (default **30 000**): if faction storage for a recipe's output item already holds this many units, that recipe is skipped for the current cycle and its craft/crafter goal is automatically removed from `settings.json`.
+- Enforced in **both** the `craftLimits` loop and the `autoCraft` loop — previously only the `craftLimits` path had the guard; `autoCraft` silently bypassed it.
+- `gatherer.ts` `buildDeliveryPlan`: reads the same threshold and skips (+ auto-removes) craft/crafter goals whose output item is already overstocked in faction storage.
+- Exported helper `removeCraftGoalsByItemId(ownerBot, itemId)` in `crafter.ts` so both crafter and gatherer can clean up goals without duplicating logic.
+- Settings UI: new **"Faction Storage Limit Per Item"** row added to the Crafter section in `SettingsView.vue`.
+
+#### Game API v0.209.0 — new ship-market commands (`ship_upgrade.ts`, `ShipyardView.vue`, `botmanager.ts`, `api.ts`)
+- `shipyard_showroom` + `buy_ship` replaced by `browse_ships` + `buy_listed_ship { listing_id }`.
+- `buy_listed_ship` auto-swaps the active ship, so the previous `switch_ship` step after buying was removed.
+- `ShipyardView.vue` `loadShowroom()` calls `browse_ships`, maps `listing_id` / `ship_class` from response; `buyShip(listingId)` calls `buy_listed_ship`.
+- `botmanager.ts` refresh-trigger set and `api.ts` MUTATING_COMMANDS list updated.
+
+#### Game API v0.210.0 — carrier ship bay fields (`src/bot.ts`)
+- `get_cargo` response now includes `carried_ships: string[]`, `bay_used: number`, `bay_capacity: number`.
+- `Bot.refreshCargo()` parses and caches these fields; `BotStatus` interface and `toStatus()` expose them.
+
+#### Game API v0.212.0 — `survey_system` mission objective (`src/routines/mission_runner.ts`)
+- New `"survey"` `ObjType`; `determineObjectiveType` recognises `survey_system` / `scan` / `deep_core` strings.
+- `executeObjective` `case "survey"`: navigates to `targetSystem`, travels to `targetPoi` if specified, undocks, then calls `survey_system`.
+- Effort estimator assigns weight 2 to survey objectives.
+
+### Fixed
+
+#### Craft overstock not enforced in `autoCraft` mode (`src/routines/crafter.ts`)
+- `maxFactionStoragePerItem` check was only present inside the `for (const { recipeId, limit } of settings.craftLimits)` loop. The `autoCraft` path and the `allSkillBlocked` fallback path had no check, so Copper Wiring (40 244 units in faction storage) was still being crafted when autoCraft was active.
+- Fix: added the same faction-storage quota guard at the top of the `for (const prof of ranked)` autoCraft item loop.
+
+#### `station_to_faction` routine transferring 0 units (`src/routines/station_to_faction.ts`, `common.ts`)
+- **Root cause**: `transferStationToFaction` checks `freeSpace = cargoMax - cargo` before each `withdraw_items` call. If the bot had items left in cargo from a previous routine run, `freeSpace` was 0 and the inner loop broke immediately — `withdrawnThisPass = 0` → outer loop exited. No error was logged.
+- **Fix 1**: `station_to_faction.ts` now dumps cargo to faction/station storage before calling `transferStationToFaction`, ensuring cargo is empty.
+- **Fix 2**: `transferStationToFaction` in `common.ts` now logs a `warn` when returning 0 due to `!bot.inFaction` or the `hasFactionStorage === false` cache hit, making future failures immediately visible in logs.
+- **Fix 3**: `withdraw_items` errors are now logged at `warn` level instead of being silently swallowed by a bare `continue`.
+
+#### Game API v0.211.0 — `cryo_industrial` / `rift_siphon` ship class detection (`src/routines/smart_selector.ts`)
+- `cryo_industrial` reclassified as Ice Harvester; `rift_siphon` reclassified as Gas Harvester.
+- `hasIceMod` and `hasGasMod` now also check `bot.shipClassId` in addition to installed module IDs, so these ships receive the correct +14 routing bonus without needing a matching module name.
+
+---
+
+## [2.5.5] - 2026-03-10
+
+### Fixed
+
+#### "No base at this location" infinite dock loop (`miner.ts`, `gas_harvester.ts`, `ice_harvester.ts`)
+- Added `noBasePois: Set<string>` session-level blacklist in all three routines.
+- When `dock` returns an error containing `"no base"` or `"not a base"`, the current `stationPoi` is added to `noBasePois` and cleared to `null`.
+- All subsequent launch-station / homeStation lookups skip any POI in `noBasePois`, forcing a fallback to `findStation()`.
+- Eliminates the previous infinite cycle where cargo-full + undockable launch station caused the bot to loop endlessly.
+
+#### LRT dashboard badge not clearing after travel (`BotControlPanel.vue`)
+- Added `onMounted(() => emit('ldStatusChange', ldRelocating.value))` — emits `false` on fresh component mount, clearing any stale badge left from a previous navigation session.
+- Added `onUnmounted` guard: if `ldRelocating` is still `true` when panel unmounts, emits `false` to clean up.
+- Root cause: `botStore.lrtBots` could persist `true` indefinitely if the user navigated away while LRT was in progress and then returned.
+
+### Added
+
+#### Faction list sorted by member count (`FactionView.vue`)
+- `loadFactionList()` now sorts the result by `member_count` descending, then alphabetically — largest factions first.
+
+#### Faction detail UI — all fields shown (`FactionView.vue`)
+- Foreign faction view (from list) now shows: color swatches (primary/secondary), tag badge, leader, member count, owned bases, diplomacy status badges (Ally / Enemy / At War), description, charter block.
+- Fixed `_vif` typo on "All Factions" sidebar button (changed to proper `v-if`-less unconditional render).
+
+#### Full faction diplomacy management (`FactionView.vue`)
+- New refs: `diplomacyLoading`, `diplomacyFactions`, `pendingPeaceProposals`.
+- **Diplomacy tab** replaced static ally/enemy lists with a full management table: all factions sorted by member count, current status badge, action buttons per row.
+- Actions: `setAlly`, `setEnemy`, `removeAlly`, `removeEnemy`, `declareWar`, `proposePeace`, `acceptPeace`.
+- Incoming peace proposals displayed in a prominent panel with one-click Accept.
+- Foreign faction detail view (outside own faction context) also gains Quick Diplomacy buttons.
+- `loadDiplomacyList()` fetches faction list + enriches with ally/enemy/war status from current `factionData`.
+- `updateDiplomacyEntry()` helper keeps row states and `factionData` in sync after each action.
+
+#### Faction data cached to DB on every API call (`faction-storage-db.ts`, `database.ts`, `mapstore.ts`, `botmanager.ts`, `web/server.ts`)
+- New `factions` table (migration **V11**): `id`, `name`, `tag`, `description`, `charter`, `leader_username`, `member_count`, `primary_color`, `secondary_color`, `owned_bases`, `updated_at`.
+- `FactionStorageDb.upsertFaction()` / `upsertFactions()` / `getAllFactions()` / `getFaction()`.
+- `MapStore.upsertFaction()` / `upsertFactions()` / `getAllFactions()` / `getFaction()` delegates.
+- `botmanager.ts`: after any successful `faction_info` or `faction_list` exec, result is immediately persisted to DB.
+- New HTTP endpoint `GET /api/factions` returns all cached factions ordered by member count.
+
+#### Station buildings show faction ownership (`BotStationPanel.vue`)
+- On mount, loads `/api/factions` into `cachedFactions` lookup map.
+- `factionFor(f)` helper resolves `f.faction_id` → faction name/tag/color from cache (fallback to inline `f.faction_name`).
+- In the Station tab expanded building card: colored circle + faction name + tag badge rendered for any building with a known `faction_id`.
+
+---
+
+## [2.5.4] - 2026-03-11
+
+### Added
+
+#### Miners/harvesters remember launch station (`src/routines/miner.ts`, `gas_harvester.ts`, `ice_harvester.ts`)
+- At routine startup, if the bot is docked, the current POI is saved as `launchStationPoi` + `launchSystem` in per-bot `settings.json`.
+- Persisted across restarts: setting is read back on next launch so bots always return to the correct station.
+- When cargo is full and the bot returns to homeSystem, it navigates to `launchStationPoi` specifically (not just any station in the system).
+- Fallback: if the launch station POI is not found in the available POIs after arriving, nearest station in homeSystem is used.
+- Default deposit mode changed from `"storage"` → **`"faction"`** for both `gas_harvester` and `ice_harvester` (faction storage has priority; falls back to personal station storage automatically).
+
+#### LRT jump timeout raised 30 s → 90 s (`src/web/src/stores/botStore.ts`)
+- `sendExec` now uses a 90 000 ms timeout specifically for the `jump` command (vs 30 000 ms for all others).
+- Prevents the `"Timeout: jump did not respond"` error that occurred on slow-speed ships (~63 s jump time).
+
+#### LRT status shown on dashboard (`src/web/src/stores/botStore.ts`, `BotProfile.vue`, `DashboardView.vue`)
+- `botStore.lrtBots` (reactive `Set<string>`) tracks which bots are actively doing Long Range Travel.
+- `botStore.setLrtStatus(username, traveling)` called from `BotProfile.vue` `onLdStatusChange` when `ldRelocating` changes.
+- Dashboard bot-list row shows a **🛸 LRT** purple badge next to the routine badge while a bot is traveling.
+
+#### Auto-update bot status from `get_status` / `get_system` (`src/botmanager.ts`)
+- `botmanager.ts` now calls `refreshStatusTable()` immediately after successful `get_status` and `get_system` API commands.
+- Combined with the existing `get_cargo` / `view_storage` / `view_faction_storage` handlers, all key read-commands now push real-time updates to the UI without waiting for the 5 s periodic broadcast.
+
+---
+
+## [2.5.3] - 2026-03-10
+
+### Fixed
+
+#### `storage_cap_exceeded` error loop — all deposit paths (`src/routines/miner.ts`, `common.ts`, `gatherer.ts`, `smart_selector.ts`)
+- **Root cause**: cap pre-check used `facQty >= cap` but the failing case is `facQty + depositQty > cap` (e.g. facQty=99978, cap=100000, deposit=100 → fails even though not "at cap").  After the error, `bot.factionStorage` remained stale at 99978, so every subsequent cycle re-attempted and re-failed.
+- **Fix 1**: All cap pre-checks changed from `facQty >= cap` to `facQty + quantity > cap` — catches the near-cap case before making the API call.
+- **Fix 2**: After `storage_cap_exceeded` error, local `bot.factionStorage` entry for that item is immediately set to `cap` — future cycle pre-checks correctly skip without another API call.
+- **Fix 3**: `transferStationToFaction` withdrawal quantity now limited to `cap - facQty` (available faction space) so we never withdraw more than faction storage can hold, eliminating deposit failures caused by withdrawing too much.
+- **Fix 4**: `depositAllToTargets` in `gatherer.ts` had **no cap check at all** — added `refreshFactionStorage()` on docking plus the same near-cap pre-check + cache-update after error.
+- Applies to: `miner.ts` `depositItem()`, `common.ts` `depositNonFuelCargo()`, `common.ts` `transferStationToFaction()` (both withdraw and deposit passes), `gatherer.ts` `depositAllToTargets()`, `smart_selector.ts` cargo flush.
+
+#### Build goal not executed (`scoreGatherer` score too low, `src/routines/gatherer.ts`)
+- **Root cause 1**: `scoreGatherer` returned 90 for a build-ready goal, but trader scored 180 → SmartSelector selected trader, gatherer never ran and the build never fired.
+- **Root cause 2**: `getFactionStorageItemsForPoi(goal.target_poi)` returned empty when no `view_faction_storage` had been called for that specific POI yet — `allReady` was false even though materials existed.
+- **Fix**: Build-ready score raised from 90 → **300** (beats trader at ≤200). Added fallback: when the per-POI DB has no data, `getFactionStorageTotalFor(mat.item_id)` is used to check total across all faction storage POIs — sufficient for single-station build goals.
+
+#### Goal auto-delete after completion (`src/routines/gatherer.ts`)
+- After a successful `faction_build`, the goal is immediately removed from `settings.json` via `removeGoalFromSettings(username, goalId)`.
+- After all delivery tasks for a goal succeed in `depositAllToTargets`, the goal is auto-removed from settings so it doesn't get re-queued.
+- New `removeGoalFromSettings(username, goalId)` helper: reads `settings.json`, filters out the goal, writes back via `writeSettings`.
+
+---
+
 ## [2.5.2] - 2026-03-10
 
 ### Added

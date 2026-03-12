@@ -55,23 +55,16 @@
         </div>
       </div>
 
-      <!-- Anonymous Mode -->
+      <!-- Stealth (v0.206.0: set_anonymous removed — cloaking devices only) -->
       <div class="card py-2 px-3">
-        <h3 class="text-xs font-semibold text-space-text-dim uppercase mb-3">🕵️ Anonymous Mode</h3>
-        <div class="flex items-center justify-between">
-          <div>
-            <div class="text-sm text-space-text">Hide from player lists</div>
-            <div class="text-xs text-space-text-dim mt-0.5">When enabled, your character won't appear in public player scans.</div>
-          </div>
-          <button
-            @click="toggleAnonymous"
-            :disabled="saving.anon"
-            class="relative inline-flex h-6 w-11 items-center rounded-full transition-colors shrink-0 ml-4"
-            :class="form.anonymous ? 'bg-space-accent' : 'bg-[#30363d]'"
-          >
-            <span class="inline-block h-4 w-4 rounded-full bg-white transform transition-transform"
-              :class="form.anonymous ? 'translate-x-6' : 'translate-x-1'"></span>
-          </button>
+        <h3 class="text-xs font-semibold text-space-text-dim uppercase mb-3">🕵️ Stealth</h3>
+        <div class="text-xs text-space-text-dim leading-relaxed">
+          Anonymous mode was removed in v0.206.0. Stealth is now handled exclusively through
+          <span class="text-space-text font-semibold">cloaking devices</span> — install a cloak module
+          (or fly a ship with an integrated cloak) and use the
+          <span class="text-space-accent font-mono">cloak</span> command.
+          Cloaked ships are hidden from <span class="text-space-accent font-mono">get_nearby</span>
+          and the galaxy map, but cloaking burns fuel and breaks on attack.
         </div>
       </div>
 
@@ -218,12 +211,11 @@ const empireReputations = computed(() => {
 const form = ref({
   status: '',
   clan_tag: '',
-  anonymous: false,
   primary_color: '#4a9eff',
   secondary_color: '#ffffff',
 });
 
-const saving = ref({ status: false, anon: false, colors: false, home: false });
+const saving = ref({ status: false, colors: false, home: false });
 
 const depositPrimary = ref('faction');
 const depositSecondary = ref('storage');
@@ -264,7 +256,6 @@ async function loadProfile() {
     const player = d.player || d.character || d;
     form.value.status = player.status_message || player.status || '';
     form.value.clan_tag = player.clan_tag || player.tag || '';
-    form.value.anonymous = !!(player.anonymous || player.is_anonymous);
     form.value.primary_color = player.primary_color || player.color || '#4a9eff';
     form.value.secondary_color = player.secondary_color || '#ffffff';
     reputationRaw.value = player.empire_rep || d.empire_rep || player.empire_reputations || d.empire_reputations || d.reputations || player.reputations || null;
@@ -280,19 +271,6 @@ async function saveStatus() {
   const r = await execCmd('set_status', { status: form.value.status, clan_tag: form.value.clan_tag });
   saving.value.status = false;
   emit('notif', r.ok ? 'Status updated' : (r.error || 'Failed to update status'), r.ok ? 'success' : 'error');
-}
-
-async function toggleAnonymous() {
-  saving.value.anon = true;
-  const newVal = !form.value.anonymous;
-  const r = await execCmd('set_anonymous', { anonymous: newVal });
-  saving.value.anon = false;
-  if (r.ok) {
-    form.value.anonymous = newVal;
-    emit('notif', newVal ? 'Anonymous mode enabled' : 'Anonymous mode disabled', 'success');
-  } else {
-    emit('notif', r.error || 'Failed to toggle anonymous mode', 'error');
-  }
 }
 
 async function saveColors() {

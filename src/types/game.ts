@@ -638,7 +638,14 @@ export interface CatalogRequest {
   page?: number;
   per_page?: number;
   search?: string;
+  /** v0.203.0: role filter for ships — Miner, Fighter, Hauler, Interceptor, Carrier, Refinery, etc. */
+  class?: string;
+  /** v0.203.0: category filter — Combat, Industrial, Commercial, Civilian, Covert, Combat Support */
   category?: string;
+  /** v0.203.0: empire filter — solarian, voidborn, crimson_fleet, nebula_collective, outer_rim */
+  empire?: string;
+  /** v0.203.0: tier filter 1–5 */
+  tier?: number;
 }
 
 export interface CatalogResponse<T> {

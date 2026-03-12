@@ -396,42 +396,55 @@ export async function recordMarketData(ctx: RoutineContext): Promise<void> {
   if (marketResp.result && typeof marketResp.result === "object") {
     ctx.mapStore.updateMarket(bot.system, bot.poi, marketResp.result as Record<string, unknown>);
 
+    const raw = marketResp.result as Record<string, unknown>;
+    const items = (
+      Array.isArray(raw) ? raw :
+      Array.isArray(raw.items) ? raw.items :
+      Array.isArray(raw.market) ? raw.market :
+      []
+    ) as Array<Record<string, unknown>>;
+
+    const sys = ctx.mapStore.getSystem(bot.system);
+    const poi = sys?.pois?.find((p: any) => p.id === bot.poi);
+    const stationName = poi?.name || bot.poi;
+    const systemName  = sys?.name  || bot.system;
+
+    const normalized = items.map((i) => ({
+      item_id:       (i.item_id  as string) || (i.id as string) || "",
+      item_name:     (i.name as string) || (i.item_name as string) || "",
+      sell_price:    (i.sell_price as number) ?? (i.sell as number) ?? null,
+      sell_quantity: (i.sell_quantity as number) ?? (i.sell_volume as number) ?? 0,
+      buy_price:     (i.buy_price as number) ?? (i.buy as number) ?? null,
+      buy_quantity:  (i.buy_quantity as number) ?? (i.buy_volume as number) ?? 0,
+    })).filter(i => i.item_id);
+
     // Persist structured market data to SQLite for trade-route analysis
     const mps = getMarketPricesStore();
-    if (mps) {
-      const raw = marketResp.result as Record<string, unknown>;
-      const items = (
-        Array.isArray(raw) ? raw :
-        Array.isArray(raw.items) ? raw.items :
-        Array.isArray(raw.market) ? raw.market :
-        []
-      ) as Array<Record<string, unknown>>;
-
-      const sys = ctx.mapStore.getSystem(bot.system);
-      const poi = sys?.pois?.find((p: any) => p.id === bot.poi);
-      const stationName = poi?.name || bot.poi;
-      const systemName  = sys?.name  || bot.system;
-
-      const normalized = items.map((i) => ({
-        item_id:       (i.item_id  as string) || (i.id as string) || "",
-        item_name:     (i.name as string) || (i.item_name as string) || "",
-        sell_price:    (i.sell_price as number) ?? (i.sell as number) ?? null,
-        sell_quantity: (i.sell_quantity as number) ?? (i.sell_volume as number) ?? 0,
-        buy_price:     (i.buy_price as number) ?? (i.buy as number) ?? null,
-        buy_quantity:  (i.buy_quantity as number) ?? (i.buy_volume as number) ?? 0,
-      })).filter(i => i.item_id);
-
-      if (normalized.length > 0) {
-        mps.updateStation(bot.poi, bot.system, stationName, systemName, normalized, bot.username);
-        bot.stats.totalMarketsScanned = (bot.stats.totalMarketsScanned ?? 0) + 1;
-      }
+    if (mps && normalized.length > 0) {
+      mps.updateStation(bot.poi, bot.system, stationName, systemName, normalized, bot.username);
+      bot.stats.totalMarketsScanned = (bot.stats.totalMarketsScanned ?? 0) + 1;
     }
 
-    // Submit trade intel to faction (fire-and-forget)
-    if (bot.factionId) {
-      bot.exec("faction_submit_trade_intel", {
-        stations: bot.poi ? [bot.poi] : [],
-      }).catch(() => {});
+    // Submit trade intel to faction (fire-and-forget, delayed to avoid tick-rate 409 collision)
+    if (bot.factionId && normalized.length > 0 && bot.poi) {
+      const intelItems = normalized
+        .filter(i => i.buy_price != null || i.sell_price != null)
+        .map(i => ({
+          item_id:     i.item_id,
+          item_name:   i.item_name,
+          best_buy:    i.buy_price ?? null,
+          best_sell:   i.sell_price ?? null,
+          buy_volume:  i.buy_quantity ?? 0,
+          sell_volume: i.sell_quantity ?? 0,
+        }));
+      if (intelItems.length > 0) {
+        const poiId = bot.poi;
+        setTimeout(() => {
+          bot.exec("faction_submit_trade_intel", {
+            stations: [{ base_id: poiId, station_name: stationName, items: intelItems }],
+          }).catch(() => {});
+        }, 11_000);
+      }
     }
   }
 }
@@ -517,11 +530,17 @@ export async function transferStationToFaction(ctx: RoutineContext): Promise<num
 
   // Skip entirely if bot is not in a faction — faction_deposit_items will always fail,
   // causing a pointless withdraw-from-storage → deposit-back-to-storage loop.
-  if (!bot.inFaction) return 0;
+  if (!bot.inFaction) {
+    ctx.log("warn", `transferStationToFaction: skipped — bot not in a faction (factionId='${bot.factionId}')`);
+    return 0;
+  }
 
   // Skip if this station is already known to have no faction storage
   const cachedFac = bot.poi ? ctx.mapStore.hasFactionStorage(bot.poi) : null;
-  if (cachedFac === false) return 0;
+  if (cachedFac === false) {
+    ctx.log("warn", `transferStationToFaction: skipped — ${bot.poi} cached as 'no faction storage'`);
+    return 0;
+  }
 
   await bot.refreshStorage();
   if (bot.storage.length === 0) return 0;
@@ -545,13 +564,14 @@ export async function transferStationToFaction(ctx: RoutineContext): Promise<num
     for (const item of [...bot.storage]) {
       if (item.quantity <= 0) continue;
 
-      // ── Cap pre-check: skip items already at faction storage limit ──
+      // ── Cap pre-check: skip items that would exceed faction storage limit ──
       if (bot.inFaction && bot.poi && !capReachedItems.has(item.itemId)) {
         const cap = ctx.mapStore.getFactionStorageCapPerItem(bot.poi);
         const facQty = bot.factionStorage.find(i => i.itemId === item.itemId)?.quantity ?? 0;
-        if (facQty >= cap) {
+        const facSpace = cap - facQty;
+        if (facSpace <= 0) {
           capReachedItems.add(item.itemId);
-          ctx.log("trade", `⛔ ${item.name ?? item.itemId}: faction storage cap (${facQty.toLocaleString()}/${cap.toLocaleString()}) — keeping in station storage`);
+          ctx.log("trade", `⛔ ${item.name ?? item.itemId}: faction storage full (${facQty.toLocaleString()}/${cap.toLocaleString()}) — keeping in station storage`);
           continue;
         }
       }
@@ -560,7 +580,14 @@ export async function transferStationToFaction(ctx: RoutineContext): Promise<num
       const freeSpace = bot.cargoMax > 0 ? bot.cargoMax - bot.cargo : 0;
       if (freeSpace <= 0) break;
 
-      const qty = Math.min(item.quantity, maxItemsForCargo(freeSpace, item.itemId));
+      // Limit withdrawal to available faction space to avoid withdrawing more than we can deposit
+      const facSpace2 = (() => {
+        if (!bot.inFaction || !bot.poi) return item.quantity;
+        const cap = ctx.mapStore.getFactionStorageCapPerItem(bot.poi);
+        const facQty = bot.factionStorage.find(i => i.itemId === item.itemId)?.quantity ?? 0;
+        return Math.max(0, cap - facQty);
+      })();
+      const qty = Math.min(item.quantity, facSpace2, maxItemsForCargo(freeSpace, item.itemId));
       if (qty <= 0) continue;
 
       const wResp = await bot.exec("withdraw_items", { item_id: item.itemId, quantity: qty });
@@ -569,6 +596,7 @@ export async function transferStationToFaction(ctx: RoutineContext): Promise<num
           bot.docked = false;
           return totalTransferred;
         }
+        ctx.log("warn", `withdraw_items failed for ${item.name ?? item.itemId} ×${qty}: ${wResp.error.message}`);
         continue;
       }
       withdrawnThisPass += qty;
@@ -584,6 +612,16 @@ export async function transferStationToFaction(ctx: RoutineContext): Promise<num
     for (const item of [...bot.inventory]) {
       if (item.quantity <= 0) continue;
 
+      // Re-check cap before deposit: another bot may have deposited between our refresh and now
+      if (bot.inFaction && !noFacStorage && !capReachedItems.has(item.itemId) && bot.poi) {
+        const cap = ctx.mapStore.getFactionStorageCapPerItem(bot.poi);
+        const facQty = bot.factionStorage.find(i => i.itemId === item.itemId)?.quantity ?? 0;
+        if (facQty + item.quantity > cap) {
+          capReachedItems.add(item.itemId);
+          ctx.log("trade", `⛔ ${item.name ?? item.itemId}: faction storage near-cap (${facQty.toLocaleString()}/${cap.toLocaleString()}) — returning to station storage`);
+        }
+      }
+
       let deposited = false;
       if (bot.inFaction && !noFacStorage && !capReachedItems.has(item.itemId)) {
         const dResp = await bot.exec("faction_deposit_items", { item_id: item.itemId, quantity: item.quantity });
@@ -597,6 +635,12 @@ export async function transferStationToFaction(ctx: RoutineContext): Promise<num
           const em = dResp.error.message ?? "";
           if (ec === "storage_cap_exceeded" || em.includes("storage_cap_exceeded") || em.includes("storage cap reached")) {
             capReachedItems.add(item.itemId);
+            // Update local factionStorage cache so next cycle pre-check skips without retrying
+            if (bot.poi) {
+              const cap = ctx.mapStore.getFactionStorageCapPerItem(bot.poi);
+              const le = bot.factionStorage.find(i => i.itemId === item.itemId);
+              if (le) (le as any).quantity = cap;
+            }
             ctx.log("trade", `⛔ ${item.name ?? item.itemId}: faction storage cap exceeded — returning to station storage`);
           } else if (ec === "no_faction_storage" || em.includes("no_faction_storage") ||
               em.includes("faction_lockbox") || em.includes("storage facility") ||
@@ -1378,13 +1422,13 @@ export async function depositNonFuelCargo(ctx: RoutineContext): Promise<boolean>
     const displayName = (item.name as string) || itemId;
     let usedFaction = false;
     if (bot.inFaction && !noFactionStorage && !capReachedItems.has(itemId)) {
-      // Cap pre-check: skip if faction storage is already full for this item
+      // Cap pre-check: skip if depositing would exceed cap (facQty + quantity > cap)
       if (bot.poi) {
         const cap = ctx.mapStore.getFactionStorageCapPerItem(bot.poi);
         const facQty = bot.factionStorage.find(i => i.itemId === itemId)?.quantity ?? 0;
-        if (facQty >= cap) {
+        if (facQty + quantity > cap) {
           capReachedItems.add(itemId);
-          ctx.log("trade", `⛔ ${displayName}: faction storage cap (${facQty.toLocaleString()}/${cap.toLocaleString()}) — depositing to station storage`);
+          ctx.log("trade", `⛔ ${displayName}: faction storage near-cap (${facQty.toLocaleString()}/${cap.toLocaleString()}, deposit ${quantity}) — depositing to station storage`);
         }
       }
     }
@@ -1400,6 +1444,12 @@ export async function depositNonFuelCargo(ctx: RoutineContext): Promise<boolean>
         const errMsg = fResp.error.message ?? "";
         if (errCode === "storage_cap_exceeded" || errMsg.includes("storage_cap_exceeded") || errMsg.includes("storage cap reached")) {
           capReachedItems.add(itemId);
+          // Update local factionStorage cache so the next cycle's pre-check skips without retrying
+          if (bot.poi) {
+            const cap = ctx.mapStore.getFactionStorageCapPerItem(bot.poi);
+            const le = bot.factionStorage.find(i => i.itemId === itemId);
+            if (le) (le as any).quantity = cap;
+          }
           ctx.log("trade", `⛔ ${displayName}: faction storage cap exceeded — depositing to station storage`);
         } else if (errCode === "no_faction_storage" || errMsg.includes("no_faction_storage") ||
             errMsg.includes("faction_lockbox") || errMsg.includes("storage facility") ||
@@ -1609,8 +1659,10 @@ export async function navigateToSystem(
   const { bot } = ctx;
   const MAX_JUMPS = (readSettings().general?.maxJumps as number) || 20;
 
+  bot._navigating = true;
+  try {
   await bot.refreshStatus();
-  if (bot.system === targetSystemId) return true;
+  if (bot.system === targetSystemId) { bot._navigating = false; return true; }
 
   // ── Upfront route feasibility check ──────────────────────────────────────
   // Query the server's find_route once upfront to get total jump count.
@@ -1758,6 +1810,9 @@ export async function navigateToSystem(
 
   ctx.log("error", `Failed to reach ${targetSystemId} after ${MAX_JUMPS} jumps`);
   return false;
+  } finally {
+    bot._navigating = false;
+  }
 }
 
 /** Refuel at a specific station POI if fuel is below threshold. Handles travel/dock/undock.

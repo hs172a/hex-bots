@@ -198,7 +198,7 @@
         <Transition enter-active-class="transition-opacity duration-150" enter-from-class="opacity-0" enter-to-class="opacity-100"
           leave-active-class="transition-opacity duration-100" leave-from-class="opacity-100" leave-to-class="opacity-0">
           <div v-if="cancelTarget" class="fixed inset-0 z-50 flex items-center justify-center bg-black/60" @click.self="cancelTarget = null">
-            <div class="bg-[#0d1117] border border-space-border rounded-lg shadow-2xl w-full max-w-sm mx-4 p-5">
+            <div class="bg-[#0d1117f0] border border-space-border rounded-lg shadow-2xl w-full max-w-sm mx-4 p-5">
               <h3 class="text-sm font-semibold text-space-text-bright mb-2">Cancel Order</h3>
               <p class="text-xs text-space-text-dim mb-4">
                 Cancel <span class="text-space-text-bright">{{ cancelTarget.type === 'buy' ? 'BUY' : 'SELL' }}</span> order for

@@ -23,6 +23,8 @@
         --dim-grey: #2a3a4a;
         --glow-cyan: 0 0 30px #00d4ff80;
         --glow-orange: 0 0 30px #ff6b3580;
+        --color-space-border: #454545;
+        --color-space-text-bright: #f0f0f0;
     }
     body {
       background-image: url('./background.png');
@@ -38,8 +40,10 @@
       background-color: var(--deep-void) !important;
     }
     .card, .bg-space-card {
-      background: linear-gradient(135deg, var(--nebula-blue), var(--deep-void));
-      /* border: 1px solid var(--hull-grey); */
+      background: linear-gradient(135deg, 
+        color-mix(in srgb, var(--nebula-blue), transparent 10%),
+        color-mix(in srgb, var(--deep-void), transparent 30%)
+      );
     }
     .card > .bg-space-card {
       background: transparent !important;

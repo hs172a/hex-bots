@@ -2,17 +2,17 @@
   <div class="flex-1 flex gap-2 p-2 overflow-hidden">
     <!-- Sidebar -->
     <div class="w-56 bg-space-card border border-space-border rounded-lg flex flex-col overflow-hidden flex-shrink-0">
-      <div class="px-3 py-2 border-b border-space-border">
+      <div class="px-2 py-2 border-b border-space-border">
         <h3 class="text-xs font-semibold text-space-text-dim uppercase tracking-wider">Bot Types</h3>
       </div>
       <div class="flex-1 overflow-auto">
         <template v-for="(groupTabs, groupName) in groupedTabs" :key="groupName">
-          <div class="px-3 pt-2 pb-0.5 text-[10px] font-semibold uppercase tracking-widest text-space-text-dim/60 select-none">{{ groupName }}</div>
+          <div class="px-2 pt-2 pb-0.5 text-[10px] font-semibold uppercase tracking-widest text-space-text-dim/60 select-none">{{ groupName }}</div>
           <div
             v-for="tab in groupTabs"
             :key="tab.id"
             @click="activeTab = tab.id"
-            class="px-3 py-1.5 text-xs cursor-pointer border-b border-[#21262d] transition-colors"
+            class="px-2 py-1.5 text-xs cursor-pointer border-b border-[#21262d] transition-colors"
             :class="activeTab === tab.id
               ? 'bg-space-row-hover text-space-accent border-l-2 border-l-space-accent pl-[11px]'
               : 'text-space-text-dim hover:bg-space-row-hover hover:text-space-text'"
@@ -24,14 +24,14 @@
     </div>
 
     <!-- Settings Content -->
-    <div class="flex-1 bg-space-card border border-space-border rounded-lg p-5 overflow-auto scrollbar-dark">
+    <div class="flex-1 bg-space-card border border-space-border rounded-lg p-2 overflow-auto scrollbar-dark">
 
       <!-- VM Pool Selector (only shown in hub master mode with connected VMs, not on hub tab) -->
       <div v-if="botStore.vmList.length > 0 && activeTab !== 'hub'" class="flex items-center gap-1.5 mb-4 pb-3 border-b border-space-border flex-wrap">
         <span class="text-[11px] text-space-text-dim uppercase tracking-wider mr-0.5">Pool:</span>
         <button
           @click="selectedVm = 'local'"
-          class="px-2.5 py-0.5 rounded text-xs font-medium transition-colors border"
+          class="px-2 py-0.5 rounded text-xs font-medium transition-colors border"
           :class="selectedVm === 'local'
             ? 'bg-space-accent text-black border-space-accent'
             : 'text-space-text-dim border-space-border hover:text-space-text hover:border-space-text-dim'"
@@ -40,7 +40,7 @@
           v-for="vm in botStore.vmList"
           :key="vm"
           @click="selectedVm = vm"
-          class="px-2.5 py-0.5 rounded text-xs font-medium transition-colors border"
+          class="px-2 py-0.5 rounded text-xs font-medium transition-colors border"
           :class="selectedVm === vm
             ? 'bg-space-accent text-black border-space-accent'
             : 'text-space-text-dim border-space-border hover:text-space-text hover:border-space-text-dim'"
@@ -100,7 +100,7 @@
           </label>
         </div>
 
-        <div class="text-xs font-semibold text-space-text-dim uppercase mt-6 mb-2">Commander Advisory — Auto-apply</div>
+        <div class="text-xs font-semibold text-space-text-dim uppercase mt-4 mb-2">Commander Advisory — Auto-apply</div>
         <div class="setting-row">
           <div>
             <div class="text-sm text-space-text">Auto-apply suggestions</div>
@@ -132,7 +132,7 @@
         </div>
 
         <!-- Routines Quick Reference -->
-        <div class="mt-6 p-4 rounded bg-[#0d1117] border border-[#21262d] text-xs">
+        <div class="mt-4 p-2 rounded bg-[#0d1117f0] border border-[#21262d] text-xs">
           <div class="font-semibold text-space-text mb-3 text-sm">📋 Routines Quick Reference</div>
           <table class="w-full text-left border-collapse">
             <thead>
@@ -194,14 +194,14 @@
         </div>
 
         <!-- Standalone notice -->
-        <div v-else class="mb-6 p-4 rounded bg-[#0d1117] border border-[#21262d] text-xs">
+        <div v-else class="mb-6 p-2 rounded bg-[#0d1117f0] border border-[#21262d] text-xs">
           <div class="font-semibold text-space-text mb-2">Hub mode not active</div>
           <p class="text-space-text-dim mb-2">This instance is running in <strong class="text-space-text">standalone</strong> mode. To enable the hub, set <code class="text-space-accent">[hub] mode = &quot;master&quot;</code> in <code class="text-space-accent">config.toml</code>, then restart. Client VMs connect directly to this master's <code class="text-space-accent">/hub</code> WebSocket endpoint.</p>
           <p class="text-space-text-dim">See <code class="text-space-accent">config.toml.example</code> for full documentation and architecture diagrams.</p>
         </div>
 
         <!-- Config quick reference -->
-        <div class="mt-2 p-4 rounded bg-[#0d1117] border border-[#21262d] text-xs mb-4">
+        <div class="mt-2 p-2 rounded bg-[#0d1117f0] border border-[#21262d] text-xs mb-4">
           <div class="font-semibold text-space-text mb-2">Master VM config (Oracle Cloud / public IP)</div>
           <pre class="text-space-text-dim leading-relaxed overflow-x-auto text-[11px] whitespace-pre">[hub]
 mode = &quot;master&quot;
@@ -215,7 +215,7 @@ api_key = &quot;hub_secret&quot;
 name    = &quot;volt&quot;
 api_key = &quot;hub_secret&quot;</pre>
         </div>
-        <div class="p-4 rounded bg-[#0d1117] border border-[#21262d] text-xs mb-4">
+        <div class="p-2 rounded bg-[#0d1117f0] border border-[#21262d] text-xs mb-4">
           <div class="font-semibold text-space-text mb-2">Client VM config (any machine, even behind NAT)</div>
           <pre class="text-space-text-dim leading-relaxed overflow-x-auto text-[11px] whitespace-pre">[server]
 serve_ui = false
@@ -238,7 +238,7 @@ ssh_key_file = &quot;~/.ssh/id_rsa&quot;
 local_port   = 4001   # client reaches http://127.0.0.1:4001
 remote_port  = 4001   # master's DataSync HTTP port</pre>
         </div>
-        <div class="p-4 rounded bg-[#0d1117] border border-[#21262d] text-xs">
+        <div class="p-2 rounded bg-[#0d1117f0] border border-[#21262d] text-xs">
           <div class="font-semibold text-space-text mb-2">How it works</div>
           <div class="text-space-text-dim space-y-1">
             <div>1. Master listens at <code class="text-space-accent">ws://master-ip:3210/hub</code></div>
@@ -275,6 +275,38 @@ remote_port  = 4001   # master's DataSync HTTP port</pre>
               <option value="">(use default)</option>
               <option v-for="ore in botStore.knownOres" :key="ore.item_id" :value="ore.item_id">{{ ore.name }}</option>
             </select>
+          </div>
+        </div>
+
+        <!-- Per-Bot Mining Target -->
+        <div v-if="minerBots.length > 0" class="mt-4 pt-3 border-t border-[#21262d]">
+          <div class="text-sm text-space-text mb-1">Per-Bot Mining Target</div>
+          <div class="text-xs text-space-text-dim mb-2">Pin each miner to a specific system within N jumps of its current location. Overrides all automatic system selection.</div>
+          <div v-for="bot in minerBots" :key="bot.username" class="mb-3 bg-[#0d1117f0] border border-[#21262d] rounded-md p-2">
+            <div class="flex items-center gap-2 flex-wrap">
+              <span class="text-xs text-space-text font-medium min-w-[110px]">{{ bot.username }}</span>
+              <span v-if="perBotMinerTarget[bot.username]" class="text-xs text-space-cyan">
+                📍 {{ perBotMinerTarget[bot.username]!.system_name || perBotMinerTarget[bot.username]!.system_id }}
+              </span>
+              <span v-else class="text-xs text-space-text-dim italic">auto (no pin)</span>
+              <button v-if="perBotMinerTarget[bot.username]" @click="saveMinerTarget(bot.username, '', '')" class="text-space-red text-xs hover:underline ml-auto">✕ Clear</button>
+            </div>
+            <div class="flex items-center gap-2 mt-1.5 flex-wrap">
+              <span class="text-[11px] text-space-text-dim">Jumps:</span>
+              <input type="number" :value="targetPickerJumps[bot.username] ?? 3" @change="targetPickerJumps[bot.username] = Number(($event.target as HTMLInputElement).value)" min="1" max="10" class="input text-xs w-14" />
+              <button @click="fetchNearbyForBot(bot.username)" :disabled="targetPickerLoading[bot.username]" class="btn btn-secondary text-xs px-2 py-0.5">
+                {{ targetPickerLoading[bot.username] ? '⏳' : '🔍 Find' }}
+              </button>
+              <select v-if="targetPickerSystems[bot.username]?.length"
+                @change="(e) => { const s = targetPickerSystems[bot.username]?.find(x => x.system_id === (e.target as HTMLSelectElement).value); if (s) saveMinerTarget(bot.username, s.system_id, s.system_name); }"
+                class="input text-xs flex-1 min-w-[140px]">
+                <option value="">— select system —</option>
+                <option v-for="sys in targetPickerSystems[bot.username]" :key="sys.system_id" :value="sys.system_id">
+                  {{ sys.system_name }} ({{ sys.jumps }}J)
+                </option>
+              </select>
+              <span v-else-if="!targetPickerLoading[bot.username] && targetPickerSystems[bot.username]" class="text-[11px] text-space-text-dim italic">No systems found</span>
+            </div>
           </div>
         </div>
 
@@ -422,7 +454,7 @@ remote_port  = 4001   # master's DataSync HTTP port</pre>
           <input type="number" v-model.number="crafterForm.cycleDelayMs" min="2000" max="120000" step="1000" class="input text-sm w-28" />
         </div>
 
-        <div class="mt-6 mb-2 text-xs font-semibold uppercase tracking-wider text-space-text-dim">Auto-Craft Mode</div>
+        <div class="mt-4 mb-2 text-xs font-semibold uppercase tracking-wider text-space-text-dim">Auto-Craft Mode</div>
         <div class="setting-row">
           <div>
             <div class="text-sm text-space-text">Enable Auto-Craft</div>
@@ -437,6 +469,14 @@ remote_port  = 4001   # master's DataSync HTTP port</pre>
         <div class="setting-row" :class="{ 'opacity-40 pointer-events-none': !crafterForm.autoCraft }">
           <div><div class="text-sm text-space-text">Max Recipes</div><div class="text-xs text-space-text-dim mt-0.5">Max number of recipes to craft per cycle (ranked by profit).</div></div>
           <input type="number" v-model.number="crafterForm.maxAutoCraftRecipes" min="1" max="20" class="input text-sm w-24" />
+        </div>
+
+        <div class="setting-row">
+          <div>
+            <div class="text-sm text-space-text">Faction Storage Limit Per Item</div>
+            <div class="text-xs text-space-text-dim mt-0.5">Stop crafting and remove the craft goal when faction storage holds this many units of the output item. 0 = unlimited.</div>
+          </div>
+          <input type="number" v-model.number="crafterForm.maxFactionStoragePerItem" min="0" step="1000" class="input text-sm w-28" />
         </div>
 
         <div class="save-bar"><button @click="saveCrafter" class="btn btn-primary">Save Settings</button></div>
@@ -509,7 +549,7 @@ remote_port  = 4001   # master's DataSync HTTP port</pre>
       <div v-else-if="activeTab === 'coordinator'">
         <h3 class="text-[15px] font-semibold text-space-text-bright mb-1">Coordinator Settings</h3>
         <p class="text-xs text-space-text-dim mb-3">Analyzes market demand to auto-adjust crafter limits and miner ore targets. <strong class="text-space-text">No LLM — pure rule-based logic.</strong></p>
-        <div class="mb-5 p-3 rounded bg-[#0d1117] border border-[#21262d] text-xs text-space-text-dim">
+        <div class="mb-5 p-2 rounded bg-[#0d1117f0] border border-[#21262d] text-xs text-space-text-dim">
           <div class="font-semibold text-space-text mb-1">How it works</div>
           <ol class="list-decimal list-inside space-y-0.5">
             <li>Scans market data across all known stations</li>
@@ -654,6 +694,38 @@ remote_port  = 4001   # master's DataSync HTTP port</pre>
           <div><div class="text-sm text-space-text">Repair Threshold (%)</div><div class="text-xs text-space-text-dim mt-0.5">Repair hull at station when HP drops below this %.</div></div>
           <input type="number" v-model.number="gasForm.repairThreshold" min="20" max="80" class="input text-sm w-24" />
         </div>
+        <!-- Per-Bot Gas Target -->
+        <div v-if="gasBots.length > 0" class="mt-4 pt-3 border-t border-[#21262d]">
+          <div class="text-sm text-space-text mb-1">Per-Bot Harvesting Target</div>
+          <div class="text-xs text-space-text-dim mb-2">Pin each gas harvester to a specific system within N jumps. Overrides the global Harvesting System above.</div>
+          <div v-for="bot in gasBots" :key="bot.username" class="mb-3 bg-[#0d1117f0] border border-[#21262d] rounded-md p-2">
+            <div class="flex items-center gap-2 flex-wrap">
+              <span class="text-xs text-space-text font-medium min-w-[110px]">{{ bot.username }}</span>
+              <span v-if="perBotGasTarget[bot.username]" class="text-xs text-space-cyan">
+                📍 {{ perBotGasTarget[bot.username]!.system_name || perBotGasTarget[bot.username]!.system_id }}
+              </span>
+              <span v-else class="text-xs text-space-text-dim italic">auto (no pin)</span>
+              <button v-if="perBotGasTarget[bot.username]" @click="saveGasTarget(bot.username, '', '')" class="text-space-red text-xs hover:underline ml-auto">✕ Clear</button>
+            </div>
+            <div class="flex items-center gap-2 mt-1.5 flex-wrap">
+              <span class="text-[11px] text-space-text-dim">Jumps:</span>
+              <input type="number" :value="targetPickerJumps[bot.username] ?? 3" @change="targetPickerJumps[bot.username] = Number(($event.target as HTMLInputElement).value)" min="1" max="10" class="input text-xs w-14" />
+              <button @click="fetchNearbyForBot(bot.username)" :disabled="targetPickerLoading[bot.username]" class="btn btn-secondary text-xs px-2 py-0.5">
+                {{ targetPickerLoading[bot.username] ? '⏳' : '🔍 Find' }}
+              </button>
+              <select v-if="targetPickerSystems[bot.username]?.length"
+                @change="(e) => { const s = targetPickerSystems[bot.username]?.find(x => x.system_id === (e.target as HTMLSelectElement).value); if (s) saveGasTarget(bot.username, s.system_id, s.system_name); }"
+                class="input text-xs flex-1 min-w-[140px]">
+                <option value="">— select system —</option>
+                <option v-for="sys in targetPickerSystems[bot.username]" :key="sys.system_id" :value="sys.system_id">
+                  {{ sys.system_name }} ({{ sys.jumps }}J)
+                </option>
+              </select>
+              <span v-else-if="!targetPickerLoading[bot.username] && targetPickerSystems[bot.username]" class="text-[11px] text-space-text-dim italic">No systems found</span>
+            </div>
+          </div>
+        </div>
+
         <div class="save-bar"><button @click="saveGasHarvester" class="btn btn-primary">Save Settings</button></div>
       </div>
 
@@ -700,6 +772,38 @@ remote_port  = 4001   # master's DataSync HTTP port</pre>
           <div><div class="text-sm text-space-text">Repair Threshold (%)</div><div class="text-xs text-space-text-dim mt-0.5">Repair hull at station when HP drops below this %.</div></div>
           <input type="number" v-model.number="iceForm.repairThreshold" min="20" max="80" class="input text-sm w-24" />
         </div>
+        <!-- Per-Bot Ice Target -->
+        <div v-if="iceBots.length > 0" class="mt-4 pt-3 border-t border-[#21262d]">
+          <div class="text-sm text-space-text mb-1">Per-Bot Harvesting Target</div>
+          <div class="text-xs text-space-text-dim mb-2">Pin each ice harvester to a specific system within N jumps. Overrides the global Harvesting System above.</div>
+          <div v-for="bot in iceBots" :key="bot.username" class="mb-3 bg-[#0d1117f0] border border-[#21262d] rounded-md p-2">
+            <div class="flex items-center gap-2 flex-wrap">
+              <span class="text-xs text-space-text font-medium min-w-[110px]">{{ bot.username }}</span>
+              <span v-if="perBotIceTarget[bot.username]" class="text-xs text-space-cyan">
+                📍 {{ perBotIceTarget[bot.username]!.system_name || perBotIceTarget[bot.username]!.system_id }}
+              </span>
+              <span v-else class="text-xs text-space-text-dim italic">auto (no pin)</span>
+              <button v-if="perBotIceTarget[bot.username]" @click="saveIceTarget(bot.username, '', '')" class="text-space-red text-xs hover:underline ml-auto">✕ Clear</button>
+            </div>
+            <div class="flex items-center gap-2 mt-1.5 flex-wrap">
+              <span class="text-[11px] text-space-text-dim">Jumps:</span>
+              <input type="number" :value="targetPickerJumps[bot.username] ?? 3" @change="targetPickerJumps[bot.username] = Number(($event.target as HTMLInputElement).value)" min="1" max="10" class="input text-xs w-14" />
+              <button @click="fetchNearbyForBot(bot.username)" :disabled="targetPickerLoading[bot.username]" class="btn btn-secondary text-xs px-2 py-0.5">
+                {{ targetPickerLoading[bot.username] ? '⏳' : '🔍 Find' }}
+              </button>
+              <select v-if="targetPickerSystems[bot.username]?.length"
+                @change="(e) => { const s = targetPickerSystems[bot.username]?.find(x => x.system_id === (e.target as HTMLSelectElement).value); if (s) saveIceTarget(bot.username, s.system_id, s.system_name); }"
+                class="input text-xs flex-1 min-w-[140px]">
+                <option value="">— select system —</option>
+                <option v-for="sys in targetPickerSystems[bot.username]" :key="sys.system_id" :value="sys.system_id">
+                  {{ sys.system_name }} ({{ sys.jumps }}J)
+                </option>
+              </select>
+              <span v-else-if="!targetPickerLoading[bot.username] && targetPickerSystems[bot.username]" class="text-[11px] text-space-text-dim italic">No systems found</span>
+            </div>
+          </div>
+        </div>
+
         <div class="save-bar"><button @click="saveIceHarvester" class="btn btn-primary">Save Settings</button></div>
       </div>
 
@@ -1067,7 +1171,7 @@ remote_port  = 4001   # master's DataSync HTTP port</pre>
       <div v-else-if="activeTab === 'pi_commander'">
         <h3 class="text-[15px] font-semibold text-space-text-bright mb-1">🤖 PI Commander Settings</h3>
         <p class="text-xs text-space-text-dim mb-3">Single-bot LLM agent using the <strong class="text-space-text">pi-ai library</strong> (multi-provider, token-aware). Best for structured task-focused play with a clear mission goal.</p>
-        <div class="mb-5 p-3 rounded bg-[#0d1117] border border-[#21262d] text-xs text-space-text-dim">
+        <div class="mb-5 p-2 rounded bg-[#0d1117f0] border border-[#21262d] text-xs text-space-text-dim">
           <div class="font-semibold text-space-text mb-1">How it works</div>
           <ol class="list-decimal list-inside space-y-0.5">
             <li>Starts <code class="text-space-accent">commander.ts</code> CLI as a subprocess bound to this bot</li>
@@ -1126,7 +1230,7 @@ remote_port  = 4001   # master's DataSync HTTP port</pre>
           </label>
         </div>
 
-        <div class="mt-4 p-3 rounded bg-[#0d1117] border border-[#21262d] text-xs text-space-text-dim">
+        <div class="mt-4 p-2 rounded bg-[#0d1117f0] border border-[#21262d] text-xs text-space-text-dim">
           <div class="font-semibold text-space-text mb-1">Per-Bot Overrides</div>
           <p class="mb-2">You can override model/instruction/session per bot. In <code class="text-space-accent">data/settings.json</code> add:</p>
           <pre class="font-mono text-[11px] text-space-cyan overflow-auto">{"pi_commander":{"bots":{"BotName":{"model":"ollama/qwen3:8b","instruction":"Mine ore"}}}}</pre>
@@ -1177,7 +1281,7 @@ remote_port  = 4001   # master's DataSync HTTP port</pre>
           <input type="number" v-model.number="alertsForm.arbitrageMinProfit" min="5" max="500" class="input w-24 text-sm" />
         </div>
 
-        <div class="flex gap-3 mt-6">
+        <div class="flex gap-2 mt-4">
           <button @click="saveAlerts" class="btn btn-primary">Save Settings</button>
           <button @click="testWebhook" :disabled="!alertsForm.webhookUrl || testingWebhook" class="btn btn-secondary text-sm px-4">
             {{ testingWebhook ? '⏳ Sending…' : '🧪 Test Webhook' }}
@@ -1188,7 +1292,7 @@ remote_port  = 4001   # master's DataSync HTTP port</pre>
       <div v-else-if="activeTab === 'ai'">
         <h3 class="text-[15px] font-semibold text-space-text-bright mb-1">🤖 AI Routine Settings</h3>
         <p class="text-xs text-space-text-dim mb-3">Single-bot fully autonomous LLM agent using <strong class="text-space-text">OpenAI-compatible tool-calling</strong>. Works with Ollama, OpenAI, Anthropic, or any compatible endpoint.</p>
-        <div class="mb-5 p-3 rounded bg-[#0d1117] border border-[#21262d] text-xs text-space-text-dim">
+        <div class="mb-5 p-2 rounded bg-[#0d1117f0] border border-[#21262d] text-xs text-space-text-dim">
           <div class="font-semibold text-space-text mb-1">How it works</div>
           <ol class="list-decimal list-inside space-y-0.5">
             <li>Refreshes game state every N seconds</li>
@@ -1241,7 +1345,7 @@ remote_port  = 4001   # master's DataSync HTTP port</pre>
       <div v-else-if="activeTab === 'ai_commander'">
         <h3 class="text-[15px] font-semibold text-space-text-bright mb-1">🧠 AI Commander Settings</h3>
         <p class="text-xs text-space-text-dim mb-3">Fleet-level LLM that controls <strong class="text-space-text">all bots</strong> — can start, stop, and redirect any bot based on fleet economy and goals. Run on a dedicated "HQ" bot.</p>
-        <div class="mb-5 p-3 rounded bg-[#0d1117] border border-[#21262d] text-xs text-space-text-dim">
+        <div class="mb-5 p-2 rounded bg-[#0d1117f0] border border-[#21262d] text-xs text-space-text-dim">
           <div class="font-semibold text-space-text mb-1">How it works</div>
           <ol class="list-decimal list-inside space-y-0.5">
             <li>Every N seconds: reads all bot statuses (state, credits, system, routine, stats)</li>
@@ -1281,7 +1385,7 @@ remote_port  = 4001   # master's DataSync HTTP port</pre>
           <textarea v-model="aiCommanderForm.instruction" rows="3" placeholder="Maximize fleet earnings. Balance mining, trading, and exploration." class="input text-sm min-w-[320px] resize-y"></textarea>
         </div>
 
-        <div class="mt-4 p-3 rounded bg-[#0d1117] border border-[#21262d] text-xs text-space-text-dim">
+        <div class="mt-4 p-2 rounded bg-[#0d1117f0] border border-[#21262d] text-xs text-space-text-dim">
           <div class="font-semibold text-space-text mb-1">How It Works</div>
           <p>Start the <code class="text-space-accent">AI Commander</code> routine on any bot. Every cycle it reads the full fleet status and asks the LLM to decide which bots to start, stop, or redirect. All decisions are logged in <code class="text-space-cyan">data/ai_commander_memory.json</code>.</p>
         </div>
@@ -1397,7 +1501,59 @@ const perBotOre = reactive<Record<string, string>>({});
 const quotaAddOre = ref('');
 const quotaAddQty = ref(50);
 
-const minerBots = computed(() => botStore.bots.filter((b: any) => b.routine === 'miner'));
+const minerBots = computed(() => botStore.bots.filter((b: any) => b.routine === 'miner' || b.routine === 'miner-v2'));
+const iceBots = computed(() => botStore.bots.filter((b: any) => b.routine === 'ice_harvester'));
+const gasBots = computed(() => botStore.bots.filter((b: any) => b.routine === 'gas_harvester'));
+
+// ── Per-bot mining targets ──────────────────────────────────
+type MinerTarget = { system_id: string; system_name: string; poi_id: string; poi_name: string };
+type HarvestTarget = { system_id: string; system_name: string };
+const perBotMinerTarget = reactive<Record<string, MinerTarget | null>>({});
+const perBotIceTarget = reactive<Record<string, HarvestTarget | null>>({});
+const perBotGasTarget = reactive<Record<string, HarvestTarget | null>>({});
+
+// Per-bot picker UI state: bot→nearby systems list + jump count input
+const targetPickerJumps = reactive<Record<string, number>>({});
+const targetPickerSystems = reactive<Record<string, Array<{system_id:string;system_name:string;jumps:number}>>>({});
+const targetPickerLoading = reactive<Record<string, boolean>>({});
+
+async function fetchNearbyForBot(username: string) {
+  const bot = botStore.bots.find((b: any) => b.username === username) as any;
+  const fromSystem = bot?.system
+    || (botStore.settings as any)?.[username]?.homeSystem
+    || (botStore.settings as any)?.[username]?.launchSystem
+    || '';
+  if (!fromSystem) { console.warn(`[SettingsView] fetchNearby: bot ${username} system unknown`); return; }
+  const jumps = targetPickerJumps[username] ?? 3;
+  targetPickerLoading[username] = true;
+  try {
+    const r = await fetch(`/api/nearby-systems?from=${encodeURIComponent(fromSystem)}&jumps=${jumps}`);
+    if (r.ok) targetPickerSystems[username] = await r.json();
+  } finally {
+    targetPickerLoading[username] = false;
+  }
+}
+
+function saveMinerTarget(username: string, systemId: string, systemName: string) {
+  if (!systemId) { perBotMinerTarget[username] = null; doSave(username, { miner_target: null }); return; }
+  const t: MinerTarget = { system_id: systemId, system_name: systemName, poi_id: '', poi_name: '' };
+  perBotMinerTarget[username] = t;
+  doSave(username, { miner_target: t });
+}
+
+function saveIceTarget(username: string, systemId: string, systemName: string) {
+  if (!systemId) { perBotIceTarget[username] = null; doSave(username, { ice_target: null }); return; }
+  const t: HarvestTarget = { system_id: systemId, system_name: systemName };
+  perBotIceTarget[username] = t;
+  doSave(username, { ice_target: t });
+}
+
+function saveGasTarget(username: string, systemId: string, systemName: string) {
+  if (!systemId) { perBotGasTarget[username] = null; doSave(username, { gas_target: null }); return; }
+  const t: HarvestTarget = { system_id: systemId, system_name: systemName };
+  perBotGasTarget[username] = t;
+  doSave(username, { gas_target: t });
+}
 
 function addOreQuota() {
   if (!quotaAddOre.value) return;
@@ -1407,7 +1563,7 @@ function addOreQuota() {
 }
 
 // ── Crafter form ────────────────────────────────────────────
-const crafterForm = ref<{ craftLimits: Record<string, number>; refuelThreshold: number; repairThreshold: number; cycleDelayMs: number; autoCraft: boolean; minProfitPct: number; maxAutoCraftRecipes: number }>({  
+const crafterForm = ref<{ craftLimits: Record<string, number>; refuelThreshold: number; repairThreshold: number; cycleDelayMs: number; autoCraft: boolean; minProfitPct: number; maxAutoCraftRecipes: number; maxFactionStoragePerItem: number }>({  
   craftLimits: {},
   refuelThreshold: 50,
   repairThreshold: 40,
@@ -1415,6 +1571,7 @@ const crafterForm = ref<{ craftLimits: Record<string, number>; refuelThreshold: 
   autoCraft: false,
   minProfitPct: 10,
   maxAutoCraftRecipes: 5,
+  maxFactionStoragePerItem: 30000,
 });
 const crafterAddId = ref('');
 const crafterAddQty = ref(10);
@@ -1765,6 +1922,7 @@ function initForms(s: Record<string, any>) {
     crafterForm.value.autoCraft = s.crafter.autoCraft ?? false;
     crafterForm.value.minProfitPct = s.crafter.minProfitPct ?? 10;
     crafterForm.value.maxAutoCraftRecipes = s.crafter.maxAutoCraftRecipes ?? 5;
+    crafterForm.value.maxFactionStoragePerItem = s.crafter.maxFactionStoragePerItem ?? 30000;
   }
   if (s.rescue) {
     const r = s.rescue;
@@ -1954,11 +2112,13 @@ function initForms(s: Record<string, any>) {
     aiCommanderForm.value.maxActionsPerCycle = a.maxActionsPerCycle ?? 5;
     aiCommanderForm.value.instruction = a.instruction || 'Maximize fleet earnings. Balance mining, trading, and exploration.';
   }
-  // Per-bot ore overrides
+  // Per-bot ore + target overrides
   for (const bot of botStore.bots) {
-    if (s[bot.username]?.targetOre !== undefined) {
-      perBotOre[bot.username] = s[bot.username].targetOre || '';
-    }
+    const bs = s[bot.username] as any;
+    if (bs?.targetOre !== undefined) perBotOre[bot.username] = bs.targetOre || '';
+    if (bs?.miner_target !== undefined) perBotMinerTarget[bot.username] = bs.miner_target || null;
+    if (bs?.ice_target !== undefined) perBotIceTarget[bot.username] = bs.ice_target || null;
+    if (bs?.gas_target !== undefined) perBotGasTarget[bot.username] = bs.gas_target || null;
   }
 }
 
@@ -2008,7 +2168,7 @@ function saveMiner() {
     oreQuotas: { ...minerForm.value.oreQuotas },
     maxJumpsFromHome: minerForm.value.maxJumpsFromHome,
   });
-  // Save per-bot ore overrides
+  // Save per-bot ore overrides (miner_target is saved inline via saveMinerTarget)
   for (const bot of minerBots.value) {
     const oreVal = perBotOre[bot.username] || '';
     doSave(bot.username, { targetOre: oreVal });
@@ -2031,6 +2191,7 @@ function saveCrafter() {
     autoCraft: crafterForm.value.autoCraft,
     minProfitPct: crafterForm.value.minProfitPct,
     maxAutoCraftRecipes: crafterForm.value.maxAutoCraftRecipes,
+    maxFactionStoragePerItem: crafterForm.value.maxFactionStoragePerItem,
   });
 }
 

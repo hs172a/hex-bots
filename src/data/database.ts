@@ -7,7 +7,7 @@ import { Database } from "bun:sqlite";
 import { mkdirSync } from "fs";
 
 const DB_PATH = "data/hex-bots.db";
-const CURRENT_SCHEMA_VERSION = 10;
+const CURRENT_SCHEMA_VERSION = 12;
 
 export function createDatabase(): Database {
   mkdirSync("data", { recursive: true });
@@ -46,6 +46,8 @@ function applyMigrations(db: Database, fromVersion: number): void {
     if (fromVersion < 8) migrateV8(db);
     if (fromVersion < 9) migrateV9(db);
     if (fromVersion < 10) migrateV10(db);
+    if (fromVersion < 11) migrateV11(db);
+    if (fromVersion < 12) migrateV12(db);
 
     // Update schema version
     db.run("DELETE FROM schema_version");
@@ -432,6 +434,55 @@ function migrateV10(db: Database): void {
   db.run("CREATE INDEX IF NOT EXISTS idx_wh_entrance_sys ON wormholes(entrance_system_id)");
   db.run("CREATE INDEX IF NOT EXISTS idx_wh_exit_sys     ON wormholes(exit_system_id)");
   db.run("CREATE INDEX IF NOT EXISTS idx_wh_status       ON wormholes(status)");
+}
+
+function migrateV11(db: Database): void {
+  // ── Faction cache ──
+  db.run(`
+    CREATE TABLE IF NOT EXISTS factions (
+      id              TEXT PRIMARY KEY,
+      name            TEXT NOT NULL DEFAULT '',
+      tag             TEXT NOT NULL DEFAULT '',
+      description     TEXT NOT NULL DEFAULT '',
+      charter         TEXT NOT NULL DEFAULT '',
+      leader_username TEXT NOT NULL DEFAULT '',
+      member_count    INTEGER NOT NULL DEFAULT 0,
+      primary_color   TEXT NOT NULL DEFAULT '',
+      secondary_color TEXT NOT NULL DEFAULT '',
+      owned_bases     INTEGER NOT NULL DEFAULT 0,
+      updated_at      TEXT NOT NULL DEFAULT (datetime('now'))
+    )
+  `);
+  db.run("CREATE INDEX IF NOT EXISTS idx_factions_members ON factions(member_count DESC)");
+  db.run("CREATE INDEX IF NOT EXISTS idx_factions_name    ON factions(name)");
+}
+
+function migrateV12(db: Database): void {
+  // ── Online players observed via get_nearby / travel responses ──
+  db.run(`
+    CREATE TABLE IF NOT EXISTS online_players (
+      player_id       TEXT PRIMARY KEY,
+      username        TEXT NOT NULL DEFAULT '',
+      ship_class      TEXT NOT NULL DEFAULT '',
+      ship_name       TEXT NOT NULL DEFAULT '',
+      faction_id      TEXT NOT NULL DEFAULT '',
+      faction_tag     TEXT NOT NULL DEFAULT '',
+      primary_color   TEXT NOT NULL DEFAULT '#FFFFFF',
+      secondary_color TEXT NOT NULL DEFAULT '#000000',
+      status_message  TEXT NOT NULL DEFAULT '',
+      anonymous       INTEGER NOT NULL DEFAULT 0,
+      in_combat       INTEGER NOT NULL DEFAULT 0,
+      last_poi_id     TEXT NOT NULL DEFAULT '',
+      last_poi_name   TEXT NOT NULL DEFAULT '',
+      last_system_id  TEXT NOT NULL DEFAULT '',
+      last_system_name TEXT NOT NULL DEFAULT '',
+      last_seen_at    TEXT NOT NULL DEFAULT (datetime('now')),
+      last_seen_by    TEXT NOT NULL DEFAULT ''
+    )
+  `);
+  db.run("CREATE INDEX IF NOT EXISTS idx_op_poi    ON online_players(last_poi_id)");
+  db.run("CREATE INDEX IF NOT EXISTS idx_op_system ON online_players(last_system_id)");
+  db.run("CREATE INDEX IF NOT EXISTS idx_op_seen   ON online_players(last_seen_at DESC)");
 }
 
 // ── CacheHelper ──

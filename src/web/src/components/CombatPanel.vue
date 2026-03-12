@@ -5,6 +5,7 @@
       <div class="flex items-center justify-between mb-2">
         <h3 class="text-xs font-semibold text-space-text-dim uppercase">⚔️ Combat</h3>
         <div class="flex gap-2">
+          <button @click="loadBattleStatus" :disabled="battleLoading" class="btn btn-secondary text-xs px-3">{{ battleLoading ? '⏳' : '⚔️ Battle Status' }}</button>
           <button @click="scanNearby" :disabled="loading" class="btn btn-secondary text-xs px-3">{{ loading ? '⏳' : '🔄 Scan Nearby' }}</button>
         </div>
       </div>
@@ -52,6 +53,58 @@
             {{ wep.current_ammo ?? 0 }}/{{ wep.magazine_size ?? '?' }}
           </span>
         </span>
+      </div>
+    </div>
+
+    <!-- Battle Status -->
+    <div v-if="battleStatus" class="card py-2 px-3">
+      <div class="flex items-center justify-between mb-2">
+        <h4 class="text-xs font-semibold text-space-text-dim uppercase">⚔️ Battle Status</h4>
+        <button @click="battleStatus = null" class="text-space-text-dim hover:text-space-text-bright text-sm leading-none">×</button>
+      </div>
+      <!-- Summary row -->
+      <div class="flex flex-wrap gap-x-4 gap-y-0.5 text-[11px] mb-2">
+        <span class="text-space-text-dim">Zone: <span class="text-space-text-bright font-mono">{{ battleStatus.current_zone ?? battleStatus.zone ?? '—' }}</span></span>
+        <span class="text-space-text-dim">Round: <span class="text-space-text-bright font-mono">{{ battleStatus.round ?? battleStatus.tick ?? '—' }}</span></span>
+        <span v-if="battleStatus.battle_id" class="text-space-text-dim">ID: <span class="text-space-text-bright font-mono text-[10px]">{{ battleStatus.battle_id }}</span></span>
+        <span v-if="battleStatus.status" class="text-space-text-dim">Status: <span class="font-medium" :class="battleStatus.status === 'active' ? 'text-space-green' : 'text-space-yellow'">{{ battleStatus.status }}</span></span>
+      </div>
+      <!-- My stats -->
+      <div v-if="battleStatus.player_stats || battleStatus.your_stats" class="mb-2 p-2 rounded bg-[#161b22] border border-space-border text-[11px] space-y-0.5">
+        <div class="font-semibold text-space-text-dim uppercase text-[10px] mb-1">Your Stats</div>
+        <div v-for="[k, v] in Object.entries(battleStatus.player_stats ?? battleStatus.your_stats ?? {})" :key="k" class="flex justify-between">
+          <span class="text-space-text-dim">{{ formatKey(k) }}</span>
+          <span class="text-space-text-bright font-mono">{{ v }}</span>
+        </div>
+      </div>
+      <!-- Sides -->
+      <div v-if="battleSides.length" class="space-y-2">
+        <div v-for="(side, si) in battleSides" :key="si"
+          class="p-2 rounded border text-[11px] space-y-1"
+          :class="si === 0 ? 'border-space-green/30 bg-space-green/5' : 'border-space-red/30 bg-space-red/5'">
+          <div class="font-semibold text-[10px] uppercase tracking-wider"
+            :class="si === 0 ? 'text-space-green' : 'text-space-red'">{{ side.name || (si === 0 ? 'Allies' : 'Enemies') }}</div>
+          <div v-for="p in (side.participants || side.members || [])" :key="p.id || p.name"
+            class="flex items-center gap-1.5">
+            <span class="text-space-text">{{ p.name || p.username || p.id }}</span>
+            <span v-if="p.hull != null" class="text-space-text-dim">❤️{{ p.hull }}</span>
+            <span v-if="p.shield != null" class="text-space-text-dim">🛡️{{ p.shield }}</span>
+            <span v-if="p.zone != null" class="text-space-text-dim">Z{{ p.zone }}</span>
+            <span v-if="p.stance" class="text-[10px] px-1 rounded bg-[#21262d] text-space-text-dim">{{ p.stance }}</span>
+          </div>
+        </div>
+      </div>
+      <!-- Zones -->
+      <div v-if="battleZones.length" class="mt-2">
+        <div class="text-[10px] font-semibold uppercase tracking-wider text-space-text-dim mb-1">Zones</div>
+        <div class="flex gap-1 flex-wrap">
+          <div v-for="z in battleZones" :key="z.id ?? z.zone"
+            class="px-2 py-1 rounded text-[11px] bg-[#21262d] border border-space-border">
+            <span class="font-mono text-space-text-bright">Z{{ z.id ?? z.zone }}</span>
+            <span v-if="z.name" class="text-space-text-dim ml-1">{{ z.name }}</span>
+            <span v-if="z.occupants" class="text-space-text-dim ml-1">({{ z.occupants }} here)</span>
+          </div>
+        </div>
       </div>
     </div>
 
@@ -199,6 +252,22 @@ const scanResult = ref<Record<string, unknown> | null>(null);
 const currentStance = ref<'fire' | 'evade' | 'brace' | 'flee'>('fire');
 const reloadWeapon = ref('');
 const reloadAmmo = ref('');
+const battleStatus = ref<Record<string, unknown> | null>(null);
+const battleLoading = ref(false);
+
+const battleSides = computed(() => {
+  if (!battleStatus.value) return [];
+  const b = battleStatus.value as any;
+  return Array.isArray(b.sides) ? b.sides
+    : Array.isArray(b.teams) ? b.teams
+    : [];
+});
+
+const battleZones = computed(() => {
+  if (!battleStatus.value) return [];
+  const b = battleStatus.value as any;
+  return Array.isArray(b.zones) ? b.zones : [];
+});
 
 const currentBot = computed(() => botStore.bots.find(b => b.username === props.bot.username) || props.bot);
 const hullPct = computed(() => currentBot.value.maxHull > 0 ? Math.round((currentBot.value.hull / currentBot.value.maxHull) * 100) : 0);
@@ -224,6 +293,18 @@ function execCmd(command: string, params?: Record<string, unknown>): Promise<{ o
   return new Promise(resolve => {
     botStore.sendExec(props.bot.username, command, params || {}, (r: any) => resolve(r));
   });
+}
+
+async function loadBattleStatus() {
+  battleLoading.value = true;
+  const r = await execCmd('get_battle_status');
+  battleLoading.value = false;
+  if (r.ok && r.data) {
+    battleStatus.value = r.data as Record<string, unknown>;
+  } else {
+    emit('notif', r.error || 'No active battle', 'warn');
+    battleStatus.value = null;
+  }
 }
 
 async function scanNearby() {

@@ -3,13 +3,15 @@ import { join } from "path";
 import { cachedFetch } from "./httpcache.js";
 import type { Database } from "bun:sqlite";
 import { FactionStorageDb } from "./data/faction-storage-db.js";
-import type { FactionStorageEntry, FactionBuildingEntry } from "./data/faction-storage-db.js";
+import type { FactionStorageEntry, FactionBuildingEntry, FactionEntry } from "./data/faction-storage-db.js";
 import { NeedsMatrixDb } from "./data/needs-matrix-db.js";
 import type { NeedsMatrixEntry } from "./data/needs-matrix-db.js";
 import { DepositsDb } from "./data/deposits-db.js";
 import type { DepositRecord } from "./data/deposits-db.js";
 import { WormholesDb } from "./data/wormholes-db.js";
 import type { WormholeEntry } from "./data/wormholes-db.js";
+import { OnlinePlayersDb } from "./data/online-players-db.js";
+import type { OnlinePlayerRecord } from "./data/online-players-db.js";
 
 // ── Data model ──────────────────────────────────────────────
 
@@ -141,6 +143,7 @@ export class MapStore {
   private _needsMatrixDb: NeedsMatrixDb | null = null;
   private _depositsDb: DepositsDb | null = null;
   private _wormholesDb: WormholesDb | null = null;
+  private _onlinePlayersDb: OnlinePlayersDb | null = null;
   /** Memoized BFS routes. Cleared when map topology changes. */
   private routeCache = new Map<string, string[] | null>();
 
@@ -845,6 +848,31 @@ export class MapStore {
     return results;
   }
 
+  /** BFS — returns all systems reachable within maxJumps hops from fromSystemId (inclusive of starting system). */
+  getSystemsWithinJumps(fromSystemId: string, maxJumps: number): Array<{ system_id: string; system_name: string; jumps: number }> {
+    const results: Array<{ system_id: string; system_name: string; jumps: number }> = [];
+    if (!fromSystemId || maxJumps < 0) return results;
+    const visited = new Map<string, number>(); // systemId → jumps
+    visited.set(fromSystemId, 0);
+    const queue: Array<{ id: string; jumps: number }> = [{ id: fromSystemId, jumps: 0 }];
+    while (queue.length > 0) {
+      const current = queue.shift()!;
+      const sys = this.data.systems[current.id];
+      results.push({
+        system_id: current.id,
+        system_name: sys?.name ?? current.id,
+        jumps: current.jumps,
+      });
+      if (current.jumps >= maxJumps) continue;
+      for (const conn of (sys?.connections ?? [])) {
+        if (!conn.system_id || visited.has(conn.system_id)) continue;
+        visited.set(conn.system_id, current.jumps + 1);
+        queue.push({ id: conn.system_id, jumps: current.jumps + 1 });
+      }
+    }
+    return results.sort((a, b) => a.jumps - b.jumps || a.system_name.localeCompare(b.system_name));
+  }
+
   /** BFS pathfinding between two systems using known connections + active wormholes. Returns system IDs in order, or null if no path. */
   findRoute(fromSystemId: string, toSystemId: string): string[] | null {
     if (fromSystemId === toSystemId) return [fromSystemId];
@@ -1356,6 +1384,36 @@ export class MapStore {
     this._wormholesDb?.pruneOld(collapsedHours, maxAgeDays);
   }
 
+  // ── Online Players DB delegates ────────────────────────────────────
+
+  connectToOnlinePlayersDb(db: OnlinePlayersDb): void {
+    this._onlinePlayersDb = db;
+  }
+
+  upsertOnlinePlayers(players: Parameters<OnlinePlayersDb['upsertBatch']>[0]): void {
+    this._onlinePlayersDb?.upsertBatch(players);
+  }
+
+  getAllOnlinePlayers(): OnlinePlayerRecord[] {
+    return this._onlinePlayersDb?.getAll() ?? [];
+  }
+
+  getRecentOnlinePlayers(withinHours = 24): OnlinePlayerRecord[] {
+    return this._onlinePlayersDb?.getRecent(withinHours) ?? [];
+  }
+
+  getOnlinePlayersBySystem(systemId: string): OnlinePlayerRecord[] {
+    return this._onlinePlayersDb?.getBySystem(systemId) ?? [];
+  }
+
+  getOnlinePlayersByPoi(poiId: string): OnlinePlayerRecord[] {
+    return this._onlinePlayersDb?.getByPoi(poiId) ?? [];
+  }
+
+  pruneOnlinePlayers(maxAgeDays = 30): void {
+    this._onlinePlayersDb?.pruneStale(maxAgeDays);
+  }
+
   // ── Resource Deposits DB delegates ────────────────────────────────
 
   /**
@@ -1409,6 +1467,11 @@ export class MapStore {
   /** All known deposits. */
   getAllDeposits(): DepositRecord[] {
     return this._depositsDb?.getAll() ?? [];
+  }
+
+  /** Upsert a single pre-formed deposit record (used by DataSync client pull). */
+  upsertDepositRecord(r: DepositRecord): void {
+    this._depositsDb?.upsert(r);
   }
 
   /** Find best deposit for a resource (optionally prefer a system). */
@@ -1542,6 +1605,28 @@ export class MapStore {
   /** Return faction buildings in a specific system. */
   getFactionBuildingsInSystem(systemId: string): FactionBuildingEntry[] {
     return this._factionStorageDb?.getBuildingsInSystem(systemId) ?? [];
+  }
+
+  // ── Faction info cache ────────────────────────────────────────
+
+  /** Upsert a single faction from faction_info response. */
+  upsertFaction(f: Parameters<FactionStorageDb['upsertFaction']>[0]): void {
+    this._factionStorageDb?.upsertFaction(f);
+  }
+
+  /** Bulk upsert factions from faction_list response. */
+  upsertFactions(factions: Parameters<FactionStorageDb['upsertFactions']>[0]): void {
+    this._factionStorageDb?.upsertFactions(factions);
+  }
+
+  /** Return all cached factions sorted by member_count desc. */
+  getAllFactions(): FactionEntry[] {
+    return this._factionStorageDb?.getAllFactions() ?? [];
+  }
+
+  /** Return a single cached faction by id. */
+  getFaction(id: string): FactionEntry | null {
+    return this._factionStorageDb?.getFaction(id) ?? null;
   }
 
   // ── Needs Matrix ─────────────────────────────────────────────

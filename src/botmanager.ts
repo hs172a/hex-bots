@@ -51,6 +51,7 @@ import { FactionStorageDb } from "./data/faction-storage-db.js";
 import { NeedsMatrixDb } from "./data/needs-matrix-db.js";
 import { DepositsDb } from "./data/deposits-db.js";
 import { WormholesDb } from "./data/wormholes-db.js";
+import { OnlinePlayersDb } from "./data/online-players-db.js";
 import { initMarketPricesStore } from "./data/market-prices-store.js";
 import { getAllMaterialDemands, connectNeedsMatrixDb } from "./swarmcoord.js";
 import { GoalSchema } from "./types/config.js";
@@ -625,7 +626,7 @@ async function handleExec(action: WebAction): Promise<WebActionResult> {
     "refuel", "repair", "deposit_items", "withdraw_items", "jettison",
     "attack", "loot_wreck", "salvage_wreck", "send_gift", "craft",
     "accept_mission", "complete_mission", "abandon_mission",
-    "buy_ship", "sell_ship", "switch_ship", "install_mod", "uninstall_mod", "repair_module", "set_colors",
+    "buy_listed_ship", "sell_ship", "switch_ship", "install_mod", "uninstall_mod", "repair_module", "set_colors",
     "faction_deposit_items", "faction_withdraw_items",
   ]);
   if (refreshCommands.has(command)) {
@@ -700,19 +701,154 @@ async function handleExec(action: WebAction): Promise<WebActionResult> {
     } else if (command === "get_cargo") {
       await bot.refreshCargo();
       refreshStatusTable();
+    } else if (command === "get_status" || command === "get_system") {
+      // Push updated bot state to clients immediately (bot state was already parsed by the routine)
+      refreshStatusTable();
+    }
+  }
+
+  // Harvest online players from get_nearby / travel responses
+  if (!resp.error) {
+    const sysId = bot.system || '';
+    const sysName = mapStore.getSystem(sysId)?.name || sysId;
+    if (command === "get_nearby") {
+      const r = resp.result as any;
+      const nearby: any[] = r?.nearby ?? [];
+      const poiId = r?.poi_id || bot.poi || '';
+      const poiName = mapStore.getSystem(sysId)?.pois?.find((p: any) => p.id === poiId)?.name || poiId;
+      if (nearby.length > 0) {
+        mapStore.upsertOnlinePlayers(nearby.map((p: any) => ({
+          player_id: p.player_id,
+          username: p.anonymous ? '' : (p.username || ''),
+          ship_class: p.ship_class || '',
+          ship_name: p.ship_name || '',
+          faction_id: p.faction_id || '',
+          faction_tag: p.faction_tag || '',
+          primary_color: p.primary_color || '#FFFFFF',
+          secondary_color: p.secondary_color || '#000000',
+          status_message: p.status_message || '',
+          anonymous: p.anonymous === true,
+          in_combat: p.in_combat === true,
+          last_poi_id: poiId,
+          last_poi_name: poiName,
+          last_system_id: sysId,
+          last_system_name: sysName,
+          last_seen_by: botName,
+        })));
+      }
+    } else if (command === "travel") {
+      const r = resp.result as any;
+      const players: any[] = r?.online_players ?? [];
+      const poiId = r?.poi_id || bot.poi || '';
+      const poiName = r?.poi || mapStore.getSystem(sysId)?.pois?.find((p: any) => p.id === poiId)?.name || poiId;
+      if (players.length > 0) {
+        mapStore.upsertOnlinePlayers(players.map((p: any) => ({
+          player_id: p.player_id || '',
+          username: p.username || '',
+          ship_class: p.ship_class || '',
+          faction_id: p.faction_id || '',
+          faction_tag: p.faction_tag || '',
+          primary_color: p.primary_color || '#FFFFFF',
+          secondary_color: p.secondary_color || '#000000',
+          anonymous: false,
+          in_combat: false,
+          last_poi_id: poiId,
+          last_poi_name: poiName,
+          last_system_id: sysId,
+          last_system_name: sysName,
+          last_seen_by: botName,
+        })));
+      }
+    }
+  }
+
+  // Cache faction_info / faction_list responses into the factions DB table
+  if (!resp.error) {
+    if (command === "faction_info") {
+      const r = resp.result as any;
+      if (r?.id && r?.name) {
+        mapStore.upsertFaction(r);
+        // Also cache each member as a minimal faction entry if they have an id
+        if (Array.isArray(r.members)) {
+          for (const m of r.members) {
+            if (m.faction_id && m.faction_name) {
+              mapStore.upsertFaction({ id: m.faction_id, name: m.faction_name });
+            }
+          }
+        }
+      }
+    } else if (command === "faction_list") {
+      const r = resp.result as any;
+      const list: any[] = r?.factions ?? (Array.isArray(r) ? r : []);
+      if (list.length > 0) mapStore.upsertFactions(list);
     }
   }
 
   // Persist faction building list whenever it is successfully loaded
-  if (!resp.error && command === "facility" && (params as any)?.action === "list") {
-    const facilities: any[] = (resp.result as any)?.faction_facilities || [];
-    if (facilities.length > 0) mapStore.updateFactionBuildings(facilities);
-  }
-  // Persist newly built facility so storage level is known immediately
-  if (!resp.error && command === "facility" && (params as any)?.action === "faction_build") {
-    const r = resp.result as any;
-    const built = r?.facility ?? r?.faction_facility ?? r;
-    if (built?.facility_id) mapStore.updateFactionBuildings([built]);
+  if (!resp.error && command === "facility") {
+    const action = (params as any)?.action;
+    const allFactions = mapStore.getAllFactions();
+    const factionNameById = (id: string) => allFactions.find((f: any) => f.id === id)?.name || '';
+    const sysName = mapStore.getSystem(bot.system)?.name || bot.system || '';
+    const poiName = mapStore.getSystem(bot.system)?.pois?.find((p: any) => p.id === bot.poi)?.name || bot.poi || '';
+
+    if (action === "list") {
+      const facilities: any[] = (resp.result as any)?.faction_facilities || [];
+      if (facilities.length > 0) {
+        mapStore.updateFactionBuildings(facilities.map((f: any) => ({
+          facility_id: f.facility_id,
+          faction_id: f.faction_id || '',
+          faction_name: f.faction_name || factionNameById(f.faction_id || ''),
+          poi_id: f.poi_id || bot.poi || '',
+          poi_name: f.poi_name || poiName,
+          system_id: f.system_id || bot.system || '',
+          system_name: f.system_name || sysName,
+          facility_type: f.facility_type || f.type || '',
+          name: f.facility_name || f.name || '',
+          faction_service: f.faction_service || '',
+          active: f.active !== false,
+          level: f.level ?? 1,
+        })));
+      }
+    } else if (action === "faction_list") {
+      const raw = resp.result as any;
+      const facilities: any[] = Array.isArray(raw) ? raw : (raw?.facilities || raw?.items || []);
+      if (facilities.length > 0) {
+        mapStore.updateFactionBuildings(facilities.map((f: any) => ({
+          facility_id: f.facility_id,
+          faction_id: f.faction_id || bot.factionId || '',
+          faction_name: f.faction_name || factionNameById(f.faction_id || bot.factionId || ''),
+          poi_id: f.poi_id || bot.poi || '',
+          poi_name: f.poi_name || poiName,
+          system_id: f.system_id || bot.system || '',
+          system_name: f.system_name || sysName,
+          facility_type: f.facility_type || f.type || '',
+          name: f.facility_name || f.name || '',
+          faction_service: f.faction_service || f.service || '',
+          active: f.active !== false,
+          level: f.level ?? f.tier ?? 1,
+        })));
+      }
+    } else if (action === "faction_build") {
+      const r = resp.result as any;
+      const built = r?.facility ?? r?.faction_facility ?? r;
+      if (built?.facility_id) {
+        mapStore.updateFactionBuildings([{
+          facility_id: built.facility_id,
+          faction_id: built.faction_id || bot.factionId || '',
+          faction_name: built.faction_name || factionNameById(built.faction_id || bot.factionId || ''),
+          poi_id: built.poi_id || bot.poi || '',
+          poi_name: built.poi_name || poiName,
+          system_id: built.system_id || bot.system || '',
+          system_name: built.system_name || sysName,
+          facility_type: built.facility_type || built.type || '',
+          name: built.facility_name || built.name || '',
+          faction_service: built.faction_service || '',
+          active: built.active !== false,
+          level: built.level ?? built.tier ?? 1,
+        }]);
+      }
+    }
   }
 
   // Log manual faction operations to faction activity log
@@ -783,6 +919,8 @@ async function main(): Promise<void> {
   mapStore.connectToDepositsDb(depositsDb);
   const wormholesDb = new WormholesDb(db);
   mapStore.connectToWormholesDb(wormholesDb);
+  const onlinePlayersDb = new OnlinePlayersDb(db);
+  mapStore.connectToOnlinePlayersDb(onlinePlayersDb);
   initMarketPricesStore(db);
 
   // Live in-memory fallback: synthesizes faction storage from bot.factionStorage arrays when
@@ -922,6 +1060,101 @@ async function main(): Promise<void> {
     server.logSystem(`[Admin] Galaxy map wiped and refreshed: ${msg}`);
     server.updateMapData();
     return msg;
+  };
+
+  server.onSmartCraft = async (username: string, recipeId: string, requestedCount: number) => {
+    const bot = bots.get(username);
+    if (!bot) return { ok: false, crafted: 0, message: `Bot '${username}' not found` };
+    if (!bot.docked) return { ok: false, crafted: 0, message: 'Bot must be docked to craft' };
+
+    // Get recipe components from catalog (raw API may use 'ingredients'/'inputs'/'requires')
+    const recipe = catalogStore.getRecipe(recipeId);
+    const rawComps: Array<Record<string, unknown>> =
+      (recipe as any)?.components ?? (recipe as any)?.ingredients ??
+      (recipe as any)?.inputs ?? (recipe as any)?.requires ?? [];
+    const components: Array<{ item_id: string; name?: string; quantity: number }> =
+      rawComps.map((c: any) => ({
+        item_id: c.item_id ?? c.id ?? c.item ?? '',
+        name: c.name ?? c.item_name,
+        quantity: c.quantity ?? c.amount ?? c.count ?? 1,
+      })).filter(c => c.item_id);
+
+    if (components.length === 0) {
+      // No components known — just attempt the craft directly
+      const resp = await bot.exec('craft', { recipe_id: recipeId, count: requestedCount });
+      if (resp.error) return { ok: false, crafted: 0, message: typeof resp.error === 'string' ? resp.error : JSON.stringify(resp.error) };
+      const crafted = (resp.result as any)?.quantity ?? (resp.result as any)?.count ?? requestedCount;
+      return { ok: true, crafted, message: String((resp.result as any)?.hint ?? '') || undefined };
+    }
+
+    // Refresh cargo + storage to get current quantities
+    const [cargoResp, storageResp, factionResp] = await Promise.all([
+      bot.exec('get_cargo'),
+      bot.exec('view_storage'),
+      bot.exec('view_faction_storage'),
+    ]);
+    const cargoRaw = (cargoResp.result as any) ?? {};
+    const cargoItems: Array<{ item_id: string; quantity: number }> =
+      (cargoRaw.items ?? cargoRaw.cargo ?? []).map((i: any) => ({
+        item_id: i.item_id ?? i.id ?? '', quantity: i.quantity ?? 0,
+      }));
+    const storageRaw = (storageResp.result as any) ?? {};
+    const storageItems: Array<{ item_id: string; quantity: number }> =
+      (storageRaw.items ?? storageRaw.storage ?? []).map((i: any) => ({
+        item_id: i.item_id ?? i.id ?? '', quantity: i.quantity ?? 0,
+      }));
+    const factionRaw = (factionResp.result as any) ?? {};
+    const factionItems: Array<{ item_id: string; quantity: number }> =
+      (factionRaw.items ?? factionRaw.storage ?? factionRaw.faction_storage ?? []).map((i: any) => ({
+        item_id: i.item_id ?? i.id ?? '', quantity: i.quantity ?? 0,
+      }));
+
+    const inCargo = (id: string) => cargoItems.find(i => i.item_id === id)?.quantity ?? 0;
+    const inStorage = (id: string) => storageItems.find(i => i.item_id === id)?.quantity ?? 0;
+    const inFaction = (id: string) => factionItems.find(i => i.item_id === id)?.quantity ?? 0;
+
+    // Calculate max craftable
+    let maxCraftable = requestedCount;
+    for (const c of components) {
+      const total = inCargo(c.item_id) + inStorage(c.item_id) + inFaction(c.item_id);
+      const possible = Math.floor(total / c.quantity);
+      if (possible < maxCraftable) maxCraftable = possible;
+    }
+    if (maxCraftable <= 0) {
+      const shortage = components.map(c => {
+        const total = inCargo(c.item_id) + inStorage(c.item_id) + inFaction(c.item_id);
+        const needed = c.quantity;
+        return total < needed ? `${c.name ?? c.item_id}: have ${total}, need ${needed}` : null;
+      }).filter(Boolean).slice(0, 3).join('; ');
+      return { ok: false, crafted: 0, message: `Not enough materials — ${shortage}` };
+    }
+
+    const count = Math.min(maxCraftable, requestedCount);
+
+    // Withdraw ingredients from faction storage first, then personal storage
+    for (const c of components) {
+      const needed = c.quantity * count;
+      let remaining = needed - inCargo(c.item_id);
+      if (remaining <= 0) continue;
+
+      const fromFaction = Math.min(remaining, inFaction(c.item_id));
+      if (fromFaction > 0) {
+        await bot.exec('faction_withdraw_items', { item_id: c.item_id, quantity: fromFaction });
+        remaining -= fromFaction;
+      }
+      if (remaining > 0) {
+        const fromStorage = Math.min(remaining, inStorage(c.item_id));
+        if (fromStorage > 0) {
+          await bot.exec('withdraw_items', { item_id: c.item_id, quantity: fromStorage });
+        }
+      }
+    }
+
+    // Execute craft
+    const craftResp = await bot.exec('craft', { recipe_id: recipeId, count });
+    if (craftResp.error) return { ok: false, crafted: 0, message: typeof craftResp.error === 'string' ? craftResp.error : JSON.stringify(craftResp.error) };
+    const crafted = (craftResp.result as any)?.quantity ?? (craftResp.result as any)?.count ?? count;
+    return { ok: true, crafted, message: String((craftResp.result as any)?.hint ?? '') || undefined };
   };
 
   setIpBlockHandler((secs: number) => {

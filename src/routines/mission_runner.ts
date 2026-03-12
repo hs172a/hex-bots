@@ -61,7 +61,7 @@ function getMissionRunnerSettings(): MissionRunnerSettings {
 
 // ── Types ─────────────────────────────────────────────────────
 
-type ObjType = "deliver" | "mine" | "buy" | "sell" | "visit" | "dock" | "craft" | "kill";
+type ObjType = "deliver" | "mine" | "buy" | "sell" | "visit" | "dock" | "craft" | "kill" | "survey";
 
 interface MissionObjective {
   type: ObjType;
@@ -95,6 +95,7 @@ function determineObjectiveType(obj: Record<string, unknown>): ObjType {
   if (type.includes("mine") || type.includes("extract")) return "mine";
   if (type.includes("craft") || type.includes("create")) return "craft";
   if (type.includes("kill") || type.includes("destroy") || type.includes("hunt")) return "kill";
+  if (type.includes("survey") || type.includes("scan") || type.includes("deep_core")) return "survey";
   if (type.includes("visit") || type.includes("travel") || type.includes("explore")) return "visit";
   if (type.includes("buy") || type.includes("purchase")) return "buy";
   // Infer from fields
@@ -228,6 +229,7 @@ function estimateMissionEffort(mission: Mission): number {
     switch (obj.type) {
       case "visit": effort += 1; break;
       case "dock":  effort += 1; break;
+      case "survey": effort += 2; break;
       case "buy":   effort += 2; break;
       case "sell":  effort += 2; break;
       case "deliver": effort += 3; break;
@@ -835,6 +837,42 @@ async function* executeObjective(
       obj.current += crafted;
       ctx.log("info", `Craft obj: ${obj.current}/${obj.quantity} done (crafted ${crafted}x ${mRecipe.output_name})`);
       if (obj.current >= obj.quantity) obj.complete = true;
+      break;
+    }
+
+    // ── Survey (v0.212 deep-core scanning missions) ──
+    case "survey": {
+      yield "obj_survey";
+      if (bot.docked) await syncMissionProgress(ctx, missionId, objectives);
+      if (obj.complete) return;
+
+      // Navigate to target system if needed
+      if (obj.targetSystem && bot.system !== obj.targetSystem) {
+        yield "obj_survey_navigate";
+        await ensureUndocked(ctx);
+        await navigateToSystem(ctx, obj.targetSystem, { fuelThresholdPct: settings.refuelThreshold, hullThresholdPct: 30 });
+        await bot.refreshStatus();
+        return;
+      }
+
+      // Travel to specific POI if specified
+      if (obj.targetPoi && bot.poi !== obj.targetPoi) {
+        yield "obj_survey_travel";
+        await ensureUndocked(ctx);
+        const tResp = await bot.exec("travel", { target_poi: obj.targetPoi });
+        if (!tResp.error) await bot.refreshStatus();
+        return;
+      }
+
+      yield "obj_survey_scan";
+      await ensureUndocked(ctx);
+      const surveyResp = await bot.exec("survey_system");
+      if (surveyResp.error) {
+        ctx.log("warn", `Survey failed: ${surveyResp.error.message}`);
+        return;
+      }
+      ctx.log("info", `Survey complete in ${bot.system}`);
+      obj.complete = true;
       break;
     }
 

@@ -52,7 +52,7 @@
         leave-from-class="opacity-100"
         leave-to-class="opacity-0">
         <div v-if="selectedEntry" class="fixed inset-0 z-50 flex items-center justify-center bg-black/60" @click.self="selectedEntry = null">
-          <div class="bg-[#0d1117] border border-space-border rounded-lg shadow-2xl w-full max-w-lg mx-4 p-5">
+          <div class="bg-[#0d1117f0] border border-space-border rounded-lg shadow-2xl w-full max-w-lg mx-4 p-5">
             <div class="flex items-center justify-between mb-3">
               <span class="text-xs text-space-text-dim">{{ formatDate(selectedEntry.created_at || selectedEntry.timestamp) }}</span>
               <button @click="selectedEntry = null" class="text-space-text-dim hover:text-space-text-bright text-lg leading-none">×</button>

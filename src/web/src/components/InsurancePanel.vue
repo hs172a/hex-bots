@@ -66,7 +66,7 @@
 
         <!-- Extra quote fields -->
         <div v-if="quoteExtras.length > 0" class="text-xs text-space-text-dim space-y-0.5">
-          <div v-for="[k, v] in quoteExtras" :key="k" class="flex justify-between px-2 py-1 rounded bg-[#0d1117]">
+          <div v-for="[k, v] in quoteExtras" :key="k" class="flex justify-between px-2 py-1 rounded bg-[#0d1117f0]">
             <span>{{ formatKey(k) }}</span>
             <span class="text-space-text">{{ v }}</span>
           </div>

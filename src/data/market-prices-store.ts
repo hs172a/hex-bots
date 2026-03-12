@@ -277,6 +277,11 @@ export class MarketPricesStore {
       LIMIT ?
     `).all(stationId, itemId, limit) as any[];
   }
+
+  /** Remove a single item at a station from current market_prices (called when buy fails with item_not_available). */
+  removeItemAtStation(stationId: string, itemId: string): void {
+    this.db.run("DELETE FROM market_prices WHERE station_id = ? AND item_id = ?", [stationId, itemId]);
+  }
 }
 
 /** Module-level singleton — set by botmanager after DB init. */

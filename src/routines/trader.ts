@@ -123,6 +123,16 @@ function findTradeOpportunities(settings: ReturnType<typeof getTraderSettings>, 
     const profitPerUnit = sp.spread - (totalJumps > 0 ? totalFuelCost / Math.min(sp.buyQty, sp.sellQty) : 0);
     if (profitPerUnit < settings.minProfitPerUnit) continue;
 
+    // Skip routes where destination buy-order data is stale — the order has likely been filled
+    // or cancelled since we last visited. 20-min threshold balances freshness vs route variety.
+    const DEST_STALE_MS = 20 * 60 * 1000;
+    const destPoiData = ms.getSystem(sp.destSystem)?.pois.find(p => p.id === sp.destPoi);
+    const destEntry = destPoiData?.market.find(m => m.item_id === sp.itemId);
+    if (destEntry?.last_updated) {
+      const ageMs = Date.now() - new Date(destEntry.last_updated).getTime();
+      if (ageMs > DEST_STALE_MS) continue;
+    }
+
     const tradeQty = Math.min(sp.buyQty, sp.sellQty, maxItemsForCargo(cargoCapacity, sp.itemId));
     const totalProfit = profitPerUnit * tradeQty;
 
@@ -1480,6 +1490,8 @@ export const traderRoutine: Routine = async function* (ctx: RoutineContext) {
         await recordMarketData(ctx);
       } else {
         ctx.log("error", `Sell failed: ${sellResp.error.message}`);
+        // Remove stale market entry so this dead route is not picked again next cycle
+        ctx.mapStore.removeMarketItem(route.destSystem, route.destPoi, route.itemId);
       }
     }
 

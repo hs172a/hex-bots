@@ -56,10 +56,26 @@ export const stationToFactionRoutine: Routine = async function* (ctx: RoutineCon
 
   ctx.log("info", `StationToFaction: found ${bot.storage.length} item type(s) in station storage`);
 
-  // ── 4. Multi-pass transfer (shared helper) ────────────────────────────────
+  // ── 4. Dump cargo so withdraw_items has free space ────────────────────────
+  yield "dump_cargo";
+  await bot.refreshCargo();
+  if (bot.inventory.length > 0) {
+    ctx.log("info", `StationToFaction: clearing ${bot.inventory.length} cargo item type(s) to make room`);
+    for (const item of [...bot.inventory]) {
+      if (item.quantity <= 0) continue;
+      // Try faction first, fall back to station storage
+      const fResp = await bot.exec("faction_deposit_items", { item_id: item.itemId, quantity: item.quantity });
+      if (fResp.error) {
+        await bot.exec("deposit_items", { item_id: item.itemId, quantity: item.quantity });
+      }
+    }
+    await bot.refreshStatus();
+  }
+
+  // ── 5. Multi-pass transfer (shared helper) ────────────────────────────────
   yield "transferring";
   const totalTransferred = await transferStationToFaction(ctx);
 
-  // ── 5. Summary ────────────────────────────────────────────────────────────
+  // ── 6. Summary ────────────────────────────────────────────────────────────
   ctx.log("system", `StationToFaction: done — ${totalTransferred} unit(s) transferred`);
 };

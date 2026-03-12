@@ -455,8 +455,9 @@ async function buildCandidates(
     const mods = bot.installedMods.map(m => m.toLowerCase());
     const hasCombatMod  = mods.some(m => m.includes("weapon") || m.includes("laser_cannon") || m.includes("railgun") || m.includes("missile"));
     const hasMiningMod  = mods.some(m => m.includes("mining_laser") || m.includes("drill") || m.includes("ore_extractor"));
-    const hasGasMod     = mods.some(m => m.includes("gas_harvester") || m.includes("gas_collector"));
-    const hasIceMod     = mods.some(m => m.includes("ice_harvester") || m.includes("ice_drill"));
+    // v0.211: rift_siphon is a Gas Harvester class; cryo_industrial is an Ice Harvester class
+    const hasGasMod     = mods.some(m => m.includes("gas_harvester") || m.includes("gas_collector")) || bot.shipClassId === "rift_siphon";
+    const hasIceMod     = mods.some(m => m.includes("ice_harvester") || m.includes("ice_drill")) || bot.shipClassId === "cryo_industrial";
     const hasLargeCargo = mods.some(m => m.includes("cargo_hold") || m.includes("cargo_bay") || m.includes("extended_cargo"));
 
     if (hasCombatMod && settings.enableHunter) {
@@ -628,12 +629,12 @@ export const smartSelectorRoutine: Routine = async function* (ctx: RoutineContex
           if (!sellOk) {
             let deposited = false;
             if (bot.inFaction && !noFacStorage) {
-              // Cap pre-check
+              // Cap pre-check: skip if depositing would exceed cap (near-cap check)
               let atCap = false;
               if (bot.poi) {
                 const cap = ctx.mapStore.getFactionStorageCapPerItem(bot.poi);
                 const facQty = bot.factionStorage.find(i => i.itemId === item.itemId)?.quantity ?? 0;
-                atCap = facQty >= cap;
+                atCap = facQty + item.quantity > cap;
               }
               if (!atCap) {
                 const facResp = await bot.exec("faction_deposit_items", { item_id: item.itemId, quantity: item.quantity });
@@ -644,7 +645,12 @@ export const smartSelectorRoutine: Routine = async function* (ctx: RoutineContex
                   const em = facResp.error.message ?? "";
                   const ec = facResp.error.code ?? "";
                   if (ec === "storage_cap_exceeded" || em.includes("storage_cap_exceeded") || em.includes("storage cap reached")) {
-                    // cap hit — fall through to personal storage
+                    // Update local factionStorage cache so next cycle pre-check skips without retrying
+                    if (bot.poi) {
+                      const cap = ctx.mapStore.getFactionStorageCapPerItem(bot.poi);
+                      const le = bot.factionStorage.find(i => i.itemId === item.itemId);
+                      if (le) (le as any).quantity = cap;
+                    }
                   } else if (em.includes("no_faction_storage") || em.includes("faction_lockbox") ||
                       ec === "not_in_faction" || em.includes("not_in_faction")) {
                     noFacStorage = true;

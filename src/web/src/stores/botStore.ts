@@ -166,6 +166,28 @@ export const useBotStore = defineStore('bots', () => {
   const factionBuildings = ref<Array<{ facility_id: string; faction_id: string; faction_name: string; poi_id: string; poi_name: string; system_id: string; system_name: string; facility_type: string; facility_name: string; faction_service: string; active: boolean; level: number; updated_at: string }>>([]); 
   const factionStorageLoading = ref(false);
 
+  // ── Online players (observed via get_nearby / travel) ──
+  interface OnlinePlayer {
+    player_id: string; username: string; ship_class: string; ship_name: string;
+    faction_id: string; faction_tag: string; primary_color: string; secondary_color: string;
+    status_message: string; anonymous: boolean; in_combat: boolean;
+    last_poi_id: string; last_poi_name: string; last_system_id: string; last_system_name: string;
+    last_seen_at: string; last_seen_by: string;
+  }
+  const onlinePlayers = ref<OnlinePlayer[]>([]);
+  const onlinePlayersLoading = ref(false);
+
+  async function fetchOnlinePlayers(hours = 24) {
+    if (onlinePlayersLoading.value) return;
+    onlinePlayersLoading.value = true;
+    try {
+      const r = await fetch(`/api/online-players?hours=${hours}`);
+      if (r.ok) onlinePlayers.value = await r.json();
+    } catch { /* ignore */ } finally {
+      onlinePlayersLoading.value = false;
+    }
+  }
+
   // ── Per-bot dock results (story, station_condition, unread_chat) ──
   const stationDockInfo = ref<Record<string, any>>({});
 
@@ -324,6 +346,14 @@ export const useBotStore = defineStore('bots', () => {
   const execCallbacks: Record<number, ExecCallback> = {};
   const execTimers: Record<number, ReturnType<typeof setTimeout>> = {};
 
+  // ── LRT (Long Range Travel) status per bot ──
+  const lrtBots = ref<Set<string>>(new Set());
+  function setLrtStatus(username: string, traveling: boolean) {
+    const next = new Set(lrtBots.value);
+    if (traveling) next.add(username); else next.delete(username);
+    lrtBots.value = next;
+  }
+
   // ── Getters ──
   const activeBots = computed(() => bots.value.filter(b => b.state === 'running'));
   const sortedBots = computed(() => [...bots.value].sort((a, b) => a.username.localeCompare(b.username)));
@@ -373,6 +403,10 @@ export const useBotStore = defineStore('bots', () => {
             }
             if (update.username && typeof update.credits === 'number') {
               recordCreditsSnapshot(update.username, update.credits);
+            }
+            // Sync LRT badge from server-side navigating flag
+            if (update.username && typeof update.navigating === 'boolean') {
+              setLrtStatus(update.username, update.navigating);
             }
           }
           // Remove bots no longer reported by server (splice in-place to avoid full re-render)
@@ -490,13 +524,15 @@ export const useBotStore = defineStore('bots', () => {
     const seq = ++execSeq;
     if (callback) {
       execCallbacks[seq] = callback;
+      // Jump takes up to ~65s on slow ships — use a longer timeout for it
+      const timeoutMs = command === 'jump' ? 90_000 : 30_000;
       execTimers[seq] = setTimeout(() => {
         if (execCallbacks[seq]) {
           execCallbacks[seq]({ ok: false, error: `Timeout: ${command} did not respond` });
           delete execCallbacks[seq];
         }
         delete execTimers[seq];
-      }, 30000);
+      }, timeoutMs);
     }
     const botVm = bots.value.find(b => b.username === botName)?.vm;
     wsSend({ type: 'exec', bot: botName, command, params, _seq: seq, ...(botVm ? { vm: botVm } : {}) });
@@ -631,6 +667,10 @@ export const useBotStore = defineStore('bots', () => {
     wormholes,
     wormholesLoading,
     fetchWormholes,
+    // Online players DB
+    onlinePlayers,
+    onlinePlayersLoading,
+    fetchOnlinePlayers,
     // Faction storage DB
     factionStorageItems,
     factionBuildings,
@@ -638,5 +678,8 @@ export const useBotStore = defineStore('bots', () => {
     fetchFactionStorage,
     // Dock results (story, condition, unread_chat)
     stationDockInfo,
+    // LRT status per bot
+    lrtBots,
+    setLrtStatus,
   };
 });

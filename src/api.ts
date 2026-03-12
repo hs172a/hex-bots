@@ -71,7 +71,7 @@ const ACTION_COMMANDS = new Set([
   "deposit_items", "withdraw_items",
   "faction_deposit_items", "faction_withdraw_items",
   "faction_deposit_credits", "faction_withdraw_credits",
-  "install_mod", "uninstall_mod", "repair_module", "buy_ship", "sell_ship", "switch_ship", "set_colors",
+  "install_mod", "uninstall_mod", "repair_module", "buy_listed_ship", "sell_ship", "switch_ship", "set_colors",
   "accept_mission", "complete_mission", "decline_mission", "abandon_mission",
   "chat", "send_gift", "trade_offer", "trade_accept", "trade_decline",
   "facility", "battle",

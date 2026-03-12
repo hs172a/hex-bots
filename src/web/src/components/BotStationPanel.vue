@@ -78,6 +78,11 @@
               💬 Chat
               <span v-if="totalUnread > 0" class="inline-flex items-center justify-center w-4 h-4 rounded-full text-[10px] font-bold bg-space-red text-white">{{ totalUnread > 99 ? '99+' : totalUnread }}</span>
             </button>
+            <button v-if="props.mode !== 'facility'" @click="switchToMarket"
+              class="px-2 py-0.5 text-xs rounded transition-colors"
+              :class="tab === 'market' ? 'bg-space-accent text-white' : 'text-space-text-dim hover:text-space-text'">
+              🛒 Market<span v-if="marketItems.length" class="opacity-60 ml-0.5">({{ marketItems.length }})</span>
+            </button>
           </div>
           <button @click="reloadAll" :disabled="loading" class="btn btn-secondary text-xs py-0 px-2">{{ loading ? '⏳' : '🔄' }}</button>
         </div>
@@ -120,6 +125,14 @@
                   <!-- Expanded details -->
                   <div v-if="expanded.has(f.facility_id)" class="pt-1.5 mt-1.5 border-t border-[#30363d] space-y-1">
                     <div v-if="f.description" class="text-space-text-dim leading-relaxed">{{ f.description }}</div>
+                    <!-- Faction ownership badge -->
+                    <div v-if="factionFor(f)" class="flex items-center gap-1.5 text-[11px] mt-0.5">
+                      <div class="w-3 h-3 rounded-full border border-white/20 shrink-0"
+                        :style="{ backgroundColor: factionFor(f)?.primary_color || '#7c3aed' }"
+                      ></div>
+                      <span class="text-purple-300">⚑ {{ factionFor(f)?.name }}</span>
+                      <span v-if="factionFor(f)?.tag" class="text-space-text-dim">[{{ factionFor(f)?.tag }}]</span>
+                    </div>
                     <div class="flex flex-wrap gap-x-4 gap-y-0.5 text-[11px] mt-0.5">
                       <span v-if="f.level" class="text-space-text-dim">Level {{ f.level }}</span>
                       <span v-if="f.bonus_type" class="text-space-cyan">+{{ f.bonus_value }} {{ f.bonus_type?.replace(/_/g, ' ') }}</span>
@@ -328,6 +341,76 @@
             </div>
           </div>
         </template>
+        <!-- ── Market Tab ──────────────────────────────── -->
+        <template v-else-if="tab === 'market'">
+          <div class="flex gap-2 mb-2">
+            <input v-model="marketSearch" type="text" placeholder="Search items…" class="input text-xs flex-1 py-1" />
+            <input v-model.number="marketTradeQty" type="number" min="1" class="input text-xs w-14 py-1" title="Trade quantity" />
+            <button @click="loadMarket" :disabled="marketLoading" class="btn btn-secondary text-xs py-0 px-2">{{ marketLoading ? '⏳' : '🔄' }}</button>
+          </div>
+          <!-- Trade result notification -->
+          <div v-if="marketTradeResult" class="text-[11px] px-2 py-1 rounded mb-2"
+            :class="marketTradeResult.ok ? 'bg-space-green/10 text-space-green border border-space-green/20' : 'bg-space-red/10 text-space-red border border-space-red/20'">
+            {{ marketTradeResult.ok ? '✅' : '❌' }} {{ marketTradeResult.message }}
+          </div>
+          <div v-if="marketLoading && !marketItems.length" class="text-xs text-space-text-dim italic py-6 text-center">Loading market…</div>
+          <div v-else-if="!marketItems.length" class="text-xs text-space-text-dim italic py-6 text-center">No market data. Click 🔄 to fetch.</div>
+          <div v-else class="overflow-auto scrollbar-dark pr-0.5" style="max-height: 30rem">
+            <table class="w-full text-[11px] border-collapse">
+              <thead class="sticky top-0 bg-space-card z-10">
+                <tr class="text-left text-space-text-dim">
+                  <th class="pb-1.5 pr-1 font-semibold">Item</th>
+                  <th class="pb-1.5 px-1 font-semibold text-right">Buy<span class="font-normal opacity-60 ml-0.5">cr</span></th>
+                  <th class="pb-1.5 px-1 font-semibold text-right">Sell<span class="font-normal opacity-60 ml-0.5">cr</span></th>
+                  <th class="pb-1.5 pl-1 font-semibold text-right">Actions</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr v-for="item in filteredMarket" :key="item.item_id"
+                  class="border-t border-space-border/40 hover:bg-[#1e242d] transition-colors">
+                  <td class="py-1 pr-1 text-space-text-bright max-w-[8rem] truncate" :title="item.item_name">{{ item.item_name }}</td>
+                  <!-- Station BUY price (station pays player to sell to it) -->
+                  <td class="py-1 px-1 text-right font-mono"
+                    :class="item.buy_price != null ? 'text-space-green' : 'text-space-text-dim/30'">
+                    {{ item.buy_price != null ? item.buy_price.toLocaleString() : '—' }}
+                    <span v-if="item.buy_price != null && item.buy_quantity" class="text-space-text-dim/60 text-[10px] ml-0.5">({{ item.buy_quantity }})</span>
+                  </td>
+                  <!-- Station SELL price (player buys from station) -->
+                  <td class="py-1 px-1 text-right font-mono"
+                    :class="item.sell_price != null ? 'text-space-yellow' : 'text-space-text-dim/30'">
+                    {{ item.sell_price != null ? item.sell_price.toLocaleString() : '—' }}
+                    <span v-if="item.sell_price != null && item.sell_quantity" class="text-space-text-dim/60 text-[10px] ml-0.5">({{ item.sell_quantity }})</span>
+                  </td>
+                  <!-- Action buttons -->
+                  <td class="py-1 pl-1 text-right">
+                    <div class="flex gap-0.5 justify-end">
+                      <!-- Buy from station → auto-deposit to faction storage -->
+                      <button v-if="item.sell_price != null"
+                        @click="execMarketBuy(item)"
+                        :disabled="marketActionItem === item.item_id"
+                        class="btn text-[10px] px-1.5 py-0.5 bg-space-yellow/20 text-space-yellow border-space-yellow/30 hover:bg-space-yellow/40 disabled:opacity-40"
+                        title="Buy from station → auto-deposit to faction storage">
+                        {{ marketActionItem === item.item_id && marketActionType === 'buy' ? '⏳' : 'Buy' }}
+                      </button>
+                      <!-- Sell to station → auto-withdraw from storage -->
+                      <button v-if="item.buy_price != null"
+                        @click="execMarketSell(item)"
+                        :disabled="marketActionItem === item.item_id"
+                        class="btn text-[10px] px-1.5 py-0.5 bg-space-green/20 text-space-green border-space-green/30 hover:bg-space-green/40 disabled:opacity-40"
+                        title="Auto-withdraw from storage → sell to station">
+                        {{ marketActionItem === item.item_id && marketActionType === 'sell' ? '⏳' : 'Sell' }}
+                      </button>
+                    </div>
+                  </td>
+                </tr>
+                <tr v-if="filteredMarket.length === 0">
+                  <td colspan="4" class="py-4 text-center text-space-text-dim italic">No items match filter</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        </template>
+
         <!-- ── Chat Tab ──────────────────────────────────── -->
         <template v-else-if="tab === 'chat'">
           <!-- Channel selector -->
@@ -384,7 +467,7 @@ const emit = defineEmits<{
 const botStore = useBotStore();
 
 // ── State ─────────────────────────────────────────────────────
-const tab = ref<'station' | 'personal' | 'build' | 'chat'>(props.mode === 'facility' ? 'personal' : 'station');
+const tab = ref<'station' | 'personal' | 'build' | 'chat' | 'market'>(props.mode === 'facility' ? 'personal' : 'station');
 const loading = ref(false);
 const typesLoading = ref(false);
 const actionLoading = ref<string | null>(null);
@@ -402,6 +485,31 @@ const expanded = ref(new Set<string>());
 const activeUpgrade = ref<string | null>(null);
 const buildErrors = ref<Record<string, string>>({});
 const typeDetails = ref<Record<string, any>>({}); // facility_type id → detailed type info (build_materials etc.)
+
+// Faction ownership lookup (from DB cache)
+const cachedFactions = ref<Record<string, { id: string; name: string; tag: string; primary_color: string }>>({});
+
+async function loadFactionCache(): Promise<void> {
+  try {
+    const r = await fetch('/api/factions');
+    if (r.ok) {
+      const list: any[] = await r.json();
+      const map: Record<string, any> = {};
+      for (const f of list) if (f.id) map[f.id] = f;
+      cachedFactions.value = map;
+    }
+  } catch { /* silent */ }
+}
+
+function factionFor(f: any): { name: string; tag: string; primary_color: string } | null {
+  const id = f.faction_id || f.owner_faction_id;
+  if (!id) return null;
+  const cached = cachedFactions.value[id];
+  if (cached) return cached;
+  // Fallback: if the facility itself carries faction_name
+  if (f.faction_name) return { name: f.faction_name, tag: '', primary_color: '' };
+  return null;
+}
 
 // ── Computed ─────────────────────────────────────────────
 const hasQuarters = computed(() =>
@@ -449,6 +557,95 @@ const chatChannels = [
   { id: 'faction', label: '⚔️ Faction' },
   { id: 'private', label: '🔒 Private' },
 ];
+// ── Market ─────────────────────────────────────────────────
+const marketItems = ref<any[]>([]);
+const marketLoading = ref(false);
+const marketSearch = ref('');
+
+const filteredMarket = computed(() => {
+  const q = marketSearch.value.toLowerCase().trim();
+  return q
+    ? marketItems.value.filter(i =>
+        (i.item_name || i.name || i.item_id || '').toLowerCase().includes(q)
+      )
+    : marketItems.value;
+});
+
+async function loadMarket(): Promise<void> {
+  if (marketLoading.value) return;
+  marketLoading.value = true;
+  try {
+    const res = await execAsync('view_market');
+    if (!res.ok) { notif(res.error || 'Failed to load market', 'error'); return; }
+    const d = res.data || {};
+    const raw: any[] = Array.isArray(d) ? d
+      : Array.isArray(d.items) ? d.items
+      : Array.isArray(d.market) ? d.market
+      : [];
+    marketItems.value = raw.map((i: any) => ({
+      item_id:      i.item_id || i.id || '',
+      item_name:    i.name || i.item_name || (i.item_id || '').replace(/_/g, ' '),
+      buy_price:    i.buy_price ?? i.buy ?? null,
+      buy_quantity: i.buy_quantity ?? i.buy_volume ?? 0,
+      sell_price:   i.sell_price ?? i.sell ?? null,
+      sell_quantity:i.sell_quantity ?? i.sell_volume ?? 0,
+    })).filter((i: any) => i.item_id).sort((a: any, b: any) => (a.item_name || '').localeCompare(b.item_name || ''));
+  } finally {
+    marketLoading.value = false;
+  }
+}
+
+function switchToMarket(): void {
+  tab.value = 'market';
+  if (!marketItems.value.length) loadMarket();
+}
+
+const marketTradeQty = ref(1);
+const marketActionItem = ref<string | null>(null);
+const marketActionType = ref<'buy' | 'sell' | null>(null);
+const marketTradeResult = ref<{ ok: boolean; message: string } | null>(null);
+
+async function execMarketBuy(item: any): Promise<void> {
+  const qty = marketTradeQty.value || 1;
+  marketActionItem.value = item.item_id;
+  marketActionType.value = 'buy';
+  marketTradeResult.value = null;
+  try {
+    const buyRes = await execAsync('buy', { item_id: item.item_id, quantity: qty });
+    if (!buyRes.ok) { marketTradeResult.value = { ok: false, message: buyRes.error || 'Buy failed' }; return; }
+    const deposited = await execAsync('faction_deposit_items', { item_id: item.item_id, quantity: qty });
+    if (!deposited.ok) await execAsync('deposit_items', { item_id: item.item_id, quantity: qty });
+    marketTradeResult.value = { ok: true, message: `Bought ${qty}× ${item.item_name} → deposited to storage` };
+  } catch (e: any) {
+    marketTradeResult.value = { ok: false, message: e.message || 'Error' };
+  } finally {
+    marketActionItem.value = null;
+    marketActionType.value = null;
+  }
+}
+
+async function execMarketSell(item: any): Promise<void> {
+  const qty = marketTradeQty.value || 1;
+  marketActionItem.value = item.item_id;
+  marketActionType.value = 'sell';
+  marketTradeResult.value = null;
+  try {
+    const withdrawn = await execAsync('faction_withdraw_items', { item_id: item.item_id, quantity: qty });
+    if (!withdrawn.ok) {
+      const altWithdraw = await execAsync('withdraw_items', { item_id: item.item_id, quantity: qty });
+      if (!altWithdraw.ok) { marketTradeResult.value = { ok: false, message: `Nothing in storage: ${withdrawn.error || altWithdraw.error}` }; return; }
+    }
+    const sellRes = await execAsync('sell', { item_id: item.item_id, quantity: qty });
+    if (!sellRes.ok) { marketTradeResult.value = { ok: false, message: sellRes.error || 'Sell failed' }; return; }
+    marketTradeResult.value = { ok: true, message: `Sold ${qty}× ${item.item_name} for ${((sellRes.data?.credits_earned ?? sellRes.data?.total_value ?? 0) as number).toLocaleString()} cr` };
+  } catch (e: any) {
+    marketTradeResult.value = { ok: false, message: e.message || 'Error' };
+  } finally {
+    marketActionItem.value = null;
+    marketActionType.value = null;
+  }
+}
+
 const chatChannel = ref<string>('system');
 const chatMessages = ref<any[]>([]);
 const chatLoading = ref(false);
@@ -818,6 +1015,7 @@ function switchToBuild(): void {
 
 // ── Lifecycle ─────────────────────────────────────────────────
 onMounted(() => {
+  loadFactionCache();
   if ((currentBot.value as any)?.docked) reloadAll();
 });
 

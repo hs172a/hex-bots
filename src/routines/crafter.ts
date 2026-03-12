@@ -8,6 +8,7 @@ import {
   detectAndRecoverFromDeath,
   navigateToSystem,
   readSettings,
+  writeSettings,
   scavengeWrecks,
   sleep,
   logFactionActivity,
@@ -52,8 +53,27 @@ function getCrafterSettings(): {
     autoCraft: (c.autoCraft as boolean) ?? false,
     minProfitPct: (c.minProfitPct as number) ?? 10,
     maxAutoCraftRecipes: (c.maxAutoCraftRecipes as number) ?? 5,
-    maxFactionStoragePerItem: (c.maxFactionStoragePerItem as number) ?? 0,
+    maxFactionStoragePerItem: (c.maxFactionStoragePerItem as number) ?? 30000,
   };
+}
+
+/**
+ * Remove all craft/crafter goals for a specific output item_id from a bot's settings.
+ * Called when faction storage for that item exceeds maxFactionStoragePerItem.
+ */
+export function removeCraftGoalsByItemId(ownerBot: string, itemId: string): void {
+  const all = readSettings();
+  const botSettings = all[ownerBot] as Record<string, unknown> | undefined;
+  if (!botSettings) return;
+  const goals = botSettings.goals as Array<Record<string, unknown>> | undefined;
+  if (!Array.isArray(goals)) return;
+  const filtered = goals.filter(
+    g => g.target_id !== itemId ||
+    (g.goal_type !== 'craft' && g.goal_type !== 'crafter'),
+  );
+  if (filtered.length < goals.length) {
+    writeSettings({ [ownerBot]: { goals: filtered } });
+  }
 }
 
 // ── Recipe/inventory helpers ─────────────────────────────────
@@ -416,6 +436,45 @@ function pickRecipe(
 }
 
 /**
+ * Pick the best recipe from candidates that maximises available materials.
+ * Among skill-ok candidates, prefers the one where we can produce the most
+ * batches right now (cargo + storage + faction storage).
+ * Returns null if all candidates are skill-blocked.
+ */
+function pickRecipeWithMaterials(
+  candidates: Recipe[],
+  ctx: RoutineContext,
+  preferRecipeId?: string,
+): Recipe | null {
+  if (candidates.length === 0) return null;
+  if (preferRecipeId) {
+    const explicit = candidates.find(r => r.recipe_id === preferRecipeId);
+    if (explicit && canCraftSkillwise(ctx, explicit).ok) {
+      // Only hard-prefer the explicit recipe if materials are actually available for it.
+      // If materials are 0, fall through to best-by-materials so an alternative recipe
+      // that has materials stocked is chosen instead.
+      const batches = explicit.components.length === 0 ? 1 :
+        explicit.components.reduce((min, c) =>
+          Math.min(min, Math.floor(countItem(ctx, c.item_id) / c.quantity)), Number.MAX_SAFE_INTEGER);
+      if (batches > 0 && isFinite(batches)) return explicit;
+    }
+  }
+  const skillOk = candidates.filter(r => canCraftSkillwise(ctx, r).ok);
+  if (skillOk.length === 0) return null;
+  if (skillOk.length === 1) return skillOk[0];
+  let best = skillOk[0];
+  let bestBatches = -1;
+  for (const r of skillOk) {
+    if (r.components.length === 0) return r; // free to craft — best possible
+    const batches = r.components.reduce((min, c) =>
+      Math.min(min, Math.floor(countItem(ctx, c.item_id) / c.quantity)), Number.MAX_SAFE_INTEGER);
+    const b = isFinite(batches) ? batches : 0;
+    if (b > bestBatches) { bestBatches = b; best = r; }
+  }
+  return best;
+}
+
+/**
  * Attempt to craft prerequisite materials that a recipe needs.
  * For each missing component, check if there's a recipe to produce it,
  * and if raw materials are available, craft it first.
@@ -436,15 +495,9 @@ async function craftPrerequisites(
     if (totalAvailable >= comp.quantity) continue; // have enough
 
     const deficit = comp.quantity - totalAvailable;
-    const prereqRecipe = pickRecipe(recipeIndex.get(comp.item_id) ?? [], ctx);
-    if (!prereqRecipe) continue; // no suitable recipe to craft this item
-
-    // Skip if the bot lacks the required skill for this prereq recipe
-    const prereqSkill = canCraftSkillwise(ctx, prereqRecipe);
-    if (!prereqSkill.ok) {
-      ctx.log("warn", `[craftPrerequisites] Skill too low for '${prereqRecipe.name}': ${prereqSkill.reason} — cannot craft prereq`);
-      continue;
-    }
+    // Pick the skill-ok recipe with most available materials for this component
+    const prereqRecipe = pickRecipeWithMaterials(recipeIndex.get(comp.item_id) ?? [], ctx);
+    if (!prereqRecipe) continue; // no skill-ok recipe for this component
 
     // How many batches do we need? (each batch produces output_quantity)
     const batchesNeeded = Math.ceil(deficit / (prereqRecipe.output_quantity || 1));
@@ -504,8 +557,10 @@ async function craftPrerequisites(
 }
 
 /**
- * Grind crafting XP by crafting the simplest recipes we have materials for.
- * Tries up to 5 crafts of the cheapest available recipe to level up skill.
+ * Grind crafting XP by crafting the simplest available recipes.
+ * Caps at `maxCraftCalls` craft API calls per invocation to prevent infinite loops.
+ * If `targetSkillId` is provided, prefers recipes that train that skill; if none exist,
+ * returns immediately (the skill cannot be gained through crafting).
  * Returns list of items crafted for logging.
  */
 async function grindCraftingXP(
@@ -514,6 +569,8 @@ async function grindCraftingXP(
   recipeIndex: Map<string, Recipe[]>,
   allowedRecipeIds?: Set<string>,
   excludeRecipeIds?: Set<string>,
+  maxCraftCalls: number = 15,
+  targetSkillId?: string,
 ): Promise<string[]> {
   const { bot } = ctx;
   const crafted: string[] = [];
@@ -554,12 +611,40 @@ async function grindCraftingXP(
 
   if (candidates.length === 0) return crafted;
 
-  // Sort by complexity (simplest first — basic refining recipes)
-  candidates.sort((a, b) => a.complexity - b.complexity);
+  // 3-tier sort when targeting a specific skill:
+  //   Tier 0 — recipe explicitly REQUIRES the target skill (direct XP source)
+  //   Tier 1 — recipe output_item_id or name contains the skill's domain keyword
+  //            (e.g. 'weapon' for 'weapon_crafting', 'armor' for 'armor_crafting').
+  //            These recipes train the skill even though their requiredSkill may be
+  //            basic_crafting or advanced_crafting.
+  //   Tier 2 — anything else (sorted by complexity)
+  if (targetSkillId) {
+    const domainKeyword = targetSkillId.endsWith("_crafting")
+      ? targetSkillId.slice(0, -"_crafting".length).toLowerCase()
+      : null;
+    const matchesDomain = (r: Recipe): boolean =>
+      domainKeyword !== null && (
+        r.output_item_id.toLowerCase().includes(domainKeyword) ||
+        r.name.toLowerCase().includes(domainKeyword)
+      );
+    candidates.sort((a, b) => {
+      const aRequires = a.recipe.requiredSkill?.skillId === targetSkillId ? 0 : 1;
+      const bRequires = b.recipe.requiredSkill?.skillId === targetSkillId ? 0 : 1;
+      if (aRequires !== bRequires) return aRequires - bRequires;
+      const aDomain = matchesDomain(a.recipe) ? 0 : 1;
+      const bDomain = matchesDomain(b.recipe) ? 0 : 1;
+      if (aDomain !== bDomain) return aDomain - bDomain;
+      return a.complexity - b.complexity;
+    });
+  } else {
+    candidates.sort((a, b) => a.complexity - b.complexity);
+  }
 
+  let craftCallsDone = 0;
   // Try all candidates in order; when one runs out of materials, move to the next
   for (const { recipe: target } of candidates) {
     if (bot.state !== "running") break;
+    if (craftCallsDone >= maxCraftCalls) break;
 
     if (!hasMaterialsAnywhere(ctx, target)) continue;
 
@@ -579,9 +664,10 @@ async function grindCraftingXP(
 
     ctx.log("craft", `Grinding XP: ${target.name} (${target.components.map(c => `${c.quantity}x ${c.name}`).join(", ")})`);
 
-    // Craft until materials are exhausted for this candidate
+    // Craft until materials are exhausted or call limit reached
     while (bot.state === "running") {
       if (!hasMaterialsAnywhere(ctx, target)) break;
+      if (craftCallsDone >= maxCraftCalls) break;
 
       // Calculate how many batches to pull BEFORE withdrawing so withdrawal fills cargo
       // for multiple crafts rather than just 1 (the old bug: withdraw count defaulted to 1).
@@ -621,6 +707,7 @@ async function grindCraftingXP(
       const qty = (result?.count as number) || (result?.quantity as number) || (target.output_quantity * batchCount);
       crafted.push(`${qty}x ${target.output_name || target.name}`);
       bot.stats.totalCrafted += qty;
+      craftCallsDone++;
       applyCraftDelta(ctx, target, batchCount, result);
 
       // Flush crafted output if cargo is getting full to prevent accumulation
@@ -913,16 +1000,29 @@ export const crafterRoutine: Routine = async function* (ctx: RoutineContext) {
           if (!goal?.crafter_bot || goal.crafter_bot !== bot.username) continue;
           if (goal.goal_type !== "craft" && goal.goal_type !== "crafter") continue;
 
-          const recipe = recipes.find(r =>
-            (goal.recipe_id && r.recipe_id === goal.recipe_id) ||
-            r.output_item_id === goal.target_id ||
-            r.recipe_id === goal.target_id ||
-            (goal.target_name && (r.name === goal.target_name || r.output_name === goal.target_name))
-          );
-          if (!recipe) {
+          // Collect ALL recipes that can produce this goal's output item
+          const goalCandidates: Recipe[] = [];
+          if (goal.recipe_id) {
+            const ex = recipes.find(r => r.recipe_id === goal.recipe_id);
+            if (ex) goalCandidates.push(ex);
+          }
+          if (goal.target_id) {
+            for (const r of (recipeIndex.get(goal.target_id) ?? [])) {
+              if (!goalCandidates.some(c => c.recipe_id === r.recipe_id)) goalCandidates.push(r);
+            }
+          }
+          if (goalCandidates.length === 0 && goal.target_name) {
+            for (const r of recipes) {
+              if ((r.name === goal.target_name || r.output_name === goal.target_name) &&
+                  !goalCandidates.some(c => c.recipe_id === r.recipe_id)) goalCandidates.push(r);
+            }
+          }
+          if (goalCandidates.length === 0) {
             ctx.log("warn", `[CrafterGoal] No recipe for '${goal.target_name || goal.target_id}' — skipping`);
             continue;
           }
+          // Pick skill-ok recipe with most available materials; fall back to first if all blocked
+          let recipe = pickRecipeWithMaterials(goalCandidates, ctx, goal.recipe_id) ?? goalCandidates[0];
           // Navigate to the goal's target station if this bot is elsewhere
           if (goal.target_system && goal.target_system !== bot.system) {
             ctx.log("craft", `[CrafterGoal] Navigating to ${goal.target_system} for '${goal.target_name || recipe.name}'`);
@@ -935,11 +1035,16 @@ export const crafterRoutine: Routine = async function* (ctx: RoutineContext) {
             await bot.refreshFactionStorage();
           }
 
-          // Skill check BEFORE withdrawing any materials
+          // Skill check: pickRecipeWithMaterials already prefers skill-ok recipes;
+          // if recipe is still skill-blocked it means ALL candidates are blocked
           const goalSkillOk = canCraftSkillwise(ctx, recipe);
           if (!goalSkillOk.ok) {
-            ctx.log("warn", `[CrafterGoal] Skill too low for '${recipe.name}': ${goalSkillOk.reason} — grinding XP`);
-            const xpItems = await grindCraftingXP(ctx, recipes, recipeIndex, undefined, illegalRecipes);
+            const blockedSkillId = recipe.requiredSkill?.skillId;
+            ctx.log("warn", `[CrafterGoal] All ${goalCandidates.length} recipe(s) for '${goal.target_name || goal.target_id}' require skill: ${goalSkillOk.reason}`);
+            if (goalCandidates.length > 1) {
+              ctx.log("info", `[CrafterGoal] Candidates: ${goalCandidates.map(r => r.name).join(", ")}`);
+            }
+            const xpItems = await grindCraftingXP(ctx, recipes, recipeIndex, undefined, illegalRecipes, 15, blockedSkillId);
             if (xpItems.length > 0) {
               ctx.log("craft", `[CrafterGoal] XP grind: ${xpItems.join(", ")}`);
               await dumpCargo(ctx);
@@ -1086,9 +1191,9 @@ export const crafterRoutine: Routine = async function* (ctx: RoutineContext) {
       if (!skillCheck.ok) {
         // Skill too low — grind XP on simpler recipes instead of pulling materials
         const allowedIds = new Set(settings.craftLimits.map(cl => cl.recipeId));
-        let xpCrafted = await grindCraftingXP(ctx, recipes, recipeIndex, allowedIds, illegalRecipes);
+        let xpCrafted = await grindCraftingXP(ctx, recipes, recipeIndex, allowedIds, illegalRecipes, 15, recipe.requiredSkill?.skillId);
         if (xpCrafted.length === 0) {
-          xpCrafted = await grindCraftingXP(ctx, recipes, recipeIndex, undefined, illegalRecipes);
+          xpCrafted = await grindCraftingXP(ctx, recipes, recipeIndex, undefined, illegalRecipes, 15, recipe.requiredSkill?.skillId);
         }
         if (xpCrafted.length > 0) {
           await dumpCargo(ctx); // flush crafted XP items before next recipe
@@ -1228,9 +1333,9 @@ export const crafterRoutine: Routine = async function* (ctx: RoutineContext) {
       // ── Skill too low: try grinding XP on configured recipes only ──
       if (hitSkillBlock && bot.state === "running") {
         const allowedIds = new Set(settings.craftLimits.map(cl => cl.recipeId));
-        let xpCrafted = await grindCraftingXP(ctx, recipes, recipeIndex, allowedIds, illegalRecipes);
+        let xpCrafted = await grindCraftingXP(ctx, recipes, recipeIndex, allowedIds, illegalRecipes, 15, recipe.requiredSkill?.skillId);
         if (xpCrafted.length === 0) {
-          xpCrafted = await grindCraftingXP(ctx, recipes, recipeIndex, undefined, illegalRecipes);
+          xpCrafted = await grindCraftingXP(ctx, recipes, recipeIndex, undefined, illegalRecipes, 15, recipe.requiredSkill?.skillId);
         }
         if (xpCrafted.length > 0) {
           skillSummary.push(`${recipe.name} (skill too low, ground ${xpCrafted.join(", ")} for XP)`);
@@ -1273,6 +1378,16 @@ export const crafterRoutine: Routine = async function* (ctx: RoutineContext) {
       for (const prof of ranked) {
         if (bot.state !== "running") break;
         const recipe = prof.recipe;
+
+        // Faction storage quota — same guard as in craftLimits loop
+        if (settings.maxFactionStoragePerItem > 0) {
+          const outputId = recipe.output_item_id || recipe.recipe_id;
+          const inFactionStorage = bot.factionStorage.find(i => i.itemId === outputId)?.quantity ?? 0;
+          if (inFactionStorage >= settings.maxFactionStoragePerItem) {
+            ctx.log("craft", `autoCraft skip ${recipe.output_name || recipe.name}: faction storage ${inFactionStorage}/${settings.maxFactionStoragePerItem} (quota)`);
+            continue;
+          }
+        }
 
         if (!hasMaterialsAnywhere(ctx, recipe)) continue; // materials may have been consumed
 

@@ -320,7 +320,7 @@
 
           <!-- Dependency tree (flat, indented) -->
           <div class="text-[10px] text-space-text-dim uppercase font-semibold mb-1">Dependency tree:</div>
-          <div class="font-mono text-[11px] space-y-0.5 max-h-56 overflow-auto scrollbar-dark bg-[#0d1117] rounded p-2">
+          <div class="font-mono text-[11px] space-y-0.5 max-h-56 overflow-auto scrollbar-dark bg-[#0d1117f0] rounded p-2">
             <div
               v-for="(row, i) in flattenedTree"
               :key="i"
@@ -466,7 +466,7 @@
       <div ref="cmdBroadcastRef" class="flex-1 overflow-auto mt-1 pr-0.5 font-mono scrollbar-dark">
         <template v-for="(group, idx) in groupedBroadcastLogs" :key="idx">
           <div v-if="group.entry.type === 'market'" class="rounded border px-1 py-0.5 my-1 text-[11px]"
-            :class="group.entry.titleType === 'shortage' ? 'border-orange-800/50 bg-orange-950/20' : group.entry.titleType === 'surplus' ? 'border-green-800/50 bg-green-950/20' : 'border-space-border bg-[#0d1117]'">
+            :class="group.entry.titleType === 'shortage' ? 'border-orange-800/50 bg-orange-950/20' : group.entry.titleType === 'surplus' ? 'border-green-800/50 bg-green-950/20' : 'border-space-border bg-[#0d1117f0]'">
             <div class="flex items-center gap-1.5 mb-1">
               <span v-if="group.entry.time" class="text-[#555d6b] shrink-0">{{ group.entry.time }}</span>
               <span class="font-semibold text-space-yellow">{{ group.entry.sender }}</span>
@@ -570,7 +570,7 @@
         <div v-if="fleetStats.warnings.length === 0" class="text-[11px] text-space-green">✓ All bots healthy</div>
         <div class="flex-1 overflow-auto scrollbar-dark space-y-1">
           <div v-for="w in fleetStats.warnings" :key="w.username + w.type"
-            class="flex items-center justify-between text-[11px] bg-[#0d1117] border rounded px-2 py-1"
+            class="flex items-center justify-between text-[11px] bg-[#0d1117f0] border rounded px-2 py-1"
             :class="w.type === 'hull' ? 'border-red-800/40' : 'border-orange-800/40'">
             <span class="text-space-text truncate mr-2">{{ w.username }}</span>
             <span :class="w.type === 'hull' ? 'text-red-400' : 'text-orange-400'" class="shrink-0 font-medium">
@@ -1090,7 +1090,16 @@ const gathererGoals = computed(() => {
         // Filter by target_poi when available; otherwise sum across all POIs
         const fsItems = botStore.factionStorageItems
         const inFaction = fsItems
-          .filter(i => i.item_id === m.item_id && (!goal.target_poi || i.poi_id === goal.target_poi))
+          .filter(i => {
+            if (i.item_id !== m.item_id) return false
+            if (!goal.target_poi && !goal.target_system) return true
+            // Prefer exact POI match; fall back to system match
+            // (/api/faction-storage deduplicates to the newest POI per system,
+            // so goal.target_poi may differ from the stored poi_id)
+            if (goal.target_poi && i.poi_id === goal.target_poi) return true
+            if (goal.target_system && i.system_id === goal.target_system) return true
+            return false
+          })
           .reduce((sum, i) => sum + i.quantity, 0)
         const inCargo = b.inventory?.find((i: any) => i.itemId === m.item_id)?.quantity ?? 0
         const collected = Math.min(inFaction + inCargo, m.quantity_needed)

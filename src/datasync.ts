@@ -404,6 +404,58 @@ export class DataSyncServer {
           }
         }
 
+        // ── GET /sync/deposits ────────────────────────────────────────────
+        // Returns all known resource deposits on the master
+        if (req.method === "GET" && url.pathname === "/sync/deposits") {
+          return json({ deposits: map.getAllDeposits() });
+        }
+
+        // ── POST /sync/deposits ───────────────────────────────────────────
+        // Clients push deposit records; master upserts them (newer wins)
+        if (req.method === "POST" && url.pathname === "/sync/deposits") {
+          try {
+            const body = await req.json() as { deposits?: unknown[] };
+            const raw = body.deposits ?? [];
+            let accepted = 0;
+            for (const item of raw) {
+              const d = item as Record<string, unknown>;
+              if (!d.poi_id || !d.resource_id || !d.system_id || !d.last_seen_at) continue;
+              if (isFutureDated(d.last_seen_at, cfg.max_clock_skew_sec)) continue;
+              map.upsertDepositRecord(d as any);
+              accepted++;
+            }
+            return json({ ok: true, accepted, total: raw.length });
+          } catch {
+            return json({ error: "Invalid JSON" }, 400);
+          }
+        }
+
+        // ── GET /sync/online-players ───────────────────────────────────────
+        // Returns players seen in the last 48h on the master
+        if (req.method === "GET" && url.pathname === "/sync/online-players") {
+          return json({ players: map.getRecentOnlinePlayers(48) });
+        }
+
+        // ── POST /sync/online-players ──────────────────────────────────────
+        // Clients push recently-observed players; master upserts (newer wins)
+        if (req.method === "POST" && url.pathname === "/sync/online-players") {
+          try {
+            const body = await req.json() as { players?: unknown[] };
+            const raw = body.players ?? [];
+            let accepted = 0;
+            for (const item of raw) {
+              const p = item as Record<string, unknown>;
+              if (!p.player_id || !p.last_seen_at) continue;
+              if (isFutureDated(p.last_seen_at, cfg.max_clock_skew_sec)) continue;
+              map.upsertOnlinePlayers([p as any]);
+              accepted++;
+            }
+            return json({ ok: true, accepted, total: raw.length });
+          } catch {
+            return json({ error: "Invalid JSON" }, 400);
+          }
+        }
+
         // ── POST /sync/mining-claims ──────────────────────────────────────
         // Clients push their local mining claims; server merges them
         if (req.method === "POST" && url.pathname === "/sync/mining-claims") {
@@ -494,9 +546,11 @@ export class DataSyncClient {
         console.warn("[DataSync] Slow pull error:", e instanceof Error ? e.message : e));
       await this.pullFactionStorage().catch(e =>
         console.warn("[DataSync] Faction storage pull error:", e instanceof Error ? e.message : e));
+      await this.pullDeposits().catch(e =>
+        console.warn("[DataSync] Deposits pull error:", e instanceof Error ? e.message : e));
     }, pullMs);
 
-    // Fast push: market prices + pirate sightings + mining claims + faction storage (high-freq)
+    // Fast push: market prices + pirate sightings + mining claims + faction storage + deposits (high-freq)
     const fastPushMs = (push_interval_sec || 60) * 1000;
     this.fastPushTimer = setInterval(() => {
       this.pushFast().catch(e =>
@@ -505,6 +559,10 @@ export class DataSyncClient {
         console.warn("[DataSync] Mining claims push error:", e instanceof Error ? e.message : e));
       this.pushFactionStorage().catch(e =>
         console.warn("[DataSync] Faction storage push error:", e instanceof Error ? e.message : e));
+      this.pushDeposits().catch(e =>
+        console.warn("[DataSync] Deposits push error:", e instanceof Error ? e.message : e));
+      this.pushOnlinePlayers().catch(e =>
+        console.warn("[DataSync] Online players push error:", e instanceof Error ? e.message : e));
     }, fastPushMs);
 
     // Pull mining claims from master at same cadence as pull timer
@@ -955,6 +1013,52 @@ export class DataSyncClient {
       );
     }
     if (byPoi.size > 0) this.recordSuccess();
+  }
+
+  private async pushDeposits(): Promise<void> {
+    const deposits = this.map.getAllDeposits();
+    if (deposits.length === 0) return;
+    const resp = await fetch(`${this.cfg.master_url}/sync/deposits`, {
+      method: "POST",
+      headers: this.headers(),
+      body: JSON.stringify({ deposits }),
+      signal: AbortSignal.timeout(20_000),
+    });
+    if (resp.ok) this.recordSuccess();
+    else console.warn(`[DataSync] POST /sync/deposits → ${resp.status}`);
+  }
+
+  private async pushOnlinePlayers(): Promise<void> {
+    const players = this.map.getRecentOnlinePlayers(48);
+    if (players.length === 0) return;
+    const resp = await fetch(`${this.cfg.master_url}/sync/online-players`, {
+      method: "POST",
+      headers: this.headers(),
+      body: JSON.stringify({ players }),
+      signal: AbortSignal.timeout(20_000),
+    });
+    if (resp.ok) this.recordSuccess();
+    else console.warn(`[DataSync] POST /sync/online-players → ${resp.status}`);
+  }
+
+  private async pullDeposits(): Promise<void> {
+    const resp = await fetch(`${this.cfg.master_url}/sync/deposits`, {
+      headers: this.headers(),
+      signal: AbortSignal.timeout(20_000),
+    });
+    if (!resp.ok) { this.recordFailure(); return; }
+    const body = await resp.json() as { deposits?: unknown[] };
+    let merged = 0;
+    for (const raw of body.deposits ?? []) {
+      const d = raw as Record<string, unknown>;
+      if (!d.poi_id || !d.resource_id || !d.system_id) continue;
+      this.map.upsertDepositRecord(d as any);
+      merged++;
+    }
+    if (merged > 0) {
+      console.log(`[DataSync] Pulled ${merged} deposit record(s) from master`);
+      this.recordSuccess();
+    }
   }
 }
 

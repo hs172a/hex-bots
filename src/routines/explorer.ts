@@ -794,11 +794,28 @@ async function* scanStation(
     ) as Array<Record<string, unknown>>;
     marketCount = marketItemsList.length;
 
-    // Submit trade intel to faction (fire-and-forget)
-    if (bot.factionId) {
-      bot.exec("faction_submit_trade_intel", {
-        stations: poi.id ? [poi.id] : [],
-      }).catch(() => {});
+    // Submit trade intel to faction (fire-and-forget, delayed to avoid 409 tick-rate collision)
+    if (bot.factionId && poi.id && marketItemsList.length > 0) {
+      const intelItems = marketItemsList
+        .filter(i => i.buy_price != null || i.sell_price != null || i.buy != null || i.sell != null)
+        .map(i => ({
+          item_id:     ((i.item_id as string) || (i.id as string) || ""),
+          item_name:   ((i.name as string) || (i.item_name as string) || ""),
+          best_buy:    (i.buy_price as number) ?? (i.buy as number) ?? null,
+          best_sell:   (i.sell_price as number) ?? (i.sell as number) ?? null,
+          buy_volume:  (i.buy_quantity as number) ?? (i.buy_volume as number) ?? 0,
+          sell_volume: (i.sell_quantity as number) ?? (i.sell_volume as number) ?? 0,
+        }))
+        .filter(i => i.item_id);
+      if (intelItems.length > 0) {
+        const poiId = poi.id;
+        const stationName = poi.name || poiId;
+        setTimeout(() => {
+          bot.exec("faction_submit_trade_intel", {
+            stations: [{ base_id: poiId, station_name: stationName, items: intelItems }],
+          }).catch(() => {});
+        }, 11_000);
+      }
     }
   }
 

@@ -177,7 +177,7 @@
     <!-- Ship class tooltip -->
     <Teleport to="body">
       <div v-if="shipTooltipVisible && shipInfo?.class_id"
-        class="fixed z-[9999] w-86 bg-[#0d1117] border border-space-border rounded-lg shadow-2xl overflow-hidden pointer-events-none"
+        class="fixed z-[9999] w-86 bg-[#0d1117f0] border border-space-border rounded-lg shadow-2xl overflow-hidden pointer-events-none"
         :style="{ top: shipTooltipPos.y + 'px', left: shipTooltipPos.x + 'px' }">
         <img v-if="shipCatalogEntry" :src="shipImageUrl(shipInfo?.class_id || '')" :alt="shipCatalogEntry.name" class="w-full h-28 object-cover" @error="($event.target as HTMLImageElement).style.display='none'" />
         <div class="p-2.5 space-y-2">

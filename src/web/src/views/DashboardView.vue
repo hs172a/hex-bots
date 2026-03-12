@@ -60,7 +60,7 @@
     </div>
 
     <!-- Bot table card -->
-    <div class="card overflow-hidden flex flex-col mx-2 px-2 py-2">
+    <div class="card overflow-hidden flex flex-col mx-2 px-2 py-2 pt-0">
       <!-- Bot table -->
       <div class="flex-1 overflow-auto p-0">
         <table class="w-full text-sm">
@@ -115,6 +115,11 @@
                 >
                   {{ bot.state === 'running' && bot.routine ? bot.routine : bot.state }}
                 </span>
+                <span
+                  v-if="botStore.lrtBots.has(bot.username)"
+                  class="ml-1 badge px-1.5 py-0.5 text-[10px] bg-purple-900/40 text-purple-300 border border-purple-700/50"
+                  title="Long Range Travel in progress"
+                >🛸 LRT</span>
               </td>
               <td class="px-0 py-1">
                 <span class="text-space-yellow">₡{{ formatNumber(bot.credits) }}</span>
@@ -240,7 +245,7 @@
                   ? 'border-orange-800/50 bg-orange-950/20'
                   : group.entry.titleType === 'surplus'
                     ? 'border-green-800/50 bg-green-950/20'
-                    : 'border-space-border bg-[#0d1117]'"
+                    : 'border-space-border bg-[#0d1117f0]'"
               >
                 <div class="flex items-center gap-1.5 mb-1.5">
                   <span v-if="group.entry.time" class="text-[#555d6b] shrink-0">{{ group.entry.time }}</span>

@@ -13,6 +13,7 @@ import {
   refuelAtStation,
   factionDonateProfit,
   readSettings,
+  writeSettings,
   scavengeWrecks,
   detectAndRecoverFromDeath,
   getSystemInfo,
@@ -33,6 +34,8 @@ function getGasSettings(username?: string): {
   system: string;
   depositBot: string;
   targetGas: string;
+  /** Per-bot pinned harvest system. Overrides global system setting. */
+  gas_target: { system_id: string; system_name: string } | null;
 } {
   const all = readSettings();
   const m = all.gas_harvester || {};
@@ -46,7 +49,7 @@ function getGasSettings(username?: string): {
   return {
     depositMode:
       parseDepositMode(botOverrides.depositMode) ??
-      parseDepositMode(m.depositMode) ?? "storage",
+      parseDepositMode(m.depositMode) ?? "faction",
     depositFallback:
       parseDepositMode(botOverrides.depositFallback) ??
       parseDepositMode(m.depositFallback) ?? "storage",
@@ -57,6 +60,12 @@ function getGasSettings(username?: string): {
     system: (m.system as string) || "",
     depositBot: (botOverrides.depositBot as string) || (m.depositBot as string) || "",
     targetGas: (botOverrides.targetGas as string) || (m.targetGas as string) || "",
+    gas_target: (() => {
+      const raw = botOverrides.gas_target as Record<string, unknown> | undefined;
+      return raw?.system_id
+        ? { system_id: raw.system_id as string, system_name: (raw.system_name as string) || "" }
+        : null;
+    })(),
   };
 }
 
@@ -67,7 +76,23 @@ export const gasHarvesterRoutine: Routine = async function* (ctx: RoutineContext
 
   await bot.refreshStatus();
   const settings0 = getGasSettings(bot.username);
-  const homeSystem = settings0.homeSystem || bot.system;
+
+  // ── Remember launch station ───────────────────────────────────────────
+  const allBotSettings = readSettings();
+  const botSettings0 = (allBotSettings[bot.username] || {}) as Record<string, unknown>;
+  let launchStationPoi = (botSettings0.launchStationPoi as string) || "";
+
+  if (!launchStationPoi && bot.docked && bot.poi) {
+    launchStationPoi = bot.poi;
+    writeSettings({ [bot.username]: { launchStationPoi, launchSystem: bot.system } });
+    ctx.log("system", `Launch station recorded: ${launchStationPoi} (${bot.system})`);
+  }
+
+  const persistedLaunchSystem = (botSettings0.launchSystem as string) || "";
+  // bot.homeSystem is populated from get_status (home_system field) — use it as a fallback
+  // before bot.system so the harvester returns to the correct system after a server restart
+  // where launchStationPoi/launchSystem were not persisted (e.g. bot was in space at restart).
+  const homeSystem = settings0.homeSystem || persistedLaunchSystem || bot.homeSystem || bot.system;
 
   // ── Startup: return home and dump non-fuel cargo to storage ──
   await bot.refreshCargo();
@@ -176,8 +201,10 @@ export const gasHarvesterRoutine: Routine = async function* (ctx: RoutineContext
     await ensureUndocked(ctx);
 
     // ── Navigate to target system if configured ──
-    const targetSystemId = settings.system || "";
+    // Priority: per-bot gas_target > global system setting
+    const targetSystemId = settings.gas_target?.system_id || settings.system || "";
     if (targetSystemId && targetSystemId !== bot.system) {
+      if (settings.gas_target) ctx.log("harvesting", `Pinned target: ${settings.gas_target.system_name || targetSystemId}`);
       yield "navigate_to_target";
       const arrived = await navigateToSystem(ctx, targetSystemId, safetyOpts);
       if (!arrived) {
@@ -342,11 +369,22 @@ export const gasHarvesterRoutine: Routine = async function* (ctx: RoutineContext
       }
 
       const { pois: homePois } = await getSystemInfo(ctx);
-      const homeStation = findStation(homePois);
-      stationPoi = homeStation ? { id: homeStation.id, name: homeStation.name } : null;
+      // Prefer the recorded launch station; fallback to any station in homeSystem
+      if (launchStationPoi && homePois.some(p => p.id === launchStationPoi)) {
+        stationPoi = { id: launchStationPoi, name: launchStationPoi };
+      } else {
+        const homeStation = findStation(homePois);
+        stationPoi = homeStation ? { id: homeStation.id, name: homeStation.name } : null;
+      }
+    } else if (bot.system === homeSystem && launchStationPoi && !stationPoi) {
+      // Already in home system — use the launch station if it's available
+      const { pois: curPois } = await getSystemInfo(ctx);
+      if (curPois.some(p => p.id === launchStationPoi)) {
+        stationPoi = { id: launchStationPoi, name: launchStationPoi };
+      }
     }
 
-    // ── Travel to station ──
+    // ── Travel to station (preferred POI if known) ──
     yield "travel_to_station";
     if (stationPoi) {
       const travelStationResp = await bot.exec("travel", { target_poi: stationPoi.id });
@@ -355,12 +393,12 @@ export const gasHarvesterRoutine: Routine = async function* (ctx: RoutineContext
       }
     }
 
-    // ── Dock ──
+    // ── Dock (ensureDocked handles BFS to nearest station if none locally) ──
     yield "dock";
-    const dockResp = await bot.exec("dock");
-    if (dockResp.error && !dockResp.error.message.includes("already")) {
-      ctx.log("error", `Dock failed: ${dockResp.error.message}`);
-      await sleep(5000);
+    const docked = await ensureDocked(ctx);
+    if (!docked) {
+      ctx.log("error", "Cannot dock anywhere — waiting 30s before retry");
+      await sleep(20000);
       continue;
     }
     bot.docked = true;

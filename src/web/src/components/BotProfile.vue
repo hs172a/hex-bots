@@ -28,9 +28,14 @@
         {{ headerCreditsPerHour > 0 ? '↗' : '↘' }} {{ Math.abs(headerCreditsPerHour).toLocaleString() }} cr/h
       </span>
       <span class="badge shrink-0" :class="{ 'badge-green': currentBot.state === 'running', 'badge-cyan': ldTraveling, 'badge-yellow': !ldTraveling && (currentBot.state === 'idle' || currentBot.state === 'stopped'), 'badge-red': currentBot.state === 'error' }">{{ ldTraveling ? 'traveling' : currentBot.state }}</span>
-      <div class="flex gap-1 shrink-0">
-        <button v-if="currentBot.state === 'running'" @click="$emit('stop')" class="btn-danger text-xs px-2 py-0.5">Stop</button>
-        <button v-if="currentBot.state === 'idle' || currentBot.state === 'stopped'" @click="$emit('start')" class="btn btn-primary text-xs py-0.5 px-2">Start</button>
+      <div class="flex items-center gap-1 shrink-0">
+        <template v-if="currentBot.state === 'idle' || currentBot.state === 'stopped'">
+          <select v-model="selectedRoutine" class="input text-xs py-0.5 px-1 min-w-[110px]">
+            <option v-for="r in botStore.routines" :key="r.id" :value="r.id">{{ r.name }}</option>
+          </select>
+          <button @click="startBotWithRoutine" :disabled="!selectedRoutine" class="btn btn-primary text-xs py-0.5 px-2 disabled:opacity-40">▶ Start</button>
+        </template>
+        <button v-if="currentBot.state === 'running' || currentBot.state === 'stopping' || currentBot.state === 'error'" @click="stopBotDirect" class="btn-danger text-xs px-2 py-0.5">⏹ Stop</button>
       </div>
     </div>
     <!-- Body -->
@@ -48,6 +53,8 @@
               <div class="flex items-center gap-1 text-red-400"><span>💸</span><span>{{ formatNumber(currentBot.playerStats?.creditsSpent ?? 0) }}</span><span class="text-gray-500">spent</span></div>
               <div class="flex items-center gap-1 text-amber-400"><span>⛏️</span><span>{{ formatNumber(currentBot.playerStats?.oreMined ?? 0) }}</span><span class="text-gray-500">mined</span></div>
               <div class="flex items-center gap-1 text-blue-400"><span>🔄</span><span>{{ currentBot.playerStats?.tradesCompleted ?? 0 }}</span><span class="text-gray-500">trades</span></div>
+              <div class="flex items-center gap-1 text-red-400"><span>🔨</span><span>{{ currentBot.playerStats?.itemsCrafted ?? 0 }}</span><span class="text-gray-500">crafted</span></div>
+              <div class="flex items-center gap-1 text-red-400"><span>🏠</span><span>{{ currentBot.playerStats?.basesDestroyed ?? 0 }}</span><span class="text-gray-500">destroyed</span></div>
               <div class="flex items-center gap-1 text-red-400"><span>💥</span><span>{{ currentBot.playerStats?.shipsDestroyed ?? 0 }}</span><span class="text-gray-500">kills</span></div>
               <div class="flex items-center gap-1 text-gray-400"><span>💀</span><span>{{ currentBot.playerStats?.shipsLost ?? 0 }}</span><span class="text-gray-500">deaths</span></div>
               <div class="flex items-center gap-1 text-purple-400"><span>🗺️</span><span>{{ currentBot.playerStats?.systemsExplored ?? 0 }}</span><span class="text-gray-500">explored</span></div>
@@ -130,7 +137,7 @@
           <div class="py-1 px-0 border-b border-space-border bg-space-card">
             <div class="flex items-center justify-between">
               <h3 class="text-xs font-semibold text-space-text-dim uppercase">🏠 Station Storage</h3>
-              <span v-if="storage.length > 0" class="text-[11px] text-space-text-dim">{{ storage.reduce((s, i) => s + i.quantity, 0).toLocaleString() }} units</span>
+              <span v-if="currentBot.docked && storage.length > 0" class="text-[11px] text-space-text-dim">{{ storage.reduce((s, i) => s + i.quantity, 0).toLocaleString() }} units</span>
             </div>
           </div>
           <div class="py-1 px-0 max-h-60 overflow-auto scrollbar-dark">
@@ -145,11 +152,11 @@
           </div>
         </div>
         <!-- Faction Storage -->
-        <div v-if="currentBot.factionId" :key="currentBot.username + ':faction-storage'" class="card py-2 px-2 !mt-2 border-space-accent/30">
+        <div v-if="currentBot.factionId" :key="currentBot.username + ':faction-storage'" class="card py-2 px-2 !mt-2 !mb-2 border-space-accent/30">
           <div class="py-1 px-0 border-b border-space-border bg-space-card">
             <div class="flex items-center justify-between">
               <h3 class="text-xs font-semibold text-space-accent uppercase">🛡️ Faction Storage</h3>
-              <span v-if="factionStorage.length > 0" class="text-[11px] text-space-accent/70">{{ factionStorage.reduce((s, i) => s + i.quantity, 0).toLocaleString() }} units</span>
+              <span v-if="currentBot.docked && factionStorage.length > 0" class="text-[11px] text-space-accent/70">{{ factionStorage.reduce((s, i) => s + i.quantity, 0).toLocaleString() }} units</span>
             </div>
           </div>
           <div class="py-1 px-0 max-h-60 overflow-auto scrollbar-dark">
@@ -246,7 +253,7 @@
     <!-- Ship class tooltip -->
     <Teleport to="body">
       <div v-if="shipTooltipVisible && headerShipClassId"
-        class="fixed z-[9999] w-86 bg-[#0d1117] border border-space-border rounded-lg shadow-2xl overflow-hidden pointer-events-none"
+        class="fixed z-[9999] w-86 bg-[#0d1117f0] border border-space-border rounded-lg shadow-2xl overflow-hidden pointer-events-none"
         :style="{ top: shipTooltipPos.y + 'px', left: shipTooltipPos.x + 'px' }">
         <img v-if="headerShipCatalog"
           :src="headerShipImageUrl(headerShipClassId)"
@@ -300,7 +307,7 @@
         leave-to-class="opacity-0 translate-y-2">
         <div v-if="moduleNotif"
           class="fixed bottom-5 left-1/2 -translate-x-1/2 z-[9999] flex items-start gap-2.5 px-4 py-3 rounded-lg shadow-2xl border text-sm max-w-sm pointer-events-none"
-          :class="moduleNotif.type === 'success' ? 'bg-[#0d1117] border-green-500/60 text-green-300' : moduleNotif.type === 'warn' ? 'bg-[#0d1117] border-orange-500/60 text-orange-300' : 'bg-[#0d1117] border-red-500/60 text-red-300'">
+          :class="moduleNotif.type === 'success' ? 'bg-[#0d1117f0] border-green-500/60 text-green-300' : moduleNotif.type === 'warn' ? 'bg-[#0d1117f0] border-orange-500/60 text-orange-300' : 'bg-[#0d1117f0] border-red-500/60 text-red-300'">
           <span class="text-base shrink-0">{{ moduleNotif.type === 'success' ? '✅' : moduleNotif.type === 'warn' ? '📤' : '❌' }}</span>
           <span>{{ moduleNotif.text }}</span>
         </div>
@@ -328,6 +335,30 @@ interface Props { bot: any; }
 const props = defineProps<Props>();
 const emit = defineEmits(['close', 'start', 'stop']);
 const botStore = useBotStore();
+
+const selectedRoutine = ref(
+  (botStore.settings as any)?.[props.bot?.username]?.routine ||
+  props.bot?.routine ||
+  'miner'
+);
+
+watch(() => props.bot?.username, (newName) => {
+  selectedRoutine.value = (botStore.settings as any)?.[newName]?.routine || props.bot?.routine || 'miner';
+});
+
+function startBotWithRoutine() {
+  const username = currentBot.value?.username;
+  if (!username || !selectedRoutine.value) return;
+  botStore.startBot(username, selectedRoutine.value);
+  emit('start');
+}
+
+function stopBotDirect() {
+  const username = currentBot.value?.username;
+  if (!username) return;
+  botStore.stopBot(username);
+  emit('stop');
+}
 
 const SKILL_CATEGORY_MAP: Record<string, string> = {
   advanced_crafting:'crafting', basic_crafting:'crafting', blueprint_research:'crafting',
@@ -442,7 +473,10 @@ const controlPanel = ref<InstanceType<typeof BotControlPanel> | null>(null);
 const facilityPanel = ref<InstanceType<typeof BotStationPanel> | null>(null);
 /** True while Long Distance Travel is actively jumping — updated via ldStatusChange event. */
 const ldTraveling = ref(false);
-function onLdStatusChange(val: boolean) { ldTraveling.value = val; }
+function onLdStatusChange(val: boolean) {
+  ldTraveling.value = val;
+  botStore.setLrtStatus(props.bot.username, val);
+}
 watch(activeMainTab, (tab) => {
   if (tab === 'control') nextTick(() => controlPanel.value?.scrollToBottom());
 });

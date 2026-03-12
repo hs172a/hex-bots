@@ -26,6 +26,7 @@ import {
   getModProfile,
   ensureModsFitted,
   readSettings,
+  writeSettings,
   scavengeWrecks,
   sleep,
   sleepBot,
@@ -64,6 +65,8 @@ function getMinerV2Settings(username?: string, ms?: MapStore): {
   acceptMissions: boolean;
   oreQuotas: Record<string, number>;
   maxJumpsFromHome: number;
+  /** Per-bot pinned mining target (system + optional belt POI). Overrides automatic system selection. */
+  miner_target: { system_id: string; system_name: string; poi_id: string; poi_name: string } | null;
 } {
   const all = readSettings();
   const m = all.miner || {};
@@ -92,6 +95,16 @@ function getMinerV2Settings(username?: string, ms?: MapStore): {
       ? Boolean(m.acceptMissions)
       : true;
 
+  const rawTarget = botOverrides.miner_target as Record<string, unknown> | undefined;
+  const miner_target = rawTarget?.system_id
+    ? {
+        system_id: (rawTarget.system_id as string) || "",
+        system_name: (rawTarget.system_name as string) || "",
+        poi_id: (rawTarget.poi_id as string) || "",
+        poi_name: (rawTarget.poi_name as string) || "",
+      }
+    : null;
+
   return {
     depositMode,
     depositFallback,
@@ -105,6 +118,7 @@ function getMinerV2Settings(username?: string, ms?: MapStore): {
     acceptMissions,
     oreQuotas: (m.oreQuotas as Record<string, number>) || (ms ? defaultOreQuotas(ms) : {}),
     maxJumpsFromHome: (m.maxJumpsFromHome as number) || 0,
+    miner_target,
   };
 }
 
@@ -314,12 +328,13 @@ async function handleCargoFromResponse(
     }
     if (mode === "faction") {
       if (!bot.inFaction || noFactionStorage) return false;
-      // Cap pre-check: avoid withdraw→fail cycle when faction storage is full for this item
+      // Cap pre-check: avoid calling faction_deposit_items when near-cap (prevents [error] log spam).
+      // Check facQty + depositQty > cap (not just facQty >= cap) to catch near-cap situations.
       if (bot.poi) {
         const cap = ctx.mapStore.getFactionStorageCapPerItem(bot.poi);
         const facQty = bot.factionStorage.find(i => i.itemId === itemId)?.quantity ?? 0;
-        if (facQty >= cap) {
-          ctx.log("trade", `⛔ ${displayName}: faction storage cap (${facQty.toLocaleString()}/${cap.toLocaleString()}) — using fallback`);
+        if (facQty + quantity > cap) {
+          ctx.log("trade", `⛔ ${displayName}: faction storage near-cap (${facQty.toLocaleString()}/${cap.toLocaleString()}, deposit ${quantity}) — using fallback`);
           return false;
         }
       }
@@ -331,6 +346,12 @@ async function handleCargoFromResponse(
       const ec = factionResp.error.code ?? "";
       const em = factionResp.error.message ?? "";
       if (ec === "storage_cap_exceeded" || em.includes("storage_cap_exceeded") || em.includes("storage cap reached")) {
+        // Update local factionStorage cache so the next cycle's pre-check skips without retrying
+        if (bot.poi) {
+          const cap = ctx.mapStore.getFactionStorageCapPerItem(bot.poi);
+          const entry = bot.factionStorage.find(i => i.itemId === itemId);
+          if (entry) (entry as any).quantity = cap;
+        }
         ctx.log("trade", `⛔ ${displayName}: faction storage cap exceeded — using fallback`);
       } else if (ec === "no_faction_storage" || em.includes("no_faction_storage") || em.includes("faction_lockbox") ||
           ec === "not_in_faction" || em.includes("not_in_faction")) {
@@ -443,18 +464,49 @@ function updateCargoFromMineResult(bot: any, mineResult: any): void {
  * 4. Cache system info and reuse when possible
  * 5. Reduce redundant refresh calls in loops
  */
+/** Returns true if poiId is confirmed as a station (has_base) in the map, or true if not yet recorded (give benefit of doubt). */
+function isKnownStationPoi(poiId: string, ms: MapStore): boolean {
+  if (!poiId) return false;
+  const systems = ms.getAllSystems();
+  for (const sys of Object.values(systems)) {
+    const poi = (sys as any).pois?.find((p: any) => p.id === poiId);
+    if (poi) return !!(poi as any).has_base;
+  }
+  return true; // not in map yet — trust it; will discover on first dock attempt
+}
+
 export const minerRoutineV2: Routine = async function* (ctx: RoutineContext) {
   const { bot } = ctx;
 
   // Initial status update
   await batchStatusUpdate(ctx, false);
   const settings0 = getMinerV2Settings(bot.username, ctx.mapStore);
-  // homeSystem: setting > derive from homeBase POI in map > current system at startup
+
+  // ── Remember launch station ──────────────────────────────────────────────
+  // Priority: persisted launchStationPoi > docked station at startup > bot.homeBase
+  const allSettings = readSettings();
+  const botSettings = (allSettings[bot.username] || {}) as Record<string, unknown>;
+  let launchStationPoi = (botSettings.launchStationPoi as string) || "";
+
+  if (!launchStationPoi && bot.docked && bot.poi) {
+    // First run (or cleared): record the station the bot was launched from
+    launchStationPoi = bot.poi;
+    writeSettings({ [bot.username]: { launchStationPoi, launchSystem: bot.system } });
+    ctx.log("system", `Launch station recorded: ${launchStationPoi} (${bot.system})`);
+  }
+
+  // homeSystem: explicit setting > launch system from settings > derive from launchStation > current system
+  const persistedLaunchSystem = (botSettings.launchSystem as string) || "";
   const homeSystem = settings0.homeSystem ||
-    findSystemForPoi(ctx.mapStore, bot.homeBase) ||
+    persistedLaunchSystem ||
+    findSystemForPoi(ctx.mapStore, launchStationPoi || bot.homeBase) ||
     bot.system;
-  // homeStationId: the specific station POI to dock at for unloading (home base)
-  const homeStationId = bot.homeBase || "";
+  // homeStationId: launch station > game homeBase (only if homeBase is a known station POI).
+  // bot.homeBase may point to a planet/asteroid/belt — skip it if mapStore confirms it has no base.
+  const homeBaseStation = bot.homeBase && isKnownStationPoi(bot.homeBase, ctx.mapStore) ? bot.homeBase : "";
+  const homeStationId = launchStationPoi || homeBaseStation || "";
+  // Track POIs that have no base so we never re-try them (prevents dock dead loop)
+  const noBasePois = new Set<string>();
   const depletedSystems = new Set<string>();
   let lastTargetOre = "";
   const wrongModulePois = new Set<string>();
@@ -682,7 +734,20 @@ export const minerRoutineV2: Routine = async function* (ctx: RoutineContext) {
       }
     }
 
-    if (!targetSystemId && miningSystem && miningSystem !== bot.system) {
+    // Per-bot pinned target overrides automatic system selection (highest priority)
+    if (settings.miner_target?.system_id) {
+      const mt = settings.miner_target;
+      targetSystemId = mt.system_id;
+      if (mt.poi_id) {
+        targetBeltId = mt.poi_id;
+        targetBeltName = mt.poi_name;
+      } else {
+        // Clear any belt selected by ore-quota logic — it belongs to a different system
+        targetBeltId = "";
+        targetBeltName = "";
+      }
+      ctx.log("mining", `Pinned target: ${mt.system_name || mt.system_id}${mt.poi_name ? ` → ${mt.poi_name}` : ""}`);
+    } else if (!targetSystemId && miningSystem && miningSystem !== bot.system) {
       targetSystemId = miningSystem;
     }
 
@@ -976,7 +1041,7 @@ export const minerRoutineV2: Routine = async function* (ctx: RoutineContext) {
       lastSystemRefresh = Date.now();
       if (actualSystemId) bot.system = actualSystemId;
       // Use home station only if we actually reached the home system
-      if (arrived && homeStationId) {
+      if (arrived && homeStationId && !noBasePois.has(homeStationId)) {
         stationPoi = { id: homeStationId, name: homeStationId };
       } else {
         const foundStation = findStation(homePois);
@@ -985,7 +1050,7 @@ export const minerRoutineV2: Routine = async function* (ctx: RoutineContext) {
     } else if (bot.system === homeSystem) {
       // Already in home system — use homeStationId only if it exists in the current system's POIs
       // (prevents wrong_system error when homeBase POI is from a different system than bot.system)
-      const homeInCurrentSystem = homeStationId && cachedSystemInfo?.pois.some(p => p.id === homeStationId);
+      const homeInCurrentSystem = homeStationId && !noBasePois.has(homeStationId) && cachedSystemInfo?.pois.some(p => p.id === homeStationId);
       if (homeInCurrentSystem) {
         stationPoi = { id: homeStationId, name: homeStationId };
       } else {
@@ -1037,8 +1102,16 @@ export const minerRoutineV2: Routine = async function* (ctx: RoutineContext) {
     }
     const dockResp = await bot.exec("dock");
     if (dockResp.error && !dockResp.error.message.includes("already")) {
-      ctx.log("error", `Dock failed: ${dockResp.error.message}`);
-      await sleep(5000);
+      const dockErr = dockResp.error.message || '';
+      ctx.log("error", `Dock failed: ${dockErr}`);
+      if (dockErr.toLowerCase().includes("no base") || dockErr.toLowerCase().includes("not a base")) {
+        if (stationPoi) noBasePois.add(stationPoi.id);
+        stationPoi = null;
+        ctx.log("error", "No docking facility — blacklisting POI, will find another station");
+        await sleep(3000);
+      } else {
+        await sleep(5000);
+      }
       continue;
     }
     bot.docked = true;

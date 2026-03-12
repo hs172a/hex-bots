@@ -1,5 +1,5 @@
 <template>
-  <div class="flex-1 flex flex-row gap-2 pt-2 px-0 overflow-hidden">
+  <div class="flex-1 min-h-0 flex flex-row gap-2 pt-2 px-0 overflow-hidden">
     <!-- Manual Control Panel -->
     <div class="card py-2 px-2 flex flex-col flex-1 overflow-hidden">
       <div class="py-1 px-0 border-b border-space-border bg-space-card">
@@ -53,7 +53,7 @@
               </button>
             </div>
             <div v-if="ldRouteError" class="text-xs text-space-red">⚠ {{ ldRouteError }}</div>
-            <div v-if="ldRoute.length > 0" class="bg-[#0d1117] border border-space-border rounded p-1 space-y-2 text-[11px]">
+            <div v-if="ldRoute.length > 0" class="bg-[#0d1117f0] border border-space-border rounded p-1 space-y-2 text-[11px]">
               <div class="flex items-center gap-1">
                 <span class="text-xs font-semibold text-space-text-bright shrink-0">Route: {{ ldRoute.length }} jumps</span>
                 <span class="text-[11px] text-space-text-dim shrink-0">~{{ Math.round(ldRoute.length * jumpTimeSec / 60) }}min · {{ jumpFuelCost * ldRoute.length }}⚡</span>
@@ -93,7 +93,7 @@
           </div>
 
           <!-- Quick Travel: POI shortcuts within the current system -->
-          <div v-if="otherSystemPois.length > 0" class="col-span-2 bg-[#0d1117] border border-space-border rounded p-1.5">
+          <div v-if="otherSystemPois.length > 0" class="col-span-2 bg-[#0d1117f0] border border-space-border rounded p-1.5">
             <div class="text-[11px] text-space-text-dim font-semibold mb-1 flex items-center justify-between">
               <span>🚀 Quick Travel</span>
               <span v-if="currentBot.docked" class="text-amber-400 text-[10px]">⚠ Undock first</span>
@@ -114,7 +114,7 @@
           </div>
 
           <!-- Jump to Connected Systems -->
-          <div v-if="connectedSystems.length > 0" class="col-span-2 bg-[#0d1117] border border-space-border rounded p-1.5">
+          <div v-if="connectedSystems.length > 0" class="col-span-2 bg-[#0d1117f0] border border-space-border rounded p-1.5">
             <div class="text-[11px] text-space-text-dim font-semibold mb-1 flex items-center justify-between">
               <span>🌀 Jump Gates</span>
               <span v-if="currentBot.docked" class="text-amber-400 text-[10px]">⚠ Undock first</span>
@@ -141,7 +141,6 @@
 
           <!-- Dock/Undock / Mine/Scan / Refuel/Repair -->
           <div class="flex gap-2 items-center">
-            <label class="text-xs text-space-text-dim w-18"></label>
             <button @click="execCommand('dock')" class="btn btn-secondary text-xs px-3 py-1">🏠 Dock</button>
             <button @click="execCommand('undock')" class="btn btn-secondary text-xs px-3 py-1">🚀 Undock</button>
             <button @click="execCommand('mine')" class="btn btn-secondary text-xs px-3 py-1">⛏️ Mine</button>
@@ -164,13 +163,16 @@
               <select v-model="craftRecipe" class="input text-xs flex-1 !p-1">
                 <option value="">{{ craftableRecipes.length > 0 ? `Select recipe... (${craftableRecipes.length} available)` : (recipes.length > 0 ? 'No craftable recipes' : 'Loading...') }}</option>
                 <option v-for="r in craftableRecipes" :key="r.id" :value="r.id">
-                  {{ r.name || r.id }} {{ r.category ? `[${r.category}]` : '' }}
+                  {{ r.output ? `${r.output.name || r.output.item_id} — ${r.name || r.id}` : (r.name || r.id) }}{{ r.category ? ` [${r.category}]` : '' }}
                 </option>
               </select>
               <input v-model.number="craftQty" type="number" min="1" class="input text-xs w-16 !p-1 scrollbar-dark" value="1">
-              <button @click="execCraft" class="btn btn-primary text-xs px-3 py-1">Craft</button>
+              <button @click="execCraft" :disabled="craftRunning" class="btn btn-primary text-xs px-3 py-1">{{ craftRunning ? '⏳' : 'Craft' }}</button>
             </div>
-            <div v-if="selectedRecipeInfo" class="ml-20 bg-[#0d1117] border border-space-border rounded p-2 text-[11px]">
+            <div v-if="craftResult" class="ml-20 text-[11px] mt-0.5" :class="craftResult.ok ? 'text-space-green' : 'text-red-400'">
+              {{ craftResult!.ok ? `✅ Crafted ${craftResult!.crafted ?? 1}x. ${craftResult!.message || ''}` : `❌ ${craftResult!.message || 'Failed'}` }}
+            </div>
+            <div v-if="selectedRecipeInfo" class="ml-20 bg-[#0d1117f0] border border-space-border rounded p-2 text-[11px]">
               <div class="flex items-center gap-2 mb-1.5">
                 <span class="font-semibold text-space-text">{{ selectedRecipeInfo.name }}</span>
                 <span v-if="selectedRecipeInfo.category" class="text-space-text-dim px-1 py-0.5 bg-space-border/20 rounded text-[11px]">{{ selectedRecipeInfo.category }}</span>
@@ -254,7 +256,7 @@
           </div>
 
           <!-- Open Orders (modify_order / cancel_order) -->
-          <div v-if="openOrders.length > 0" class="col-span-2 bg-[#0d1117] border border-space-border rounded p-1.5">
+          <div v-if="openOrders.length > 0" class="col-span-2 bg-[#0d1117f0] border border-space-border rounded p-1.5">
             <div class="flex items-center justify-between mb-1.5">
               <span class="text-[11px] font-semibold text-space-text-dim uppercase">📋 Open Orders ({{ openOrders.length }})</span>
               <button @click="execCommand('view_orders')" class="btn text-[10px] px-1.5 py-0 leading-4">🔄</button>
@@ -373,7 +375,7 @@
           </div>
 
           <!-- Nearby Players (shown after get_nearby) -->
-          <div v-if="nearbyPlayers.length > 0" class="col-span-2 bg-[#0d1117] border border-space-border rounded p-1.5">
+          <div v-if="nearbyPlayers.length > 0" class="col-span-2 bg-[#0d1117f0] border border-space-border rounded p-1.5">
             <div class="text-[11px] font-semibold text-space-text-dim uppercase mb-1">Nearby ({{ nearbyPlayers.length }})</div>
             <div class="flex flex-wrap gap-1">
               <span
@@ -403,7 +405,7 @@
     </div>
 
     <!-- Activity Log -->
-    <div class="card py-2 px-2 flex flex-col w-1/4 shrink-0">
+    <div class="card py-2 px-2 flex flex-col w-1/4 shrink-0 overflow-hidden min-h-0">
       <div class="flex py-1 px-0 items-center justify-between border-b border-space-border bg-space-card">
         <div class="flex items-center gap-2">
           <h3 class="text-xs font-semibold text-space-text-dim uppercase">Activity Log</h3>
@@ -417,7 +419,7 @@
           <button @click="clearLog" class="btn btn-secondary text-xs py-0 px-2">Clear</button>
         </div>
       </div>
-      <div ref="logContainerRef" class="flex-1 overflow-auto scrollbar-dark font-mono text-xs space-y-0.5 py-1">
+      <div ref="logContainerRef" class="flex-1 overflow-auto scrollbar-dark font-mono text-xs space-y-0.5 py-1 max-h-180">
         <div
           v-for="(log, idx) in botLogs"
           :key="idx"
@@ -438,7 +440,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, onMounted, nextTick, watch } from 'vue';
+import { ref, computed, onMounted, onUnmounted, nextTick, watch } from 'vue';
 import { useBotStore } from '../stores/botStore';
 
 const props = defineProps<{ bot: any }>();
@@ -642,6 +644,9 @@ function scrollToBottom() {
 }
 watch(() => botLogs.value.length, scrollToBottom);
 watch(ldRelocating, (val) => emit('ldStatusChange', val));
+// Sync LRT status whenever this panel mounts (clears stale dashboard badge after navigation)
+onMounted(() => emit('ldStatusChange', ldRelocating.value));
+onUnmounted(() => { if (ldRelocating.value) emit('ldStatusChange', false); });
 defineExpose({ scrollToBottom, ldRelocating });
 
 const knownSystems = computed(() => {
@@ -700,22 +705,22 @@ function pushDetailLines(command: string, data: any, username: string): void {
   switch (command) {
     case 'get_system': {
       const sys = data.system || data;
-      push(`System: ${sys.name || sys.id} (${sys.id || ''})`);
+      push(`🌀 System: ${sys.name || sys.id} (${sys.id || ''})`);
       const pois = sys.pois || sys.points_of_interest || [];
-      push(`POIs (${pois.length}):`);
+      push(`🚀 POIs (${pois.length}):`);
       for (const poi of pois) push(`  ${poi.name} [${poi.type}]`);
       const conns = sys.connections || [];
-      push(`Connections (${conns.length}):`);
+      push(`🌀 Connections (${conns.length}):`);
       for (const conn of conns) push(`  -> ${conn.name || conn.system_id}`);
       break;
     }
     case 'get_nearby': {
       const nearby = data.nearby || [];
       const pirates = data.pirates || [];
-      push(`nearby: [${nearby.map((p: any) => p.username || p.name).join(', ')}]`);
-      push(`pirates: [${pirates.map((p: any) => p.username || p.name).join(', ')}]`);
-      push(`count: ${nearby.length}`);
-      push(`pirate_count: ${pirates.length}`);
+      push(`👤 Nearby (${nearby.length}): [${nearby.map((p: any) => p.username || p.name).join(', ')}]`);
+      push(`🏴‍☠️ Pirates (${pirates.length}): [${pirates.map((p: any) => p.username || p.name).join(', ')}]`);
+      // push(`count: ${nearby.length}`);
+      // push(`pirate_count: ${pirates.length}`);
       push(`poi_id: ${data.poi_id || '?'}`);
       break;
     }
@@ -754,20 +759,20 @@ function pushDetailLines(command: string, data: any, username: string): void {
     }
     case 'view_storage': {
       const items = data.items || data.storage || [];
-      push(`storage (${items.length} types):`);
+      push(`🏠 Storage (${items.length} types):`);
       for (const item of items) push(`  ${item.quantity}x ${item.name || item.item_id}`);
       break;
     }
     case 'view_market': {
       const items: any[] = data.items || data.summary || data.market || data.listings || (Array.isArray(data) ? data : []);
       const cats = data.available_categories ? ` [${(data.available_categories as string[]).join(', ')}]` : '';
-      push(`market (${items.length} items)${cats}:`);
-      for (const item of items.slice(0, 20)) {
+      push(`📦 Market (${items.length} items)${cats}`);
+      /* for (const item of items.slice(0, 20)) {
         const buyP = item.buy_price ?? item.best_sell ?? '?';
         const sellP = item.sell_price ?? item.best_buy ?? '?';
         push(`  ${item.name || item.item_id}: buy ₡${buyP} sell ₡${sellP}`);
       }
-      if (items.length > 20) push(`  ...and ${items.length - 20} more`);
+      if (items.length > 20) push(`  ...and ${items.length - 20} more`); */
       break;
     }
     case 'view_orders': {
@@ -782,26 +787,26 @@ function pushDetailLines(command: string, data: any, username: string): void {
     }
     case 'dock': {
       const sc = data.station_condition as any;
-      if (sc) push(`station: ${sc.condition_text || sc.condition || 'OK'} (${sc.satisfaction_pct ?? '?'}% services)`);
+      if (sc) push(`🏠 Station: ${sc.condition_text || sc.condition || 'OK'} (${sc.satisfaction_pct ?? '?'}% services)`);
       if (data.storage_credits != null || data.storage_items != null)
-        push(`storage: ${data.storage_items ?? 0} item types, ₡${(data.storage_credits as number ?? 0).toLocaleString()}`);
-      if ((data.stored_ships_count as number) > 0) push(`stored ships: ${data.stored_ships_count}`);
+        push(`  storage: ${data.storage_items ?? 0} item types, ₡${(data.storage_credits as number ?? 0).toLocaleString()}`);
+      if ((data.stored_ships_count as number) > 0) push(`  stored ships: ${data.stored_ships_count}`);
       if ((data.trade_fills_count as number) > 0) {
-        push(`trade fills: ${data.trade_fills_count}`);
+        push(`  trade fills: ${data.trade_fills_count}`);
         for (const f of (data.trade_fills as any[] || []).slice(0, 5)) {
           const t = ((f.type || '') as string).replace('_filled', '').toUpperCase();
           push(`  [${t}] ${f.item_name || f.item_id} ×${f.quantity} @ ₡${f.price_each ?? f.price_per_unit ?? '?'} = ₡${f.total ?? '?'}`);
         }
       }
-      if (data.open_orders_count != null) push(`open orders: ${data.open_orders_count}${data.open_orders_truncated ? ' (truncated)' : ''}`);
+      if (data.open_orders_count != null) push(`  open orders: ${data.open_orders_count}${data.open_orders_truncated ? ' (truncated)' : ''}`);
       if (data.unread_chat && typeof data.unread_chat === 'object') {
         const unread = Object.entries(data.unread_chat as Record<string, number>)
           .filter(([, v]) => v > 0).map(([k, v]) => `${k}:${v}`).join(', ');
-        if (unread) push(`unread chat: ${unread}`);
+        if (unread) push(`  unread chat: ${unread}`);
       }
       if (data.story) {
         const s = data.story as string;
-        push(`story: ${s.slice(0, 160)}${s.length > 160 ? '…' : ''}`);
+        push(`📝 Story: ${s.slice(0, 160)}${s.length > 160 ? '…' : ''}`);
       }
       break;
     }
@@ -961,7 +966,10 @@ function extractRecipes(data: any): any[] {
     name: r.name || r.recipe_name || r.recipe_id || r.id,
     category: r.category || '',
     components: r.components || r.ingredients || r.inputs || r.requires || [],
-    output: r.output || r.result_item || null,
+    output: r.output || r.result_item || r.result ||
+      (r.outputs?.length ? r.outputs[0] : null) ||
+      (r.output_item_id ? { item_id: r.output_item_id, name: r.output_item_name || r.output_item_id } : null) ||
+      null,
   }));
 }
 
@@ -994,7 +1002,11 @@ const craftableRecipes = computed(() => {
         (totals.get(comp.item_id) ?? 0) >= (comp.quantity || 1)
       );
     })
-    .sort((a, b) => (a.name || a.id).localeCompare(b.name || b.id));
+    .sort((a, b) => {
+      const aKey = (a.output?.name || a.output?.item_id || a.name || a.id).toLowerCase();
+      const bKey = (b.output?.name || b.output?.item_id || b.name || b.id).toLowerCase();
+      return aKey.localeCompare(bKey);
+    });
 });
 
 const selectedRecipeInfo = computed(() =>
@@ -1188,7 +1200,25 @@ function refreshPublicCatalog() {
   setTimeout(() => { commandRunning.value = false; }, 5000);
 }
 
-function execCraft() { if (craftRecipe.value) execCommand('craft', { recipe_id: craftRecipe.value, count: craftQty.value }); }
+const craftRunning = ref(false);
+const craftResult = ref<{ ok: boolean; crafted?: number; message?: string } | null>(null);
+async function execCraft() {
+  if (!craftRecipe.value || !currentBot.value?.username) return;
+  craftRunning.value = true;
+  craftResult.value = null;
+  try {
+    const res = await fetch('/api/smart-craft', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ bot: currentBot.value.username, recipe_id: craftRecipe.value, count: craftQty.value }),
+    });
+    craftResult.value = await res.json();
+  } catch (e: any) {
+    craftResult.value = { ok: false, message: e.message || 'Network error' };
+  } finally {
+    craftRunning.value = false;
+  }
+}
 function execSell() { if (sellItem.value) execCommand('sell', { item_id: sellItem.value, quantity: sellQty.value }); }
 function execBuy() { if (buyItem.value) execCommand('buy', { item_id: buyItem.value, quantity: buyQty.value }); }
 function execBuyOrder() {
@@ -1230,7 +1260,11 @@ function fetchRecipes() {
 
 onMounted(() => {
   if (currentBot.value.system) execCommand('get_system');
-  if (currentBot.value.docked) execCommand('view_market');
+  if (currentBot.value.docked) {
+    execCommand('view_market');
+    execCommand('view_storage');
+    execCommand('view_faction_storage');
+  }
   fetchRecipes();
   const currentSystem = botStore.mapData[currentBot.value.system];
   if (currentSystem) systemPois.value = (currentSystem as any).pois || [];

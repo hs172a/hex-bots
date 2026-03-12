@@ -108,7 +108,7 @@
     <!-- Skill tooltip -->
     <Teleport to="body">
       <div v-if="tooltip.visible"
-        class="fixed z-[9999] max-w-xs bg-[#0d1117] border border-space-border rounded-lg shadow-2xl p-2.5 pointer-events-none"
+        class="fixed z-[9999] max-w-xs bg-[#0d1117f0] border border-space-border rounded-lg shadow-2xl p-2.5 pointer-events-none"
         :style="{ top: tooltip.y + 'px', left: tooltip.x + 'px' }">
         <div class="text-[11px] font-semibold text-space-text-bright mb-0.5">{{ tooltip.name }}</div>
         <div class="text-[11px] text-space-text-dim leading-relaxed">{{ tooltip.description }}</div>

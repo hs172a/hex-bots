@@ -1,5 +1,5 @@
 <template>
-  <div class="bg-[#0d1117] border border-space-border rounded-lg p-3 space-y-2 text-xs">
+  <div class="bg-[#0d1117f0] border border-space-border rounded-lg p-3 space-y-2 text-xs">
     <!-- Header -->
     <div class="flex items-center justify-between gap-2">
       <div class="min-w-0">
