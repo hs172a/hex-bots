@@ -1501,9 +1501,15 @@ const perBotOre = reactive<Record<string, string>>({});
 const quotaAddOre = ref('');
 const quotaAddQty = ref(50);
 
-const minerBots = computed(() => botStore.bots.filter((b: any) => b.routine === 'miner' || b.routine === 'miner-v2'));
-const iceBots = computed(() => botStore.bots.filter((b: any) => b.routine === 'ice_harvester'));
-const gasBots = computed(() => botStore.bots.filter((b: any) => b.routine === 'gas_harvester'));
+/** Returns true when a bot belongs to the currently selected VM pool. */
+function isInSelectedPool(b: any): boolean {
+  if (selectedVm.value === 'local') return !b.vm || b.vm === 'local';
+  return b.vm === selectedVm.value;
+}
+
+const minerBots = computed(() => botStore.bots.filter((b: any) => isInSelectedPool(b) && (b.routine === 'miner' || b.routine === 'miner-v2')));
+const iceBots = computed(() => botStore.bots.filter((b: any) => isInSelectedPool(b) && b.routine === 'ice_harvester'));
+const gasBots = computed(() => botStore.bots.filter((b: any) => isInSelectedPool(b) && b.routine === 'gas_harvester'));
 
 // ── Per-bot mining targets ──────────────────────────────────
 type MinerTarget = { system_id: string; system_name: string; poi_id: string; poi_name: string };

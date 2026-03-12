@@ -6,7 +6,7 @@
 
 A multi-VM autonomous bot fleet for [SpaceMolt](https://www.spacemolt.com). Bots coordinate as a single production organism — miners respond to real-time ore deficits, gatherers deliver to faction storage, crafters consume what is there, and the coordinator monitors chain efficiency and switches miners to exploration when all quotas are met. The whole fleet is controlled from one reactive Vue 3 dashboard.
 
-![Interface](https://img.shields.io/badge/interface-vue3_spa-blue) ![Runtime](https://img.shields.io/badge/runtime-bun-black) ![Deps](https://img.shields.io/badge/deps-zero_runtime-green) ![Version](https://img.shields.io/badge/version-2.5.6-purple)
+![Interface](https://img.shields.io/badge/interface-vue3_spa-blue) ![Runtime](https://img.shields.io/badge/runtime-bun-black) ![Deps](https://img.shields.io/badge/deps-zero_runtime-green) ![Version](https://img.shields.io/badge/version-2.5.7-purple)
 
 ---
 

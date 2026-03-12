@@ -1056,6 +1056,18 @@ export const crafterRoutine: Routine = async function* (ctx: RoutineContext) {
             ctx.log("craft", `[CrafterGoal] Waiting for materials: ${goal.target_name || recipe.name}`);
             continue;
           }
+
+          // Faction storage quota: skip if output item already at/above the per-item cap
+          if (settings.maxFactionStoragePerItem > 0 && goal.target_id) {
+            const inFactionStorage = bot.factionStorage.find(i => i.itemId === goal.target_id)?.quantity ?? 0;
+            if (inFactionStorage >= settings.maxFactionStoragePerItem) {
+              ctx.log("craft", `[CrafterGoal] ${goal.target_name || recipe.name}: faction storage ${inFactionStorage}/${settings.maxFactionStoragePerItem} — quota reached, skipping`);
+              atLimitCount.count++;
+              clearMaterialNeed(bot.username, goal.target_id);
+              continue;
+            }
+          }
+
           ctx.log("craft", `[CrafterGoal] Crafting: ${goal.target_name || recipe.name}${goal.gift_target ? ` → gift to ${goal.gift_target}` : ""}`);
 
           let goalCrafted = 0;

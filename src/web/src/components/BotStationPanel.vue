@@ -62,15 +62,10 @@
               :class="tab === 'station' ? 'bg-space-accent text-white' : 'text-space-text-dim hover:text-space-text'">
               🏢 Station<span v-if="stationFacilities.length" class="opacity-60 ml-0.5">({{ stationFacilities.length }})</span>
             </button>
-            <button v-if="props.mode !== 'station'" @click="switchToMine"
+            <button v-if="props.mode !== 'station'" @click="switchToFacility"
               class="px-2 py-0.5 text-xs rounded transition-colors"
-              :class="tab === 'personal' ? 'bg-space-accent text-white' : 'text-space-text-dim hover:text-space-text'">
-              👤 Mine<span v-if="myFacilities.length" class="text-space-green ml-0.5">★{{ myFacilities.length }}</span>
-            </button>
-            <button v-if="props.mode !== 'station'" @click="switchToBuild"
-              class="px-2 py-0.5 text-xs rounded transition-colors"
-              :class="tab === 'build' ? 'bg-space-accent text-white' : 'text-space-text-dim hover:text-space-text'">
-              🔨 Build
+              :class="tab === 'facility' ? 'bg-space-accent text-white' : 'text-space-text-dim hover:text-space-text'">
+              🏗️ Facility<span v-if="myFacilities.length" class="text-space-green ml-0.5">★{{ myFacilities.length }}</span>
             </button>
             <button @click="switchToChat"
               class="px-2 py-0.5 text-xs rounded transition-colors flex items-center gap-1"
@@ -157,187 +152,154 @@
           </div>
         </template>
 
-        <!-- ── Mine Tab ───────────────────────────────────── -->
-        <template v-else-if="tab === 'personal'">
-          <div v-if="!myFacilities.length" class="text-xs text-space-text-dim italic py-6 text-center space-y-2">
-            <div>You have no personal facilities at this station.</div>
-            <button @click="switchToBuild" class="btn btn-primary text-xs px-3 py-1">🔨 Browse Build Options</button>
-          </div>
-          <div v-else class="space-y-2 max-h-[32rem] overflow-auto scrollbar-dark pr-0.5">
-            <div v-for="f in myFacilities" :key="f.facility_id"
-              class="bg-[#21262d] border border-green-900/40 rounded-md p-2.5 text-xs">
-              <!-- Header -->
-              <div class="flex items-start justify-between gap-2 mb-1.5">
-                <div class="min-w-0">
-                  <div class="font-medium text-space-text-bright">{{ f.name }}</div>
-                  <div v-if="f.description" class="text-[11px] text-space-text-dim mt-0.5 leading-relaxed">{{ f.description }}</div>
-                </div>
-                <span class="px-1.5 py-0.5 rounded text-[11px] shrink-0"
-                  :class="f.active !== false && f.maintenance_satisfied !== false
-                    ? 'bg-green-900/30 text-space-green'
-                    : f.active === false
-                      ? 'bg-red-900/30 text-space-red'
-                      : 'bg-yellow-900/30 text-yellow-400'">
-                  {{ f.active !== false ? (f.maintenance_satisfied !== false ? 'active' : '⚠️ degraded') : 'offline' }}
-                </span>
-              </div>
-              <!-- Stats -->
-              <div class="flex flex-wrap gap-x-4 gap-y-0.5 text-[11px] mb-2">
-                <span v-if="f.level" class="text-space-text-dim">Level {{ f.level }}</span>
-                <span v-if="f.rent_per_cycle" class="text-space-yellow">💰 {{ f.rent_per_cycle }}cr/cycle</span>
-                <span v-if="f.bonus_type" class="text-space-cyan">+{{ f.bonus_value }} {{ f.bonus_type?.replace(/_/g, ' ') }}</span>
-                <span v-if="f.personal_service" class="text-space-accent">⚙️ {{ f.personal_service.replace(/_/g, ' ') }}</span>
-                <span v-if="f.recipe_id" class="text-space-accent">⚗️ {{ f.recipe_id }}</span>
-              </div>
-              <!-- Actions -->
-              <div class="flex gap-2 flex-wrap">
-                <button @click="toggleFacility(f)"
-                  :disabled="actionLoading === f.facility_id"
-                  class="btn text-[11px] px-2 py-0.5"
-                  :class="f.active !== false ? 'btn-secondary' : 'btn-primary'">
-                  {{ actionLoading === f.facility_id ? '⏳' : (f.active !== false ? '⏹ Disable' : '▶ Enable') }}
-                </button>
-                <button v-if="upgradesFor(f.facility_id).length"
-                  @click="activeUpgrade = activeUpgrade === f.facility_id ? null : f.facility_id"
-                  class="btn btn-secondary text-[11px] px-2 py-0.5">
-                  ⬆ Upgrades ({{ upgradesFor(f.facility_id).length }})
-                </button>
-              </div>
-              <!-- Inline upgrade options -->
-              <div v-if="activeUpgrade === f.facility_id" class="mt-2 pt-2 border-t border-[#30363d] space-y-1.5">
-                <div class="text-[11px] font-semibold uppercase tracking-wider text-space-text-dim mb-1">Available Upgrades</div>
-                <div v-for="u in upgradesFor(f.facility_id)" :key="u.facility_type || u.id"
-                  class="flex items-center justify-between gap-2 bg-[#1a1f27] rounded px-2 py-1.5 text-[11px]">
+        <!-- ── Facility Tab (merged Mine + Build) ────────── -->
+        <template v-else-if="tab === 'facility'">
+          <!-- ── My built facilities ── -->
+          <div class="mb-3">
+            <div class="flex items-center justify-between mb-1.5">
+              <span class="text-[11px] font-semibold text-space-text uppercase tracking-wider">
+                My Facilities<span v-if="myFacilities.length" class="text-space-green font-bold ml-1.5">★{{ myFacilities.length }}</span>
+              </span>
+              <button @click="reloadAll" :disabled="loading" class="btn btn-secondary text-[11px] px-1.5 py-0">{{ loading ? '⏳' : '↺' }}</button>
+            </div>
+            <div v-if="!myFacilities.length && !loading" class="text-xs text-space-text-dim italic py-2 pl-1">No personal facilities at this station.</div>
+            <div v-else class="space-y-2">
+              <div v-for="f in myFacilities" :key="f.facility_id"
+                class="bg-[#21262d] border border-green-900/40 rounded-md p-2.5 text-xs">
+                <!-- Header -->
+                <div class="flex items-start justify-between gap-2 mb-1.5">
                   <div class="min-w-0">
-                    <div class="text-space-text font-medium">{{ u.name }}</div>
-                    <div v-if="u.description" class="text-space-text-dim mt-0.5 leading-relaxed line-clamp-2">{{ u.description }}</div>
-                    <div class="flex gap-3 mt-0.5">
-                      <span v-if="u.build_cost" class="text-space-yellow">{{ u.build_cost?.toLocaleString() }}cr</span>
-                      <span v-if="u.bonus_type" class="text-space-cyan">+{{ u.bonus_value }} {{ u.bonus_type?.replace(/_/g, ' ') }}</span>
-                    </div>
+                    <div class="font-medium text-space-text-bright">{{ f.name }}</div>
+                    <div v-if="f.description" class="text-[11px] text-space-text-dim mt-0.5 leading-relaxed">{{ f.description }}</div>
                   </div>
-                  <button @click="upgradeFacility(f, u.facility_type || u.id)"
+                  <span class="px-1.5 py-0.5 rounded text-[11px] shrink-0"
+                    :class="f.active !== false && f.maintenance_satisfied !== false
+                      ? 'bg-green-900/30 text-space-green'
+                      : f.active === false
+                        ? 'bg-red-900/30 text-space-red'
+                        : 'bg-yellow-900/30 text-yellow-400'">
+                    {{ f.active !== false ? (f.maintenance_satisfied !== false ? 'active' : '⚠️ degraded') : 'offline' }}
+                  </span>
+                </div>
+                <!-- Stats -->
+                <div class="flex flex-wrap gap-x-4 gap-y-0.5 text-[11px] mb-2">
+                  <span v-if="f.level" class="text-space-text-dim">Level {{ f.level }}</span>
+                  <span v-if="f.rent_per_cycle" class="text-space-yellow">💰 {{ f.rent_per_cycle }}cr/cycle</span>
+                  <span v-if="f.bonus_type" class="text-space-cyan">+{{ f.bonus_value }} {{ f.bonus_type?.replace(/_/g, ' ') }}</span>
+                  <span v-if="f.personal_service" class="text-space-accent">⚙️ {{ f.personal_service.replace(/_/g, ' ') }}</span>
+                  <span v-if="f.recipe_id" class="text-space-accent">⚗️ {{ f.recipe_id }}</span>
+                </div>
+                <!-- Actions -->
+                <div class="flex gap-2 flex-wrap">
+                  <button @click="toggleFacility(f)"
                     :disabled="actionLoading === f.facility_id"
-                    class="btn btn-primary text-[11px] px-2 py-0.5 shrink-0">
-                    {{ actionLoading === f.facility_id ? '⏳' : '⬆ Upgrade' }}
+                    class="btn text-[11px] px-2 py-0.5"
+                    :class="f.active !== false ? 'btn-secondary' : 'btn-primary'">
+                    {{ actionLoading === f.facility_id ? '⏳' : (f.active !== false ? '⏹ Disable' : '▶ Enable') }}
+                  </button>
+                  <button v-if="upgradesFor(f.facility_id).length"
+                    @click="activeUpgrade = activeUpgrade === f.facility_id ? null : f.facility_id"
+                    class="btn btn-secondary text-[11px] px-2 py-0.5">
+                    ⬆ Upgrades ({{ upgradesFor(f.facility_id).length }})
                   </button>
                 </div>
+                <!-- Inline upgrade options -->
+                <div v-if="activeUpgrade === f.facility_id" class="mt-2 pt-2 border-t border-[#30363d] space-y-1.5">
+                  <div class="text-[11px] font-semibold uppercase tracking-wider text-space-text-dim mb-1">Available Upgrades</div>
+                  <div v-for="u in upgradesFor(f.facility_id)" :key="u.facility_type || u.id"
+                    class="flex items-center justify-between gap-2 bg-[#1a1f27] rounded px-2 py-1.5 text-[11px]">
+                    <div class="min-w-0">
+                      <div class="text-space-text font-medium">{{ u.name }}</div>
+                      <div v-if="u.description" class="text-space-text-dim mt-0.5 leading-relaxed line-clamp-2">{{ u.description }}</div>
+                      <div class="flex gap-3 mt-0.5">
+                        <span v-if="u.build_cost" class="text-space-yellow">{{ u.build_cost?.toLocaleString() }}cr</span>
+                        <span v-if="u.bonus_type" class="text-space-cyan">+{{ u.bonus_value }} {{ u.bonus_type?.replace(/_/g, ' ') }}</span>
+                      </div>
+                    </div>
+                    <button @click="upgradeFacility(f, u.facility_type || u.id)"
+                      :disabled="actionLoading === f.facility_id"
+                      class="btn btn-primary text-[11px] px-2 py-0.5 shrink-0">
+                      {{ actionLoading === f.facility_id ? '⏳' : '⬆ Upgrade' }}
+                    </button>
+                  </div>
+                </div>
               </div>
             </div>
           </div>
-        </template>
 
-        <!-- ── Build Tab ──────────────────────────────────── -->
-        <template v-else-if="tab === 'build'">
-          <div class="flex gap-2 mb-2">
-            <select v-model="buildCategory" @change="loadTypes" class="input text-xs py-1 flex-1">
-              <option value="personal">Personal facilities</option>
-              <option value="production">Production facilities</option>
-              <option value="">All categories</option>
-            </select>
-            <button @click="loadTypes" :disabled="typesLoading" class="btn btn-secondary text-xs py-0 px-2">
-              {{ typesLoading ? '...' : '↺' }}
-            </button>
-          </div>
-          <!-- Current gatherer goals banner with progress (supports multiple goals) -->
-          <div v-if="currentGathererGoals.length" class="mb-2 space-y-2">
-            <div v-for="goal in currentGathererGoals" :key="goal.id"
-              class="p-2.5 rounded border border-space-accent/30 bg-space-accent/5">
-              <div class="flex items-center justify-between mb-1.5">
-                <div class="flex items-center gap-2 min-w-0">
-                  <span class="text-[11px] font-semibold text-space-accent">📦</span>
-                  <span class="text-xs text-space-text-bright font-medium truncate">{{ goal.target_name }}</span>
-                  <span v-if="goal.goal_type === 'craft'" class="text-[10px] px-1 py-0.5 rounded bg-space-yellow/20 text-space-yellow">craft</span>
-                </div>
-                <div class="flex items-center gap-2 shrink-0">
-                  <span class="text-xs font-bold" :class="goal.overallPct >= 100 ? 'text-space-green' : 'text-space-text-dim'">{{ goal.overallPct }}%</span>
-                  <button @click="clearGathererGoalById(goal.id)" class="btn btn-secondary text-[11px] px-1.5 py-0.5">✕</button>
-                </div>
-              </div>
-              <div class="h-1 bg-space-border rounded-full mb-2">
-                <div class="h-full rounded-full transition-all duration-500"
-                  :class="goal.overallPct >= 100 ? 'bg-space-green' : 'bg-space-accent'"
-                  :style="{ width: Math.min(goal.overallPct, 100) + '%' }"></div>
-              </div>
-              <div class="space-y-1.5">
-                <div v-for="m in goal.materials" :key="m.item_id">
-                  <div class="flex justify-between text-[11px] mb-0.5">
-                    <span class="text-space-text">{{ m.item_name }}</span>
-                    <span :class="m.pct >= 100 ? 'text-space-green' : 'text-space-text-dim'">{{ m.collected }}/{{ m.quantity_needed }}</span>
-                  </div>
-                  <div class="h-0.5 bg-space-border rounded-full">
-                    <div class="h-full rounded-full transition-all duration-500"
-                      :class="m.pct >= 100 ? 'bg-space-green' : 'bg-space-accent/50'"
-                      :style="{ width: Math.min(m.pct, 100) + '%' }"></div>
-                  </div>
-                </div>
+          <!-- ── Build new ── -->
+          <div class="border-t border-space-border pt-3">
+            <div class="flex items-center justify-between mb-2">
+              <span class="text-[11px] font-semibold text-space-text uppercase tracking-wider">Build New</span>
+              <div class="flex gap-1.5">
+                <select v-model="buildCategory" @change="loadTypes" class="input text-xs py-0.5">
+                  <option value="personal">Personal</option>
+                  <option value="production">Production</option>
+                  <option value="">All</option>
+                </select>
+                <button @click="loadTypes" :disabled="typesLoading" class="btn btn-secondary text-xs py-0 px-2">{{ typesLoading ? '...' : '↺' }}</button>
               </div>
             </div>
-          </div>
-          <div v-if="typesLoading" class="text-xs text-space-text-dim italic py-6 text-center">Loading types...</div>
-          <div v-else-if="!facilityTypes.length" class="text-xs text-space-text-dim italic py-6 text-center">No types found — click ↺ to reload.</div>
-          <div v-else class="space-y-2 max-h-[32rem] overflow-auto scrollbar-dark pr-0.5">
-            <!-- Prerequisite banner inside list so it doesn't hide the type cards -->
             <div v-if="buildCategory === 'personal' && !hasQuarters"
-              class="mb-1 px-2 py-1.5 rounded text-[11px] bg-yellow-900/20 border border-yellow-700/30 text-yellow-400 flex items-start gap-1.5">
+              class="mb-2 px-2 py-1.5 rounded text-[11px] bg-yellow-900/20 border border-yellow-700/30 text-yellow-400 flex items-start gap-1.5">
               <span class="shrink-0">⚠️</span>
               <span><strong>Crew Bunk required</strong> — build Personal Quarters first before any other personal facility.</span>
             </div>
-            <div v-for="t in facilityTypes" :key="t.id"
-              class="rounded-md border text-xs transition-all"
-              :class="[
-                isBuilt(t.id) ? 'border-green-900/40 bg-[#1a2120]' :
-                !t.buildable ? 'border-[#30363d] bg-[#161b22] opacity-60' :
-                currentGathererGoals.some(g => g.target_id === t.id) ? 'border-space-accent/40 bg-[#21262d]' :
-                'border-[#30363d] bg-[#21262d] hover:border-[#444d56]'
-              ]">
-              <!-- Card header -->
-              <div class="flex items-start gap-2 p-2">
-                <div class="flex-1 min-w-0">
-                  <div class="flex items-center gap-1.5 flex-wrap mb-0.5">
-                    <span class="font-semibold" :class="isBuilt(t.id) ? 'text-space-green' : !t.buildable ? 'text-space-text-dim' : 'text-space-text-bright'">{{ t.name }}</span>
-                    <span class="text-[10px] text-space-text-dim">Lv{{ t.level }}</span>
-                    <span v-if="isBuilt(t.id)" class="text-[10px] px-1 py-0.5 rounded bg-green-900/30 text-space-green">✓ built</span>
-                    <span v-else-if="!t.buildable" class="text-[10px] px-1 py-0.5 rounded bg-[#30363d] text-space-text-dim">🔒 locked</span>
-                    <span v-if="currentGathererGoals.some(g => g.target_id === t.id)" class="text-[10px] px-1 py-0.5 rounded bg-space-accent/20 text-space-accent">gathering</span>
+            <div v-if="typesLoading" class="text-xs text-space-text-dim italic py-4 text-center">Loading types...</div>
+            <div v-else-if="!facilityTypes.length" class="text-xs text-space-text-dim italic py-4 text-center">No types found — click ↺ to reload.</div>
+            <div v-else class="space-y-2 max-h-[28rem] overflow-auto scrollbar-dark pr-0.5">
+              <div v-for="t in facilityTypes" :key="t.id"
+                class="rounded-md border text-xs transition-all"
+                :class="[
+                  isBuilt(t.id) ? 'border-green-900/40 bg-[#1a2120]' :
+                  !t.buildable ? 'border-[#30363d] bg-[#161b22] opacity-60' :
+                  gathererGoalIds.has(t.id) ? 'border-space-accent/40 bg-[#21262d]' :
+                  'border-[#30363d] bg-[#21262d] hover:border-[#444d56]'
+                ]">
+                <!-- Card header -->
+                <div class="flex items-start gap-2 p-2">
+                  <div class="flex-1 min-w-0">
+                    <div class="flex items-center gap-1.5 flex-wrap mb-0.5">
+                      <span class="font-semibold" :class="isBuilt(t.id) ? 'text-space-green' : !t.buildable ? 'text-space-text-dim' : 'text-space-text-bright'">{{ t.name }}</span>
+                      <span class="text-[10px] text-space-text-dim">Lv{{ t.level }}</span>
+                      <span v-if="isBuilt(t.id)" class="text-[10px] px-1 py-0.5 rounded bg-green-900/30 text-space-green">✓ built</span>
+                      <span v-else-if="!t.buildable" class="text-[10px] px-1 py-0.5 rounded bg-[#30363d] text-space-text-dim">🔒 locked</span>
+                      <span v-if="gathererGoalIds.has(t.id)" class="text-[10px] px-1 py-0.5 rounded bg-space-accent/20 text-space-accent">gathering</span>
+                    </div>
+                    <div v-if="t.description" class="text-[11px] text-space-text-dim leading-relaxed line-clamp-2">{{ t.description }}</div>
+                    <div class="flex flex-wrap gap-x-3 gap-y-0.5 text-[11px] mt-0.5">
+                      <span v-if="t.bonus_type" class="text-space-cyan">+{{ t.bonus_value }} {{ t.bonus_type?.replace(/_/g, ' ') }}</span>
+                      <span v-if="t.personal_service" class="text-space-accent">⚙️ {{ t.personal_service.replace(/_/g, ' ') }}</span>
+                      <span v-if="t.rent_per_cycle" class="text-space-yellow">💰 {{ t.rent_per_cycle }}cr/cycle</span>
+                      <span v-if="t.build_time" class="text-space-text-dim">⏱ {{ t.build_time }} cycles</span>
+                    </div>
                   </div>
-                  <div v-if="t.description" class="text-[11px] text-space-text-dim leading-relaxed line-clamp-2">{{ t.description }}</div>
-                  <!-- Bonuses & services -->
-                  <div class="flex flex-wrap gap-x-3 gap-y-0.5 text-[11px] mt-0.5">
-                    <span v-if="t.bonus_type" class="text-space-cyan">+{{ t.bonus_value }} {{ t.bonus_type?.replace(/_/g, ' ') }}</span>
-                    <span v-if="t.personal_service" class="text-space-accent">⚙️ {{ t.personal_service.replace(/_/g, ' ') }}</span>
-                    <span v-if="t.rent_per_cycle" class="text-space-yellow">💰 {{ t.rent_per_cycle }}cr/cycle</span>
-                    <span v-if="t.build_time" class="text-space-text-dim">⏱ {{ t.build_time }} cycles</span>
+                  <div class="shrink-0 flex flex-col items-end gap-1">
+                    <span class="text-[11px] font-semibold" :class="t.build_cost ? 'text-space-yellow' : 'text-space-text-dim'">{{ t.build_cost != null ? t.build_cost.toLocaleString() + ' cr' : '—' }}</span>
+                    <button @click="buildFacility(t)"
+                      :disabled="isBuilt(t.id) || !t.buildable || actionLoading === t.id"
+                      class="btn text-[11px] px-2 py-0.5 disabled:opacity-40 disabled:cursor-not-allowed"
+                      :class="isBuilt(t.id) ? 'btn-secondary' : t.buildable ? 'btn-primary' : 'btn-secondary'">
+                      {{ actionLoading === t.id ? '...' : isBuilt(t.id) ? '✓ Built' : !t.buildable ? '🔒' : '🔨 Build' }}
+                    </button>
                   </div>
                 </div>
-                <!-- Right: cost + build button -->
-                <div class="shrink-0 flex flex-col items-end gap-1">
-                  <span class="text-[11px] font-semibold" :class="t.build_cost ? 'text-space-yellow' : 'text-space-text-dim'">{{ t.build_cost != null ? t.build_cost.toLocaleString() + ' cr' : '—' }}</span>
-                  <button @click="buildFacility(t)"
-                    :disabled="isBuilt(t.id) || !t.buildable || actionLoading === t.id"
-                    class="btn text-[11px] px-2 py-0.5 disabled:opacity-40 disabled:cursor-not-allowed"
-                    :class="isBuilt(t.id) ? 'btn-secondary' : t.buildable ? 'btn-primary' : 'btn-secondary'">
-                    {{ actionLoading === t.id ? '...' : isBuilt(t.id) ? '✓ Built' : !t.buildable ? '🔒' : '🔨 Build' }}
+                <div v-if="buildErrors[t.id]" class="px-2 pb-1.5 text-[11px] text-red-400">⚠ {{ buildErrors[t.id] }}</div>
+                <div v-if="buildMaterials(t).length" class="px-2 pb-2 pt-0 border-t border-[#30363d] mt-0 flex items-center justify-between gap-2">
+                  <div class="min-w-0 pt-1.5">
+                    <div class="flex flex-wrap gap-x-2 gap-y-0.5 text-[11px]">
+                      <span v-for="m in buildMaterials(t)" :key="m.item_id"
+                        class="text-space-text-dim">{{ m.name || m.item_name || m.item_id }}<span class="text-space-text ml-0.5">×{{ m.quantity || m.quantity_needed }}</span></span>
+                    </div>
+                  </div>
+                  <button v-if="!isBuilt(t.id)"
+                    @click="setGathererGoal(t)"
+                    class="btn btn-secondary text-[11px] px-2 py-0.5 shrink-0 whitespace-nowrap mt-1.5">
+                    {{ gathererGoalIds.has(t.id) ? '📦 +add' : '📦 Gather' }}
                   </button>
                 </div>
+                <div v-else-if="!isBuilt(t.id) && !typeDetails[t.id]" class="px-2 pb-1.5 text-[11px] text-space-text-dim/30 italic">fetching materials…</div>
               </div>
-              <!-- Build error -->
-              <div v-if="buildErrors[t.id]" class="px-2 pb-1.5 text-[11px] text-red-400">⚠ {{ buildErrors[t.id] }}</div>
-              <!-- Materials row -->
-              <div v-if="buildMaterials(t).length" class="px-2 pb-2 pt-0 border-t border-[#30363d] mt-0 flex items-center justify-between gap-2">
-                <div class="min-w-0 pt-1.5">
-                  <div class="flex flex-wrap gap-x-2 gap-y-0.5 text-[11px]">
-                    <span v-for="m in buildMaterials(t)" :key="m.item_id"
-                      class="text-space-text-dim">{{ m.name || m.item_name || m.item_id }}<span class="text-space-text ml-0.5">×{{ m.quantity || m.quantity_needed }}</span></span>
-                  </div>
-                </div>
-                <button v-if="!isBuilt(t.id)"
-                  @click="setGathererGoal(t)"
-                  class="btn btn-secondary text-[11px] px-2 py-0.5 shrink-0 whitespace-nowrap mt-1.5">
-                  {{ currentGathererGoals.some(g => g.target_id === t.id) ? '📦 +add' : '📦 Gather' }}
-                </button>
-              </div>
-              <div v-else-if="!isBuilt(t.id) && !typeDetails[t.id]" class="px-2 pb-1.5 text-[11px] text-space-text-dim/30 italic">fetching materials…</div>
             </div>
           </div>
         </template>
@@ -467,7 +429,7 @@ const emit = defineEmits<{
 const botStore = useBotStore();
 
 // ── State ─────────────────────────────────────────────────────
-const tab = ref<'station' | 'personal' | 'build' | 'chat' | 'market'>(props.mode === 'facility' ? 'personal' : 'station');
+const tab = ref<'station' | 'facility' | 'chat' | 'market'>(props.mode === 'facility' ? 'facility' : 'station');
 const loading = ref(false);
 const typesLoading = ref(false);
 const actionLoading = ref<string | null>(null);
@@ -705,27 +667,10 @@ function getBotGoals(username: string): any[] {
   return [];
 }
 
-const currentGathererGoals = computed(() => {
-  const bot = currentBot.value as any;
-  return getBotGoals(props.bot.username).map((goal: any) => {
-    const materials = (goal.materials || []).map((m: any) => {
-      const inFaction = (bot.factionStorage || []).find((i: any) => i.itemId === m.item_id)?.quantity ?? 0;
-      const inCargo = (bot.inventory || []).find((i: any) => i.itemId === m.item_id)?.quantity ?? 0;
-      const collected = Math.min(inFaction + inCargo, m.quantity_needed);
-      const pct = m.quantity_needed > 0 ? Math.round(collected / m.quantity_needed * 100) : 0;
-      return { ...m, collected, pct };
-    });
-    const totalNeeded = materials.reduce((s: number, m: any) => s + m.quantity_needed, 0);
-    const totalCollected = materials.reduce((s: number, m: any) => s + m.collected, 0);
-    const overallPct = totalNeeded > 0 ? Math.round(totalCollected / totalNeeded * 100) : 0;
-    return { ...goal, materials, overallPct };
-  });
-});
-
-function clearGathererGoalById(goalId: string): void {
-  const filtered = getBotGoals(props.bot.username).filter((g: any) => g.id !== goalId);
-  botStore.saveSettings(props.bot.username, { goals: filtered, goal: null });
-}
+/** Set of facility type IDs that already have a gather goal set for this bot. */
+const gathererGoalIds = computed(() =>
+  new Set<string>(getBotGoals(props.bot.username).map((g: any) => g.target_id).filter(Boolean))
+);
 
 const stationInfo = computed(() => {
   const bot = currentBot.value;
@@ -974,7 +919,7 @@ async function buildFacility(t: any): Promise<void> {
         : '';
       notif(r.hint || `Built ${r.facility_name || t.name}!${xp}`, 'success');
       await reloadAll();
-      tab.value = 'personal';
+      tab.value = 'facility';
     } else {
       const cleaned = parseBuildError(res.error || 'Build failed');
       buildErrors.value[t.id] = cleaned;
@@ -1002,21 +947,20 @@ async function upgradeFacility(f: any, toTypeId: string): Promise<void> {
 }
 
 // ── Tab switch helpers ────────────────────────────────────────
-function switchToMine(): void {
-  tab.value = 'personal';
+function switchToFacility(): void {
+  tab.value = 'facility';
   if (!stationFacilities.value.length) reloadAll();
   else if (myFacilities.value.length && !Object.keys(upgradeMap.value).length) loadUpgrades();
-}
-
-function switchToBuild(): void {
-  tab.value = 'build';
   if (!facilityTypes.value.length) loadTypes();
 }
 
 // ── Lifecycle ─────────────────────────────────────────────────
 onMounted(() => {
   loadFactionCache();
-  if ((currentBot.value as any)?.docked) reloadAll();
+  if ((currentBot.value as any)?.docked) {
+    reloadAll();
+    loadTypes();
+  }
 });
 
 watch(() => props.bot.username, () => {
@@ -1031,6 +975,7 @@ watch(() => (currentBot.value as any)?.docked, (docked, prev) => {
     facilityTypes.value = [];
     expanded.value.clear();
     reloadAll();
+    loadTypes();
   }
 });
 

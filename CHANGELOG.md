@@ -5,6 +5,30 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [2.5.7] - 2026-03-12
+
+### Fixed
+
+#### Craft overstock limit not enforced in `craftOwnGoals` (Phase 0) (`src/routines/crafter.ts`)
+- `maxFactionStoragePerItem` check was missing from the `[CrafterGoal]` path (fleet goals where `crafter_bot === this bot`). Only `craftLimits` and `autoCraft` loops had the guard, so goals like "Copper Wiring" were crafted even when faction storage already exceeded the quota.
+- Fix: added the same faction-storage quota check after `hasMaterialsAnywhere` in the `craftOwnGoals` loop. Uses `goal.target_id` to look up `bot.factionStorage`. Increments `atLimitCount.count` and clears `materialNeed` on skip — same behaviour as the other two paths.
+
+### Changed
+
+#### Settings page: per-bot sections filtered by selected pool (`src/web/src/views/SettingsView.vue`)
+- `minerBots`, `gasBots`, `iceBots` computed properties previously returned bots from **all** pools. When a remote VM (e.g. `server2`) was selected, the per-bot target ore / mining target / harvesting target sections still listed bots from the local pool.
+- Fix: added `isInSelectedPool(b)` helper — returns `true` for local-pool bots when `selectedVm === 'local'`, or for VM-matching bots when a remote pool is selected. All three computed properties now include this filter.
+
+#### Facility tab refactored: Mine + Build merged into single view (`src/web/src/components/BotStationPanel.vue`)
+- Replaced separate **👤 Mine** and **🔨 Build** tab buttons with a single **🏗️ Facility** tab.
+- New Facility tab shows two sections in one scroll: **My Facilities** (built, with toggle/upgrade) at the top, **Build New** (available types with build button, materials, and Gather shortcut) below.
+- Removed the gatherer goals progress banner from the old Build tab — goal progress is visible on the Commander → Goals page.
+- `gathererGoalIds` computed (a `Set<string>`) replaces the heavyweight `currentGathererGoals` computed; the "gathering" badge on type cards still shows correctly.
+- Facility types are now loaded automatically on mount and on dock transition (previously only loaded when clicking the Build tab).
+- Removed dead `switchToMine`, `switchToBuild`, `currentGathererGoals`, `clearGathererGoalById` functions.
+
+---
+
 ## [2.5.6] - 2026-03-12
 
 ### Added
