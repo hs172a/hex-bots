@@ -33,6 +33,8 @@ import { returnHomeRoutine } from "./return_home.js";
 import { hunterRoutine } from "./hunter.js";
 import { crafterRoutine, scoreCrafter } from "./crafter.js";
 import { gathererRoutine, scoreGatherer } from "./gatherer.js";
+import { cleanupRoutine } from "./cleanup.js";
+import { scoutRoutine } from "./scout.js";
 import {
   readSettings,
   ensureDocked,
@@ -51,6 +53,9 @@ interface SmartSelectorSettings {
   enableHunter: boolean;
   forcedRoutine: string;
   minCrafterProfitPct: number;
+  cleanupIntervalHours: number;
+  enableScout: boolean;
+  enableCleanup: boolean;
 }
 
 interface RoutineCandidate {
@@ -71,7 +76,10 @@ function getSettings(username: string): SmartSelectorSettings {
     minTradeMargin:      (perBot.minTradeMargin      as number)  ?? (s.minTradeMargin      as number)  ?? 300,
     enableHunter:        (perBot.enableHunter        as boolean) ?? (s.enableHunter        as boolean) ?? false,
     forcedRoutine:       (perBot.forcedRoutine       as string)  ?? (s.forcedRoutine       as string)  ?? "",
-    minCrafterProfitPct: (perBot.minCrafterProfitPct as number)  ?? (s.minCrafterProfitPct as number)  ?? 10,
+    minCrafterProfitPct:    (perBot.minCrafterProfitPct    as number)  ?? (s.minCrafterProfitPct    as number)  ?? 10,
+    cleanupIntervalHours:   (perBot.cleanupIntervalHours   as number)  ?? (s.cleanupIntervalHours   as number)  ?? 2,
+    enableScout:            (perBot.enableScout            as boolean) ?? (s.enableScout            as boolean) ?? true,
+    enableCleanup:          (perBot.enableCleanup          as boolean) ?? (s.enableCleanup          as boolean) ?? true,
   };
 }
 
@@ -83,6 +91,50 @@ function skillLevel(ctx: RoutineContext, ...ids: string[]): number {
     const found = skills.find(s => s.skill_id === id);
     if (found) return found.level;
   }
+  return 0;
+}
+
+// ── Cleanup / Scout / FactionStorage helpers ─────────────────
+
+/**
+ * Score for the cleanup routine based on time since last run.
+ * Returns ~45 when the interval has elapsed, gradually building up over time.
+ * Never runs when the bot just cleaned (< 30 min ago).
+ */
+function scoreCleanup(lastRunMs: Map<string, number>, intervalHours: number): number {
+  const CLEANUP_INTERVAL_MS = intervalHours * 60 * 60 * 1000;
+  const lastCleanup = lastRunMs.get("cleanup") ?? 0;
+  if (lastCleanup === 0) return 40; // First run ever — do it soon
+  const elapsed = Date.now() - lastCleanup;
+  if (elapsed < 30 * 60 * 1000) return 0; // Ran < 30 min ago — skip
+  if (elapsed >= CLEANUP_INTERVAL_MS) return 45;
+  // Linearly ramp from 0 → 45 over the interval
+  return Math.round((elapsed / CLEANUP_INTERVAL_MS) * 45);
+}
+
+/**
+ * Score for the scout routine — rewards charting new systems.
+ * Boosted when few systems are mapped; diminishing returns at 20+ systems.
+ */
+function scoreScout(ctx: RoutineContext, explorationLevel: number): number {
+  const systemCount = ctx.mapStore.getAllSystemIds().length;
+  if (systemCount < 5)  return 30 + explorationLevel * 3;
+  if (systemCount < 12) return 18 + explorationLevel * 2;
+  if (systemCount < 20) return 8  + explorationLevel;
+  return 3; // Large map — scout is low priority
+}
+
+/**
+ * Boost for trader when faction storage has sellable items across multiple POIs.
+ * If bots have accumulated faction storage items, selling them is high-value work.
+ */
+function scoreFactionStorageSell(ctx: RoutineContext): number {
+  const allItems = (ctx.mapStore as any).getAllFactionStorageItems?.() as Array<{ item_id: string; quantity: number }> | undefined;
+  if (!allItems || allItems.length === 0) return 0;
+  const totalItems = allItems.reduce((s, i) => s + (i.quantity ?? 0), 0);
+  if (totalItems >= 500) return 22;
+  if (totalItems >= 100) return 14;
+  if (totalItems >= 20)  return 7;
   return 0;
 }
 
@@ -358,9 +410,7 @@ async function buildCandidates(
       key: "explorer",
       name: "Explorer",
       fn: explorerRoutine,
-      score: Math.max(0, explorationLevel * 5 + (ctx.mapStore.getAllSystems
-        ? Math.min(18, Object.keys(ctx.mapStore.getAllSystems()).length < 3 ? 18 : 6)
-        : 6) - enemyPenalty),
+      score: Math.max(0, explorationLevel * 5 + (ctx.mapStore.getAllSystemIds().length < 3 ? 18 : 6) - enemyPenalty),
     },
     {
       key: "miner",
@@ -520,13 +570,46 @@ async function buildCandidates(
     candidates.push({ key: "hunter", name: "Hunter", fn: hunterRoutine, score: hunterScore });
   }
 
-  // Idle fallback — when all productive routines score low, boost mission_runner so the bot
-  // does something useful instead of defaulting to miner (which may also be pointless).
-  // Only applies if mission_runner hasn't run recently (no point spamming it either).
+  // Cleanup — scheduled maintenance routine (time-based)
+  if (settings.enableCleanup) {
+    const cleanupScore = scoreCleanup(lastRunMs, settings.cleanupIntervalHours);
+    if (cleanupScore > 0) {
+      candidates.push({ key: "cleanup", name: "Cleanup", fn: cleanupRoutine, score: cleanupScore });
+      ctx.log("system", `SmartSelector: cleanup score=${cleanupScore} (interval=${settings.cleanupIntervalHours}h)`);
+    }
+  }
+
+  // Scout — explore nearby unknown systems  
+  if (settings.enableScout) {
+    const scoutScore = scoreScout(ctx, explorationLevel);
+    const SCOUT_COOLDOWN_MS = 30 * 60 * 1000; // don't scout again within 30 min
+    const lastScout = lastRunMs.get("scout") ?? 0;
+    const scoutCooldownPenalty = lastScout > 0 && (Date.now() - lastScout) < SCOUT_COOLDOWN_MS
+      ? Math.round((1 - (Date.now() - lastScout) / SCOUT_COOLDOWN_MS) * 20)
+      : 0;
+    const finalScoutScore = Math.max(0, scoutScore - scoutCooldownPenalty);
+    if (finalScoutScore > 0) {
+      candidates.push({ key: "scout", name: "Scout", fn: scoutRoutine, score: finalScoutScore });
+    }
+  }
+
+  // Faction storage sell boost — if storage has accumulated items, reward trader
+  const facStorageBonus = scoreFactionStorageSell(ctx);
+  if (facStorageBonus > 0 && tradingLevel > 0) {
+    const traderCand = candidates.find(c => c.key === "trader");
+    if (traderCand) {
+      traderCand.score += facStorageBonus;
+      ctx.log("trade", `SmartSelector: faction storage sell opportunity +${facStorageBonus} to trader`);
+    }
+  }
+
+  // Idle fallback — when all productive routines score low, boost mission_runner then cleanup.
+  // Only applies if each hasn't run recently (no point spamming).
   {
     const minerCand   = candidates.find(c => c.key === "miner");
     const traderCand  = candidates.find(c => c.key === "trader");
     const gathererCand = candidates.find(c => c.key === "gatherer");
+    const cleanupCand = candidates.find(c => c.key === "cleanup");
     const isIdle =
       (minerCand?.score ?? 0) <= 5 &&
       (traderCand?.score ?? 0) <= 30 &&
@@ -534,15 +617,20 @@ async function buildCandidates(
       !hasGasPoi && !hasIcePoi;
 
     if (isIdle) {
+      // Boost mission_runner
       const MISSION_IDLE_COOLDOWN_MS = 5 * 60 * 1000;
       const lastMission = lastRunMs.get("mission_runner") ?? 0;
-      const missionElapsed = Date.now() - lastMission;
-      if (lastMission === 0 || missionElapsed >= MISSION_IDLE_COOLDOWN_MS) {
+      if (lastMission === 0 || (Date.now() - lastMission) >= MISSION_IDLE_COOLDOWN_MS) {
         const missionCand = candidates.find(c => c.key === "mission_runner");
         if (missionCand) {
           missionCand.score += 30;
-          ctx.log("system", "SmartSelector: idle — +30 to mission_runner as fallback (productive routines all low)");
+          ctx.log("system", "SmartSelector: idle — +30 to mission_runner as fallback");
         }
+      }
+      // Also boost cleanup as second fallback if it's in the candidate pool
+      if (cleanupCand && cleanupCand.score < 30) {
+        cleanupCand.score = Math.max(cleanupCand.score, 25);
+        ctx.log("system", "SmartSelector: idle — boosting cleanup to 25 as second fallback");
       }
     }
   }
@@ -562,6 +650,8 @@ const FORCED_ROUTINES: Record<string, Routine> = {
   return_home:    returnHomeRoutine,
   hunter:         hunterRoutine,
   gatherer:       gathererRoutine,
+  cleanup:        cleanupRoutine,
+  scout:          scoutRoutine,
 };
 
 // ── Main routine ──────────────────────────────────────────────

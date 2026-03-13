@@ -317,38 +317,15 @@ export const cleanupRoutine: Routine = async function* (ctx: RoutineContext) {
           station.hasCredits = credits > 0;
           station.hasItems = hasItems;
           stationsWithStorage.push(station);
-          ctx.log("info", `  ${station.poiName}: ${credits > 0 ? credits + "cr" : ""}${hasItems ? " + items" : ""}`);
+          const parts: string[] = [];
+          if (credits > 0) parts.push(`${credits}cr`);
+          if (hasItems) parts.push(`${itemArray.length} item type(s)`);
+          ctx.log("info", `  ${station.poiName}: ${parts.join(" + ")}`);
         }
       }
     }
 
-    // Also check for forgotten orders at all stations
-    const ordersData = await bot.viewOrders();
-    const ordersHint = ordersData.hint;
-    if (ordersHint) {
-      const orderHintEntries = parseStorageHints(ordersHint);
-      for (const entry of orderHintEntries) {
-        const sid = entry.station_id || entry.base_id || entry.poi_id || "";
-        if (!sid) continue;
-        const existing = stationsWithStorage.find(s => s.stationId === sid || s.poiId === sid);
-        if (existing) {
-          existing.hasOrders = true;
-        } else {
-          const resolved = resolveStation(sid, ctx.mapStore);
-          if (resolved) {
-            stationsWithStorage.push({
-              stationId: sid,
-              systemId: resolved.systemId,
-              poiId: resolved.poiId,
-              poiName: resolved.poiName,
-              hasItems: false,
-              hasCredits: false,
-              hasOrders: true,
-            });
-          }
-        }
-      }
-    }
+    // Note: open-order check is done on-site when visiting each station (avoids undocked API error)
 
     if (stationsWithStorage.length === 0) {
       ctx.log("info", "No stations with stored items — waiting 5 minutes");
@@ -451,8 +428,8 @@ export const cleanupRoutine: Routine = async function* (ctx: RoutineContext) {
         }
       }
 
-      // Cancel any forgotten orders at this station
-      if (station.hasOrders) {
+      // Cancel any forgotten open orders at this station (now docked — safe to call)
+      {
         const orders = await bot.viewOrders();
         const orderList = (
           Array.isArray(orders) ? orders :
@@ -460,15 +437,15 @@ export const cleanupRoutine: Routine = async function* (ctx: RoutineContext) {
           Array.isArray(orders.buy_orders) ? [...(orders.buy_orders as unknown[]), ...(orders.sell_orders as unknown[] || [])] :
           []
         ) as Array<Record<string, unknown>>;
+        let cancelledCount = 0;
         for (const order of orderList) {
           const orderId = (order.order_id as string) || (order.id as string) || "";
           if (orderId) {
             const cResp = await bot.exec("cancel_order", { order_id: orderId });
-            if (!cResp.error) {
-              ctx.log("trade", `Cancelled order ${orderId} at ${station.poiName}`);
-            }
+            if (!cResp.error) cancelledCount++;
           }
         }
+        if (cancelledCount > 0) ctx.log("trade", `Cancelled ${cancelledCount} open order(s) at ${station.poiName}`);
       }
 
       // Refuel while docked

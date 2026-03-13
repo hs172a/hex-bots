@@ -1515,6 +1515,20 @@ export class MapStore {
     return rec.available;
   }
 
+  /**
+   * Check buildings DB for a faction storage facility at this POI.
+   * Returns true  — active faction_lockbox / warehouse / depot found.
+   * Returns false — POI has building records but none are storage facilities.
+   * Returns null  — no building records for this POI (data not yet fetched).
+   */
+  hasFactionStorageBuilding(poiId: string): boolean | null {
+    if (!this._factionStorageDb) return null;
+    const buildings = this._factionStorageDb.getBuildingsForPoi(poiId);
+    if (buildings.length === 0) return null; // unknown — no building data yet
+    if (buildings.some(b => b.active && MapStore.STORAGE_FACILITY_TYPES.has(b.facility_type))) return true;
+    return false; // POI has buildings, none are faction storage
+  }
+
   // ── Faction storage DB delegates ─────────────────────────────
 
   /** Full replace of faction storage items at a POI (from view_faction_storage success). */

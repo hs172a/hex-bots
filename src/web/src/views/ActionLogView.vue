@@ -14,16 +14,38 @@
         <div class="w-px h-4 bg-space-border mx-1 shrink-0"></div>
 
         <!-- Category filter pills -->
-        <div class="flex flex-wrap gap-1">
+        <div class="flex flex-wrap gap-1 items-center">
+          <button
+            @click="activeCategory = null; reload()"
+            class="text-[11px] px-2 py-0.5 rounded-full border transition-colors"
+            :class="activeCategory === null ? 'bg-space-accent/20 text-space-accent border-transparent' : 'border-space-border text-space-text-dim hover:border-space-accent'"
+          >🌐 All</button>
           <button
             v-for="cat in CATEGORIES"
             :key="cat.id"
             @click="toggleCategory(cat.id)"
             class="text-[11px] px-2 py-0.5 rounded-full border transition-colors"
-            :class="activeCategories.has(cat.id)
+            :class="activeCategory === cat.id
               ? `${cat.activeClass} border-transparent`
-              : 'border-space-border text-space-text-dim hover:border-space-accent'"
+              : activeCategory !== null ? 'border-space-border text-space-text-dim opacity-40 hover:opacity-80 hover:border-space-accent' : 'border-space-border text-space-text-dim hover:border-space-accent'"
           >{{ cat.icon }} {{ cat.label }}</button>
+        </div>
+
+        <!-- Faction log toggle -->
+        <div class="flex items-center gap-1.5 shrink-0">
+          <button
+            @click="factionLogMode = !factionLogMode"
+            :class="factionLogMode ? 'bg-purple-500/20 text-purple-300 border-transparent' : 'border-space-border text-space-text-dim hover:border-space-accent'"
+            class="text-[11px] px-2 py-0.5 rounded-full border transition-colors"
+            title="View faction audit trail"
+          >🏙 Faction Log</button>
+          <input
+            v-if="factionLogMode"
+            v-model="factionId"
+            @change="reload"
+            placeholder="faction_id…"
+            class="input text-[11px] py-0 h-6 w-28 px-1.5"
+          />
         </div>
 
         <div class="ml-auto flex items-center gap-2 shrink-0">
@@ -142,14 +164,14 @@
           </template>
 
           <!-- Load More / pagination -->
-          <div v-if="hasMore" class="py-3 flex justify-center">
+          <div v-if="hasMore" class="py-3 flex flex-col items-center gap-1">
             <button
               @click="loadMore"
               :disabled="loading"
               class="btn btn-secondary text-xs px-6 py-1.5"
             >
               <span v-if="loading" class="animate-spin inline-block mr-1">⏳</span>
-              Load Older Entries
+              Load More (page {{ currentPage }} / {{ totalPages }})
             </button>
           </div>
           <div v-else-if="entries.length > 0" class="text-center text-[11px] text-space-text-dim opacity-40 py-2">
@@ -160,9 +182,9 @@
         <!-- Footer stats -->
         <div class="px-3 py-1.5 border-t border-space-border shrink-0 flex items-center gap-4 text-[11px] text-space-text-dim">
           <span>{{ entries.length }} entries loaded</span>
-          <span v-if="activeCategories.size < CATEGORIES.length" class="text-space-accent">
-            {{ activeCategories.size }} / {{ CATEGORIES.length }} categories shown
-          </span>
+          <span v-if="totalEntries > 0" class="text-space-accent">{{ totalEntries }} total</span>
+          <span v-if="activeCategory" class="text-space-accent">Filter: {{ activeCategory }}</span>
+          <span v-if="factionLogMode && factionId" class="text-purple-400">🏙 Faction log</span>
         </div>
 
       </template>
@@ -196,35 +218,32 @@ watch(selectedBotModel, () => reload());
 const entries = ref<any[]>([]);
 const loading = ref(false);
 const hasMore = ref(false);
-const beforeCursor = ref<string | null>(null);
+const currentPage = ref(1);
+const totalPages = ref(1);
+const totalEntries = ref(0);
 const pageLimit = ref<number>(50);
+const activeCategory = ref<string | null>(null);
+const factionLogMode = ref(false);
+const factionId = ref('');
 const logContainerRef = ref<HTMLElement | null>(null);
 
 // ── Category config ───────────────────────────────────────────
 
 const CATEGORIES = [
-  { id: 'combat',   label: 'Combat',   icon: '⚔️',  activeClass: 'bg-red-500/20 text-red-300',     badge: 'bg-red-500/20 text-red-300' },
+  { id: 'combat',   label: 'Combat',   icon: '⚔️',  activeClass: 'bg-red-500/20 text-red-300',      badge: 'bg-red-500/20 text-red-300' },
   { id: 'trading',  label: 'Trading',  icon: '💱',  activeClass: 'bg-green-500/20 text-green-300',  badge: 'bg-green-500/20 text-green-300' },
   { id: 'ship',     label: 'Ship',     icon: '🚀',  activeClass: 'bg-blue-500/20 text-blue-300',    badge: 'bg-blue-500/20 text-blue-300' },
   { id: 'crafting', label: 'Crafting', icon: '🔧',  activeClass: 'bg-orange-500/20 text-orange-300', badge: 'bg-orange-500/20 text-orange-300' },
-  { id: 'faction',  label: 'Faction',  icon: '🏛️', activeClass: 'bg-purple-500/20 text-purple-300', badge: 'bg-purple-500/20 text-purple-300' },
+  { id: 'faction',  label: 'Faction',  icon: '�️', activeClass: 'bg-purple-500/20 text-purple-300', badge: 'bg-purple-500/20 text-purple-300' },
   { id: 'mission',  label: 'Mission',  icon: '🎯',  activeClass: 'bg-indigo-500/20 text-indigo-300', badge: 'bg-indigo-500/20 text-indigo-300' },
   { id: 'skill',    label: 'Skill',    icon: '⭐',  activeClass: 'bg-cyan-500/20 text-cyan-300',    badge: 'bg-cyan-500/20 text-cyan-300' },
   { id: 'salvage',  label: 'Salvage',  icon: '♻️',  activeClass: 'bg-lime-500/20 text-lime-300',    badge: 'bg-lime-500/20 text-lime-300' },
+  { id: 'storage',  label: 'Storage',  icon: '📦',  activeClass: 'bg-teal-500/20 text-teal-300',    badge: 'bg-teal-500/20 text-teal-300' },
   { id: 'other',    label: 'Other',    icon: '📋',  activeClass: 'bg-[#21262d] text-space-text-dim', badge: 'bg-[#21262d] text-space-text-dim' },
 ] as const;
 
-const activeCategories = ref(new Set<string>(CATEGORIES.map(c => c.id)));
-
 function toggleCategory(id: string) {
-  const s = new Set(activeCategories.value);
-  if (s.has(id)) {
-    if (s.size === 1) return; // keep at least one
-    s.delete(id);
-  } else {
-    s.add(id);
-  }
-  activeCategories.value = s;
+  activeCategory.value = activeCategory.value === id ? null : id;
   reload();
 }
 
@@ -235,10 +254,11 @@ const STYLE_MAP: Record<string, { icon: string; card: string; badge: string }> =
   trading:  { icon: '💱',  card: 'bg-green-950/20 border-green-800/40',   badge: 'bg-green-500/20 text-green-300' },
   ship:     { icon: '🚀',  card: 'bg-blue-950/20 border-blue-800/40',     badge: 'bg-blue-500/20 text-blue-300' },
   crafting: { icon: '🔧',  card: 'bg-orange-950/20 border-orange-800/40', badge: 'bg-orange-500/20 text-orange-300' },
-  faction:  { icon: '🏛️', card: 'bg-purple-950/20 border-purple-800/40', badge: 'bg-purple-500/20 text-purple-300' },
+  faction:  { icon: '�️', card: 'bg-purple-950/20 border-purple-800/40', badge: 'bg-purple-500/20 text-purple-300' },
   mission:  { icon: '🎯',  card: 'bg-indigo-950/20 border-indigo-800/40', badge: 'bg-indigo-500/20 text-indigo-300' },
   skill:    { icon: '⭐',  card: 'bg-cyan-950/20 border-cyan-800/40',     badge: 'bg-cyan-500/20 text-cyan-300' },
   salvage:  { icon: '♻️',  card: 'bg-lime-950/20 border-lime-800/40',     badge: 'bg-lime-500/20 text-lime-300' },
+  storage:  { icon: '📦',  card: 'bg-teal-950/20 border-teal-800/40',     badge: 'bg-teal-500/20 text-teal-300' },
   other:    { icon: '📋',  card: 'bg-[#0d1117f0] border-[#30363d]',         badge: 'bg-[#21262d] text-space-text-dim' },
 };
 
@@ -264,24 +284,25 @@ function fetchBotLog(username: string, params: Record<string, any>): Promise<any
 async function reload() {
   loading.value = true;
   entries.value = [];
-  beforeCursor.value = null;
+  currentPage.value = 1;
+  totalPages.value = 1;
+  totalEntries.value = 0;
   hasMore.value = false;
 
-  const categories = [...activeCategories.value];
-  const params: Record<string, any> = { limit: pageLimit.value };
-  if (categories.length < CATEGORIES.length) params.category = categories.join(',');
+  const params: Record<string, any> = { page: 1, page_size: pageLimit.value };
+  if (activeCategory.value) params.category = activeCategory.value;
+  if (factionLogMode.value && factionId.value.trim()) params.faction_id = factionId.value.trim();
 
   if (selectedBotModel.value === '__all__') {
-    // Parallel fetch all bots
     const bots = botStore.bots.map(b => b.username);
     const results = await Promise.all(bots.map(u => fetchBotLog(u, params)));
     const merged = results.flat().sort((a, b) => {
       const ta = a.created_at ? new Date(a.created_at).getTime() : 0;
       const tb = b.created_at ? new Date(b.created_at).getTime() : 0;
-      return tb - ta; // newest first
+      return tb - ta;
     });
     entries.value = merged.slice(0, pageLimit.value * Math.max(1, bots.length));
-    hasMore.value = false; // all-bots mode doesn't support cursor pagination
+    hasMore.value = false;
   } else {
     await new Promise<void>((resolve) => {
       botStore.sendExec(selectedBotModel.value, 'get_action_log', params, (res: any) => {
@@ -290,7 +311,9 @@ async function reload() {
           const newEntries: any[] = (data.entries ?? []).map((e: any) => ({ ...e, _bot: selectedBotModel.value }));
           entries.value = newEntries;
           hasMore.value = data.has_more === true;
-          beforeCursor.value = newEntries.length > 0 ? String(newEntries[newEntries.length - 1].id) : null;
+          currentPage.value = data.page ?? 1;
+          totalPages.value = data.total_pages ?? 1;
+          totalEntries.value = data.total ?? newEntries.length;
         }
         resolve();
       });
@@ -301,11 +324,12 @@ async function reload() {
 }
 
 async function loadMore() {
-  if (selectedBotModel.value === '__all__' || !beforeCursor.value) return;
+  if (selectedBotModel.value === '__all__' || !hasMore.value) return;
   loading.value = true;
-  const categories = [...activeCategories.value];
-  const params: Record<string, any> = { limit: pageLimit.value, before: beforeCursor.value };
-  if (categories.length < CATEGORIES.length) params.category = categories.join(',');
+  const nextPage = currentPage.value + 1;
+  const params: Record<string, any> = { page: nextPage, page_size: pageLimit.value };
+  if (activeCategory.value) params.category = activeCategory.value;
+  if (factionLogMode.value && factionId.value.trim()) params.faction_id = factionId.value.trim();
   await new Promise<void>((resolve) => {
     botStore.sendExec(selectedBotModel.value, 'get_action_log', params, (res: any) => {
       if (res.ok && res.data) {
@@ -313,7 +337,9 @@ async function loadMore() {
         const newEntries: any[] = (data.entries ?? []).map((e: any) => ({ ...e, _bot: selectedBotModel.value }));
         entries.value = [...entries.value, ...newEntries];
         hasMore.value = data.has_more === true;
-        beforeCursor.value = newEntries.length > 0 ? String(newEntries[newEntries.length - 1].id) : null;
+        currentPage.value = nextPage;
+        totalPages.value = data.total_pages ?? totalPages.value;
+        totalEntries.value = data.total ?? totalEntries.value;
       }
       resolve();
     });
@@ -352,6 +378,6 @@ function formatEntry(entry: any): string {
   return parts.join(' ') || entry.category || '—';
 }
 
-// Reload when limit changes
 watch(pageLimit, () => reload());
+watch([factionLogMode, factionId], () => { if (!factionLogMode.value || factionId.value.trim()) reload(); });
 </script>

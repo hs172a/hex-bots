@@ -183,9 +183,12 @@ async function fetchAllRecipes(ctx: RoutineContext): Promise<Recipe[]> {
   return recipes;
 }
 
-/** Count how many of an item exist in cargo + storage + faction storage. */
+/** Count how many of an item exist in cargo + storage + faction storage.
+ *  Uses the global faction storage DB (synced across VMs via DataSync) for the
+ *  faction portion so that items deposited by other bots are also counted.
+ *  Falls back to bot.factionStorage when the global DB has no data yet. */
 function countItem(ctx: RoutineContext, itemId: string): number {
-  const { bot } = ctx;
+  const { bot, mapStore } = ctx;
   let total = 0;
   for (const i of bot.inventory) {
     if (i.itemId === itemId) total += i.quantity;
@@ -193,8 +196,17 @@ function countItem(ctx: RoutineContext, itemId: string): number {
   for (const i of bot.storage) {
     if (i.itemId === itemId) total += i.quantity;
   }
-  for (const i of bot.factionStorage) {
-    if (i.itemId === itemId) total += i.quantity;
+  // Prefer global faction storage DB (covers all POIs, synced via DataSync)
+  const globalFac = (mapStore as any).getAllFactionStorageItems?.() as
+    Array<{ item_id: string; quantity: number }> | undefined;
+  if (globalFac && globalFac.length > 0) {
+    for (const i of globalFac) {
+      if (i.item_id === itemId) total += i.quantity;
+    }
+  } else {
+    for (const i of bot.factionStorage) {
+      if (i.itemId === itemId) total += i.quantity;
+    }
   }
   return total;
 }

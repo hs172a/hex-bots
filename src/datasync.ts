@@ -430,6 +430,41 @@ export class DataSyncServer {
           }
         }
 
+        // ── GET /sync/needs-matrix ────────────────────────────────────────
+        // Returns all needs_matrix entries (coordinator targets + current quantities)
+        if (req.method === "GET" && url.pathname === "/sync/needs-matrix") {
+          const entries = (map as any).getAllNeedsMatrix?.() ?? [];
+          return json({ entries });
+        }
+
+        // ── POST /sync/needs-matrix ───────────────────────────────────────
+        // Clients push their needs_matrix entries; master merges (newer timestamp wins)
+        if (req.method === "POST" && url.pathname === "/sync/needs-matrix") {
+          try {
+            const body = await req.json() as { entries?: unknown[] };
+            const raw = body.entries ?? [];
+            let merged = 0;
+            for (const item of raw) {
+              const e = item as Record<string, unknown>;
+              if (!e.item_id || !e.source) continue;
+              if (isFutureDated(e.updated_target_at, cfg.max_clock_skew_sec)) continue;
+              const existing = (map as any).getNeedsMatrixItem?.(e.item_id as string);
+              if (!existing || !existing.updated_target_at ||
+                  new Date(e.updated_target_at as string) > new Date(existing.updated_target_at)) {
+                (map as any).setNeedsMatrixTarget?.(
+                  e.item_id as string, e.item_name as string ?? e.item_id as string,
+                  e.category as string ?? "", e.target_qty as number ?? 0,
+                  e.source as string, e.priority as number ?? 50,
+                );
+                merged++;
+              }
+            }
+            return json({ ok: true, merged });
+          } catch {
+            return json({ error: "Invalid JSON" }, 400);
+          }
+        }
+
         // ── GET /sync/online-players ───────────────────────────────────────
         // Returns players seen in the last 48h on the master
         if (req.method === "GET" && url.pathname === "/sync/online-players") {
@@ -563,6 +598,8 @@ export class DataSyncClient {
         console.warn("[DataSync] Deposits push error:", e instanceof Error ? e.message : e));
       this.pushOnlinePlayers().catch(e =>
         console.warn("[DataSync] Online players push error:", e instanceof Error ? e.message : e));
+      this.pushNeedsMatrix().catch(e =>
+        console.warn("[DataSync] Needs-matrix push error:", e instanceof Error ? e.message : e));
     }, fastPushMs);
 
     // Pull mining claims from master at same cadence as pull timer
@@ -570,6 +607,13 @@ export class DataSyncClient {
     setInterval(() => {
       this.pullMiningClaims().catch(e =>
         console.warn("[DataSync] Mining claims pull error:", e instanceof Error ? e.message : e));
+    }, pullMs);
+
+    // Pull needs-matrix from master so coordinator targets cross VM boundaries
+    this.pullNeedsMatrix().catch(() => { /* ignore first-run errors */ });
+    setInterval(() => {
+      this.pullNeedsMatrix().catch(e =>
+        console.warn("[DataSync] Needs-matrix pull error:", e instanceof Error ? e.message : e));
     }, pullMs);
 
     // Slow push: full topology changes (low-freq)
@@ -903,6 +947,47 @@ export class DataSyncClient {
     } else {
       this.recordFailure();
       console.warn(`[DataSync] POST /sync/stats → ${resp.status}`);
+    }
+  }
+
+  private async pushNeedsMatrix(): Promise<void> {
+    const entries = (this.map as any).getAllNeedsMatrix?.() ?? [];
+    if (entries.length === 0) return;
+    const resp = await fetch(`${this.cfg.master_url}/sync/needs-matrix`, {
+      method: "POST",
+      headers: this.headers(),
+      body: JSON.stringify({ entries }),
+      signal: AbortSignal.timeout(10_000),
+    });
+    if (resp.ok) this.recordSuccess();
+    else console.warn(`[DataSync] POST /sync/needs-matrix → ${resp.status}`);
+  }
+
+  private async pullNeedsMatrix(): Promise<void> {
+    const resp = await fetch(`${this.cfg.master_url}/sync/needs-matrix`, {
+      headers: this.headers(),
+      signal: AbortSignal.timeout(10_000),
+    });
+    if (!resp.ok) { this.recordFailure(); return; }
+    const body = await resp.json() as { entries?: unknown[] };
+    let merged = 0;
+    for (const raw of body.entries ?? []) {
+      const e = raw as Record<string, unknown>;
+      if (!e.item_id || !e.source) continue;
+      const existing = (this.map as any).getNeedsMatrixItem?.(e.item_id as string);
+      if (!existing || !existing.updated_target_at ||
+          new Date(e.updated_target_at as string) > new Date(existing.updated_target_at)) {
+        (this.map as any).setNeedsMatrixTarget?.(
+          e.item_id as string, (e.item_name as string) ?? (e.item_id as string),
+          (e.category as string) ?? "", (e.target_qty as number) ?? 0,
+          e.source as string, (e.priority as number) ?? 50,
+        );
+        merged++;
+      }
+    }
+    if (merged > 0) {
+      console.log(`[DataSync] Pulled ${merged} needs-matrix entry(s) from master`);
+      this.recordSuccess();
     }
   }
 

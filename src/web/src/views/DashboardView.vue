@@ -197,6 +197,40 @@
       </div>
     </div>
 
+    <!-- Fleet Groups widget (compact, only when groups exist) -->
+    <div v-if="botStore.fleetGroups.length" class="mx-2 card px-3 py-2">
+      <div class="flex items-center justify-between mb-2">
+        <span class="text-xs font-semibold uppercase text-space-text-dim">⚔️ Fleet Groups</span>
+        <button @click="emit('switch-tab', 'fleet')" class="text-[11px] text-space-accent hover:underline bg-transparent border-0 p-0">Open Fleet ↗</button>
+      </div>
+      <div class="flex flex-wrap gap-2">
+        <div v-for="g in botStore.fleetGroups" :key="g.id"
+          class="flex items-center gap-3 rounded border border-space-border/40 bg-deep-bg px-3 py-1.5"
+        >
+          <!-- Group info -->
+          <div>
+            <div class="text-xs font-medium text-space-text-bright">{{ g.name }}</div>
+            <div class="text-[11px]" :class="fleetGroupRunning(g.id) > 0 ? 'text-green-400' : 'text-space-text-dim'">
+              {{ fleetGroupRunning(g.id) }}/{{ fleetGroupTotal(g.id) }} active
+            </div>
+          </div>
+          <!-- Member dots -->
+          <div class="flex gap-0.5">
+            <span v-for="[un] in fleetGroupMembers(g.id)" :key="un"
+              :title="un + ' — ' + (botStore.bots.find(b => b.username === un)?.state ?? 'offline')"
+              class="inline-block w-2 h-2 rounded-full"
+              :class="botDotClass(botStore.bots.find(b => b.username === un)?.state)"
+            />
+          </div>
+          <!-- Quick orders -->
+          <div class="flex gap-1">
+            <button @click="fleetStartGroup(g.id)" class="btn text-[11px] px-1.5 py-0 text-green-400 border-green-700/50 hover:bg-green-900/20">▶ Start</button>
+            <button @click="fleetStopGroup(g.id)" class="btn text-[11px] px-1.5 py-0 text-red-400 border-red-700/50 hover:bg-red-900/20">⏹ Stop</button>
+          </div>
+        </div>
+      </div>
+    </div>
+
     <!-- Scrollable content wrapper -->
     <div class="flex-1 overflow-auto p-2 pb-0 space-y-4">
       <!-- Log panels (Activity, Broadcast, System) -->
@@ -282,10 +316,11 @@
                 <div class="flex items-center gap-1.5">
                   <span class="text-[10px] font-semibold uppercase tracking-widest"
                     :class="group.entry.type === 'alert'  ? 'text-red-500'
-                           : group.entry.type === 'combat' ? 'text-orange-400'
-                           : group.entry.type === 'forum'  ? 'text-purple-400'
-                           : group.entry.tag === 'DM'      ? 'text-space-accent'
-                           : 'text-space-text-dim'"
+                         : group.entry.type === 'battle' ? 'text-red-400'
+                         : group.entry.type === 'combat' ? 'text-orange-400'
+                         : group.entry.type === 'forum'  ? 'text-purple-400'
+                         : group.entry.tag === 'DM'      ? 'text-space-accent'
+                         : 'text-space-text-dim'"
                   >
                     {{ group.entry.type === 'simple' || group.entry.type === 'header'
                         ? (group.entry.tag || 'CHAT')
@@ -462,6 +497,38 @@
 <script setup lang="ts">
 import { computed, ref, watch, nextTick, onMounted, onUnmounted } from 'vue';
 import { useBotStore } from '../stores/botStore';
+
+const ROLE_ROUTINE: Record<string, string> = {
+  miner: 'fleet_miner', hauler: 'fleet_hauler', scout: 'fleet_scout',
+  combat: 'fleet_combat', refueler: 'fleet_refueler',
+};
+
+function fleetGroupMembers(groupId: string) {
+  return Object.entries(botStore.fleetAssignments).filter(([, a]) => a.groupId === groupId);
+}
+function fleetGroupTotal(groupId: string) { return fleetGroupMembers(groupId).length; }
+function fleetGroupRunning(groupId: string) {
+  return fleetGroupMembers(groupId).filter(([u]) => botStore.bots.find(b => b.username === u)?.state === 'running').length;
+}
+function fleetStartGroup(groupId: string) {
+  for (const [username, asgn] of fleetGroupMembers(groupId)) {
+    const bot = botStore.bots.find(b => b.username === username);
+    if (bot && bot.state !== 'running' && bot.state !== 'stopping')
+      botStore.startBot(username, ROLE_ROUTINE[asgn.role] ?? 'fleet_miner');
+  }
+}
+function fleetStopGroup(groupId: string) {
+  for (const [username] of fleetGroupMembers(groupId)) {
+    const bot = botStore.bots.find(b => b.username === username);
+    if (bot?.state === 'running') botStore.stopBot(username);
+  }
+}
+function botDotClass(state?: string) {
+  if (state === 'running') return 'bg-green-400';
+  if (state === 'error')   return 'bg-red-400';
+  if (state === 'stopping') return 'bg-yellow-400';
+  return 'bg-gray-600';
+}
 import { empireIcon, empireName } from '../utils/empires';
 import ProgressBar from '../components/ProgressBar.vue';
 import {
@@ -479,6 +546,7 @@ const {
 
 const emit = defineEmits<{
   (e: 'open-profile', username: string): void;
+  (e: 'switch-tab', tabId: string): void;
 }>();
 
 const botStore = useBotStore();

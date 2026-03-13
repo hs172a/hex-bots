@@ -31,6 +31,11 @@ import { facilityManagerRoutine } from "./routines/facility_manager.js";
 import { tradeBrokerRoutine } from "./routines/trade_broker.js";
 import { smartSelectorRoutine } from "./routines/smart_selector.js";
 import { combatSelectorRoutine } from "./routines/combat_selector.js";
+import { fleetMinerRoutine } from "./routines/fleet_miner.js";
+import { fleetHaulerRoutine } from "./routines/fleet_hauler.js";
+import { fleetRefuelerRoutine } from "./routines/fleet_refueler.js";
+import { fleetScoutRoutine } from "./routines/fleet_scout.js";
+import { fleetCombatRoutine } from "./routines/fleet_combat.js";
 import { mapStore } from "./mapstore.js";
 import { catalogStore } from "./catalogstore.js";
 import { publicCatalog } from "./publicCatalog.js";
@@ -118,6 +123,11 @@ let sessionStore: SessionStore;
 const ROUTINES: Record<string, { name: string; fn: Routine }> = {
   smart_selector: { name: "SmartSelector", fn: smartSelectorRoutine },
   combat_selector: { name: "CombatSelector", fn: combatSelectorRoutine },
+  fleet_miner:    { name: "Fleet Miner",    fn: fleetMinerRoutine },
+  fleet_hauler:   { name: "Fleet Hauler",   fn: fleetHaulerRoutine },
+  fleet_refueler: { name: "Fleet Refueler", fn: fleetRefuelerRoutine },
+  fleet_scout:    { name: "Fleet Scout",    fn: fleetScoutRoutine },
+  fleet_combat:   { name: "Fleet Combat",   fn: fleetCombatRoutine },
   trader: { name: "Trader", fn: traderRoutine },
   miner: { name: "Miner", fn: minerRoutineV2 },
   crafter: { name: "Crafter", fn: crafterRoutine },
@@ -220,6 +230,13 @@ function setupBotLogging(bot: Bot): void {
     server.logFaction(line);
   });
 
+  // Guard: skip view_faction_storage when station is known to have no faction storage
+  bot.shouldCheckFactionStorage = (poiId: string): boolean => {
+    if (mapStore.hasFactionStorage(poiId) === false) return false;
+    if (mapStore.hasFactionStorageBuilding(poiId) === false) return false;
+    return true;
+  };
+
   // Wire faction storage DB snapshot: fires whenever bot.refreshFactionStorage() succeeds
   bot.onFactionStorageViewed = (rawItems, poiId, systemId) => {
     if (!poiId) return;
@@ -260,6 +277,21 @@ function setupBotLogging(bot: Bot): void {
         const author = (data.author as string) || "";
         const ts = new Date().toLocaleTimeString("en-US", { hour12: false });
         server.logBroadcast(`${ts} [FORUM] 📌 ${author}: ${title}`);
+        continue;
+      }
+      // battle_alert (v0.215)
+      if ((msgType === "battle_alert" || type === "battle_alert") && data && typeof data === "object") {
+        const sysName = (data.system_name as string) || (data.system as string) || "?";
+        const rawParticipants = Array.isArray(data.participants) ? data.participants as any[] : [];
+        const names = rawParticipants.slice(0, 6).map((p: any) => {
+          const name = (p.name || p.username || p.id) as string;
+          const ship = p.ship_class ? ` (${p.ship_class})` : p.ship_name ? ` [${p.ship_name}]` : '';
+          return name + ship;
+        }).join(", ");
+        const ts = new Date().toLocaleTimeString("en-US", { hour12: false });
+        const msg = names ? `⚔️ Battle in ${sysName}: ${names}` : `⚔️ Battle alert in ${sysName}`;
+        server.logBroadcast(`${ts} [BATTLE] @${username}: ${msg}`);
+        server.logBot(username, `${ts} [combat] ${msg}`);
         continue;
       }
       // system-level broadcast (ok/announce msgs)
@@ -606,6 +638,12 @@ async function handleExec(action: WebAction): Promise<WebActionResult> {
     await bot.login();
   }
 
+  // Guard: skip view_faction_storage API call when cache confirms no building at this POI
+  if (command === "view_faction_storage" && bot.poi && bot.shouldCheckFactionStorage?.(bot.poi) === false) {
+    server.logBot(botName, `No faction storage at ${bot.poi} (cached)`);
+    return { ok: false, error: "No faction storage at this station (cached)" };
+  }
+
   let resp = await bot.exec(command, params);
 
   // If still getting auth errors after API's internal recovery, do a full re-login and retry once
@@ -670,9 +708,9 @@ async function handleExec(action: WebAction): Promise<WebActionResult> {
   // Sync bot cached state after read commands so periodic status broadcasts stay correct
   if (command === "view_faction_storage") {
     if (!resp.error) {
-      await bot.refreshFactionStorage();
-      // Persist canonical snapshot to DB (overwrites any optimistic updates)
-      if (bot.poi) {
+      await bot.refreshFactionStorage(); // updates in-memory from cached result (no extra API call)
+      // Persist to DB only when station has a known faction storage building
+      if (bot.poi && bot.shouldCheckFactionStorage?.(bot.poi) !== false) {
         const rawItems = Array.isArray(resp.result)
           ? resp.result
           : ((resp.result as any)?.items || (resp.result as any)?.storage || []);
@@ -1088,10 +1126,11 @@ async function main(): Promise<void> {
     }
 
     // Refresh cargo + storage to get current quantities
+    const _canFac = !bot.poi || bot.shouldCheckFactionStorage?.(bot.poi) !== false;
     const [cargoResp, storageResp, factionResp] = await Promise.all([
       bot.exec('get_cargo'),
       bot.exec('view_storage'),
-      bot.exec('view_faction_storage'),
+      _canFac ? bot.exec('view_faction_storage') : Promise.resolve({ result: {}, error: null }),
     ]);
     const cargoRaw = (cargoResp.result as any) ?? {};
     const cargoItems: Array<{ item_id: string; quantity: number }> =

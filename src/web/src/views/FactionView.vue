@@ -207,7 +207,7 @@
         <div v-if="activeSection === 'storage'">
           <div class="flex items-center justify-between mb-3">
             <h3 class="text-sm font-semibold text-space-text-bright">Faction Storage</h3>
-            <button @click="loadStorage" :disabled="loading" class="btn text-xs px-2 py-1">{{ storageLoaded ? 'Reload' : 'Load Storage' }}</button>
+            <button @click="loadStorage" :disabled="loading || !selectedBotObj?.docked" class="btn text-xs px-2 py-1" :title="!selectedBotObj?.docked ? 'Bot must be docked' : ''">{{ storageLoaded ? 'Reload' : 'Load Storage' }}</button>
           </div>
           <div v-if="!storageLoaded" class="text-xs text-space-text-dim italic py-4 text-center">Click "Load Storage" to view items (bot must be docked at a faction storage facility).</div>
           <div v-else-if="storageError" class="text-xs text-space-red px-2 py-2">{{ storageError }}</div>
@@ -218,7 +218,7 @@
               <div class="grid grid-cols-2 gap-1">
                 <div v-for="item in items" :key="item.item_id || item.name"
                   class="flex items-center justify-between py-1.5 px-2 rounded bg-deep-bg hover:bg-space-row-hover transition-colors">
-                  <span class="text-xs text-space-text truncate">{{ item.name || item.item_id }}</span>
+                  <KbTooltip :item-id="item.item_id || item.name" class="text-xs text-space-text truncate">{{ item.name || item.item_id }}</KbTooltip>
                   <span class="text-xs font-mono ml-2 shrink-0" :class="CATEGORY_COLORS[category] || 'text-space-text-dim'">{{ fmt(item.quantity) }}</span>
                 </div>
               </div>
@@ -494,7 +494,7 @@
               <div class="grid grid-cols-2 gap-1">
                 <div v-for="item in group.items" :key="item.item_id"
                   class="flex items-center justify-between py-1 px-2 rounded bg-deep-bg hover:bg-space-row-hover transition-colors">
-                  <span class="text-xs text-space-text truncate">{{ item.item_name || item.item_id }}</span>
+                  <KbTooltip :item-id="item.item_id" class="text-xs text-space-text truncate">{{ item.item_name || item.item_id }}</KbTooltip>
                   <span class="text-xs font-mono ml-2 shrink-0" :class="itemTypeColor(item.item_id)">{{ fmt(item.quantity) }}</span>
                 </div>
               </div>
@@ -615,18 +615,22 @@
           </div>
 
           <!-- Coverage stats -->
-          <div v-if="intelStatus" class="grid grid-cols-3 gap-2 mb-4">
+          <div v-if="intelStatus" class="grid grid-cols-4 gap-2 mb-4">
             <div class="bg-deep-bg border border-[#21262d] rounded-md p-2 text-center">
-              <div class="text-xl font-bold text-space-cyan">{{ intelStatus.systems_covered ?? '—' }}</div>
-              <div class="text-[11px] text-space-text-dim">Systems Covered</div>
+              <div class="text-xl font-bold text-space-cyan">{{ intelStatus.unique_systems ?? '—' }}</div>
+              <div class="text-[11px] text-space-text-dim">Systems</div>
             </div>
             <div class="bg-deep-bg border border-[#21262d] rounded-md p-2 text-center">
               <div class="text-xl font-bold text-space-yellow">{{ intelStatus.total_reports ?? '—' }}</div>
               <div class="text-[11px] text-space-text-dim">Reports</div>
             </div>
             <div class="bg-deep-bg border border-[#21262d] rounded-md p-2 text-center">
-              <div class="text-xl font-bold text-space-green">{{ intelStatus.freshness_score ?? '—' }}</div>
-              <div class="text-[11px] text-space-text-dim">Freshness</div>
+              <div class="text-xl font-bold text-space-text">{{ intelStatus.reports_24h ?? '—' }}</div>
+              <div class="text-[11px] text-space-text-dim">24h Reports</div>
+            </div>
+            <div class="bg-deep-bg border border-[#21262d] rounded-md p-2 text-center">
+              <div class="text-xl font-bold text-space-green">{{ intelStatus.intel_level ?? '—' }}</div>
+              <div class="text-[11px] text-space-text-dim">Intel Level</div>
             </div>
           </div>
 
@@ -634,20 +638,20 @@
           <div class="card py-2 px-2 mb-3">
             <h4 class="text-xs font-semibold text-space-text-dim uppercase mb-2">Query Intel</h4>
             <div class="flex gap-2">
-              <input v-model="intelQuery" type="text" placeholder="Item ID or system ID…" class="input text-xs flex-1" @keydown.enter="queryIntel" />
+              <input v-model="intelQuery" type="text" placeholder="Item ID (e.g. copper_ore)…" class="input text-xs flex-1" @keydown.enter="queryIntel" />
               <button @click="queryIntel" :disabled="intelLoading || !intelQuery.trim()" class="btn btn-primary text-xs px-2">Search</button>
             </div>
             <div v-if="intelResults.length > 0" class="mt-3 space-y-1">
               <div v-for="(r, i) in intelResults" :key="i"
                 class="flex items-center justify-between px-2 py-1.5 bg-deep-bg border border-[#21262d] rounded text-xs">
-                <div>
+                <div class="min-w-0 flex-1">
                   <span class="text-space-text-bright">{{ r.item_name || r.item_id }}</span>
-                  <span class="text-space-text-dim ml-2">@ {{ r.station_name || r.base_name || r.location }}</span>
+                  <span class="text-space-text-dim ml-2">@ {{ r.station_name }}</span>
                 </div>
-                <div class="flex gap-2 shrink-0">
-                  <span v-if="r.buy_price" class="text-space-cyan">Buy: {{ fmt(r.buy_price) }}</span>
-                  <span v-if="r.sell_price" class="text-space-yellow">Sell: {{ fmt(r.sell_price) }}</span>
-                  <span v-if="r.timestamp" class="text-space-text-dim">{{ formatDate(r.timestamp) }}</span>
+                <div class="flex gap-2 shrink-0 ml-2">
+                  <span v-if="r.buy_price" class="text-space-cyan">Buy: {{ fmt(r.buy_price) }}<span v-if="r.buy_volume" class="text-[10px] opacity-60"> ×{{ r.buy_volume }}</span></span>
+                  <span v-if="r.sell_price" class="text-space-yellow">Sell: {{ fmt(r.sell_price) }}<span v-if="r.sell_volume" class="text-[10px] opacity-60"> ×{{ r.sell_volume }}</span></span>
+                  <span v-if="r.submitted_at_tick" class="text-space-text-dim">t{{ r.submitted_at_tick }}</span>
                 </div>
               </div>
             </div>
@@ -731,6 +735,7 @@
 import { ref, computed, watch, onMounted } from 'vue';
 import { useBotStore } from '../stores/botStore';
 import { empireIcon, empireName } from '../utils/empires';
+import KbTooltip from '../components/KbTooltip.vue';
 
 const botStore = useBotStore();
 const selectedBot = ref<string | null>(null);
@@ -814,11 +819,10 @@ async function fetchAllStorages() {
   await botStore.fetchFactionStorage();
 }
 
-// Auto-load when switching to the All Storages tab
+// Auto-load when switching to the All Storages or Intel tabs
 watch(activeSection, (sec) => {
-  if (sec === 'allstorages' && botStore.factionStorageItems.length === 0) {
-    fetchAllStorages();
-  }
+  if (sec === 'allstorages' && botStore.factionStorageItems.length === 0) fetchAllStorages();
+  if (sec === 'intel' && !intelStatus.value) loadIntelStatus();
 });
 
 // Pre-load on mount so data is ready if user opens the tab
@@ -976,12 +980,29 @@ async function queryIntel() {
   if (!q) return;
   intelLoading.value = true;
   intelQueried.value = false;
-  const r = await execAsync('faction_query_trade_intel', { query: q });
+  const r = await execAsync('faction_query_trade_intel', { item_id: q });
   intelLoading.value = false;
   intelQueried.value = true;
   if (r.ok && r.data) {
     const d = r.data as any;
-    intelResults.value = Array.isArray(d) ? d : (Array.isArray(d.results) ? d.results : d.intel ? [d.intel] : []);
+    const entries: any[] = Array.isArray(d) ? d : (Array.isArray(d.entries) ? d.entries : []);
+    // Flatten station-grouped entries into per-item rows for the table
+    const flat: any[] = [];
+    for (const entry of entries) {
+      for (const item of (entry.items || [])) {
+        flat.push({
+          item_name:        item.item_name || item.item_id,
+          item_id:          item.item_id,
+          station_name:     entry.station_name || entry.base_id,
+          buy_price:        item.best_buy   ?? null,
+          sell_price:       item.best_sell  ?? null,
+          buy_volume:       item.buy_volume,
+          sell_volume:      item.sell_volume,
+          submitted_at_tick: entry.submitted_at_tick,
+        });
+      }
+    }
+    intelResults.value = flat;
   } else {
     intelResults.value = [];
   }
@@ -996,9 +1017,9 @@ async function doSubmitIntel() {
       base_id: s.base_id,
       station_name: s.station_name || s.base_id,
       items: [{
-        item_id:    s.item_id,
-        best_buy:   s.buy_price  ?? null,
-        best_sell:  s.sell_price ?? null,
+        item_id:   s.item_id,
+        best_buy:  s.buy_price  ?? null,
+        best_sell: s.sell_price ?? null,
       }],
     }],
   });
@@ -1176,6 +1197,10 @@ function refreshData() {
 // ── Storage: loaded on demand (requires docked) ─────────────
 function loadStorage() {
   if (!selectedBot.value || loading.value) return;
+  if (!selectedBotObj.value?.docked) {
+    storageError.value = 'Bot must be docked at a faction storage facility.';
+    return;
+  }
   loading.value = true;
   storageError.value = '';
   const username = selectedBot.value;

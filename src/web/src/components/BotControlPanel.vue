@@ -10,15 +10,17 @@
         <div class="grid grid-cols-2 gap-x-5 gap-y-2" :class="commandRunning ? 'pointer-events-none opacity-60' : ''">
 
           <!-- Travel -->
-          <div class="flex gap-2 items-center self-start">
-            <label class="text-xs text-space-text-dim w-18">Travel</label>
-            <select v-model="travelPoi" class="input text-xs flex-1 !p-1">
-              <option value="">Select POI...</option>
-              <option v-for="poi in systemPois" :key="poi.id" :value="poi.id">
-                {{ poi.name }} ({{ poi.type }})
-              </option>
-            </select>
-            <button @click="execTravel" class="btn btn-primary text-xs px-3 py-1">Go</button>
+          <div class="flex flex-col gap-1.5">
+            <div class="flex gap-2 items-center">
+              <label class="text-xs text-space-text-dim w-18">Travel</label>
+              <select v-model="travelPoi" class="input text-xs flex-1 !p-1">
+                <option value="">Select POI...</option>
+                <option v-for="poi in systemPois" :key="poi.id" :value="poi.id">
+                  {{ poi.name }} ({{ poi.type }})
+                </option>
+              </select>
+              <button @click="execTravel" class="btn btn-primary text-xs px-3 py-1">Go</button>
+            </div>
           </div>
 
           <!-- Long Distance Travel -->
@@ -68,6 +70,15 @@
                 <div v-if="ldRoute.length > 20" class="opacity-40">+{{ ldRoute.length - 20 }} more…</div>
               </div>
               <div v-if="ldRelocating" class="space-y-1">
+                <!-- Ship flight animation -->
+                <div class="lrt-anim-box relative h-12 rounded overflow-hidden bg-[#060b14] border border-[#1e2d45]">
+                  <div class="stars-layer" />
+                  <div class="stars-layer stars-fast" />
+                  <div class="ship-icon">🚀</div>
+                  <div class="absolute bottom-1.5 right-2 text-[10px] text-space-accent/80 font-mono">
+                    → {{ ldRoute[ldProgress]?.name || ldRoute[ldProgress]?.system_id || '…' }}
+                  </div>
+                </div>
                 <div class="text-xs text-space-text-dim">{{ ldProgress }}/{{ ldRoute.length }} jumps complete</div>
                 <div class="h-1.5 bg-[#21262d] rounded-full overflow-hidden">
                   <div class="h-full bg-green-500 rounded-full transition-all" :style="{ width: (ldProgress / ldRoute.length * 100) + '%' }"></div>
@@ -149,6 +160,98 @@
             <button @click="execCommand('repair')" class="btn btn-secondary text-xs px-3 py-1">🔧 Repair</button>
           </div>
 
+          <!-- Refuel (expanded modes) -->
+          <div class="flex flex-col gap-1 col-span-2">
+            <div class="flex gap-2 items-center">
+              <label class="text-xs text-space-text-dim w-18">⚡ Burn Cells</label>
+              <select v-model="refuelItemId" class="input text-xs flex-1 !p-1">
+                <option value="">{{ fuelCellsInCargo.length ? 'Select cell type…' : 'No fuel cells in cargo' }}</option>
+                <option v-for="fc in fuelCellsInCargo" :key="fc.itemId" :value="fc.itemId">
+                  {{ fc.name || fc.itemId }} ({{ fc.quantity }})
+                </option>
+              </select>
+              <input v-model.number="refuelQty" type="number" min="1" class="input text-xs w-16 !p-1 scrollbar-dark" />
+              <button
+                @click="execRefuelCells"
+                :disabled="!refuelItemId || refuelLoading"
+                class="btn btn-secondary text-xs px-2 py-1 disabled:opacity-40"
+                title="Burn fuel cells from cargo — works anywhere, no station needed"
+              >{{ refuelLoading ? '⏳' : 'Burn' }}</button>
+            </div>
+            <div class="flex gap-2 items-center">
+              <label class="text-xs text-space-text-dim w-18">⛽ Transfer</label>
+              <select v-model="refuelTarget" class="input text-xs flex-1 !p-1">
+                <option value="">{{ nearbyPlayers.length ? 'Select player…' : 'Run 👁 Nearby first' }}</option>
+                <option v-for="p in nearbyPlayers" :key="p.username || p.id" :value="p.username || p.id">
+                  {{ p.username || p.name || p.id }}
+                </option>
+              </select>
+              <input v-model.number="refuelTransferQty" type="number" min="1" class="input text-xs w-16 !p-1 scrollbar-dark" />
+              <button
+                @click="execFuelTransfer"
+                :disabled="!refuelTarget || refuelLoading"
+                class="btn btn-secondary text-xs px-2 py-1 disabled:opacity-40"
+                title="Transfer fuel from your tank to another ship (requires Refueling Pump, both at same POI)"
+              >{{ refuelLoading ? '⏳' : 'Send' }}</button>
+            </div>
+            <!-- Refuel result -->
+            <div v-if="refuelResult" class="ml-20 rounded border border-space-border bg-[#0d1117f0] p-2 text-[11px] space-y-0.5">
+              <div v-if="!refuelResult.ok" class="text-red-400">❌ {{ refuelResult.error || 'Refuel failed' }}</div>
+              <template v-else>
+                <div class="grid grid-cols-2 gap-x-4 gap-y-0.5 text-[10px]">
+                  <div><span class="text-space-text-dim">Mode: </span><span class="text-space-text capitalize">{{ refuelResult.data?.source || '—' }}</span></div>
+                  <div><span class="text-space-text-dim">Fuel now: </span><span class="text-space-accent">{{ refuelResult.data?.fuel_now ?? refuelResult.data?.fuel ?? '—' }} / {{ refuelResult.data?.fuel_max ?? '—' }} ⚡</span></div>
+                  <template v-if="refuelResult.data?.source === 'fuel_cell' || refuelResult.data?.cells_used">
+                    <div><span class="text-space-text-dim">Cells used: </span><span class="text-space-yellow">{{ refuelResult.data.cells_used }} × {{ refuelResult.data.item_name || refuelResult.data.item_id }}</span></div>
+                  </template>
+                  <template v-if="refuelResult.data?.cost">
+                    <div><span class="text-space-text-dim">Cost: </span><span class="text-space-yellow">{{ refuelResult.data.cost.toLocaleString() }} ₡</span></div>
+                  </template>
+                  <template v-if="refuelResult.data?.target_player_name">
+                    <div class="col-span-2"><span class="text-space-text-dim">→ Target: </span><span class="text-space-green">{{ refuelResult.data.target_player_name }}</span><span class="text-space-text-dim"> fuel: </span><span class="text-space-accent">{{ refuelResult.data.target_fuel_now }} / {{ refuelResult.data.target_fuel_max }}</span></div>
+                  </template>
+                  <template v-if="refuelResult.data?.rescue_completed">
+                    <div class="col-span-2 text-space-green">✅ Rescue completed! +{{ (refuelResult.data.rescue_reward ?? 0).toLocaleString() }} ₡</div>
+                  </template>
+                </div>
+              </template>
+            </div>
+          </div>
+
+          <!-- Distress Signal -->
+          <div class="flex flex-col gap-1 col-span-2">
+            <div class="flex gap-2 items-center">
+              <label class="text-xs text-space-text-dim w-18">Emergency</label>
+              <button
+                @click="execDistressSignal"
+                :disabled="!canSendDistress || distressLoading"
+                :title="distressDisabledReason || 'Broadcast SOS — posts rescue missions at nearest station'"
+                class="btn text-xs px-3 py-1 border-red-600/60 bg-red-900/20 text-red-400 hover:bg-red-900/40 disabled:opacity-40 disabled:cursor-not-allowed"
+              >
+                {{ distressLoading ? '⏳ Sending…' : '🆘 SOS Signal' }}
+              </button>
+              <span v-if="distressDisabledReason" class="text-[10px] text-space-text-dim italic">{{ distressDisabledReason }}</span>
+            </div>
+            <!-- SOS result card -->
+            <div v-if="distressResult" class="ml-20 rounded border p-2 text-[11px] space-y-1"
+              :class="distressResult.ok ? 'border-red-700/40 bg-red-950/30' : 'border-space-border bg-[#0d1117f0]'">
+              <div v-if="!distressResult.ok" class="text-red-400">❌ {{ distressResult.error || 'Signal failed' }}</div>
+              <template v-else>
+                <div class="flex items-center gap-3 flex-wrap">
+                  <span class="text-red-400 font-semibold">🆘 Signal broadcast!</span>
+                  <span class="text-space-text-dim">{{ distressResult.data?.missions_posted ?? 0 }} rescue mission(s) posted</span>
+                </div>
+                <div class="grid grid-cols-2 gap-x-4 gap-y-0.5 text-[10px]">
+                  <div><span class="text-space-text-dim">Nearest station: </span><span class="text-space-text">{{ distressResult.data?.nearest_station_system_name || distressResult.data?.distress_system_name || '—' }}</span></div>
+                  <div><span class="text-space-text-dim">Reward: </span><span class="text-space-yellow">{{ distressResult.data?.reward != null ? distressResult.data.reward.toLocaleString() + ' ₡' : '—' }}</span></div>
+                  <div><span class="text-space-text-dim">Fuel needed: </span><span class="text-space-accent">{{ distressResult.data?.fuel_needed ?? '—' }} ⚡</span></div>
+                  <div><span class="text-space-text-dim">Expires: </span><span class="text-space-text">{{ distressResult.data?.expires_in_seconds != null ? Math.round(distressResult.data.expires_in_seconds / 60) + ' min' : '—' }}</span></div>
+                </div>
+                <div v-if="distressResult.data?.message" class="text-space-text-dim italic">{{ distressResult.data.message }}</div>
+              </template>
+            </div>
+          </div>
+
           <!-- Withdraw Credits (gifts arrive as stored credits) -->
           <div class="flex gap-2 items-center">
             <label class="text-xs text-space-text-dim w-18">W.Credits</label>
@@ -181,7 +284,7 @@
                 <div class="text-space-text-dim font-semibold mb-1">Requires:</div>
                 <div v-for="c in selectedRecipeInfo.components" :key="c.item_id" class="flex items-center gap-1.5 leading-5">
                   <span class="text-space-accent font-semibold w-8 text-right">{{ c.quantity || 1 }}x</span>
-                  <span class="flex-1">{{ c.name || c.item_id }}</span>
+                  <KbTooltip :item-id="c.item_id" class="flex-1">{{ c.name || c.item_id }}</KbTooltip>
                   <span :class="(combinedCraftInventory.get(c.item_id) ?? 0) >= (c.quantity || 1) ? 'text-space-green' : 'text-red-400'">
                     ({{ combinedCraftInventory.get(c.item_id) ?? 0 }} {{ currentBot.docked ? 'avail' : 'in cargo' }})
                   </span>
@@ -190,7 +293,7 @@
               <div v-else class="text-space-text-dim">No ingredients required</div>
               <div v-if="selectedRecipeInfo.output" class="mt-1.5 pt-1.5 border-t border-space-border/50 flex items-center gap-2">
                 <span class="text-space-text-dim">Output:</span>
-                <span class="text-space-green font-semibold">{{ selectedRecipeInfo.output.quantity || 1 }}x {{ selectedRecipeInfo.output.name || selectedRecipeInfo.output.item_id }}</span>
+                <KbTooltip :item-id="selectedRecipeInfo.output.item_id" class="text-space-green font-semibold">{{ selectedRecipeInfo.output.quantity || 1 }}x {{ selectedRecipeInfo.output.name || selectedRecipeInfo.output.item_id }}</KbTooltip>
               </div>
             </div>
           </div>
@@ -442,6 +545,7 @@
 <script setup lang="ts">
 import { ref, computed, onMounted, onUnmounted, nextTick, watch } from 'vue';
 import { useBotStore } from '../stores/botStore';
+import KbTooltip from './KbTooltip.vue';
 
 const props = defineProps<{ bot: any }>();
 const emit = defineEmits<{
@@ -904,6 +1008,8 @@ function processExecResult(command: string, data: any) {
       if (pois.length > 0) systemPois.value = pois;
       const conns = sys.connections || data.connections || [];
       if (conns.length > 0) systemConnections.value = conns;
+      const ab = sys.active_battle ?? data.active_battle ?? null;
+      updateBotInStore({ activeBattle: ab });
       break;
     }
     case 'get_nearby': {
@@ -1200,6 +1306,75 @@ function refreshPublicCatalog() {
   setTimeout(() => { commandRunning.value = false; }, 5000);
 }
 
+const refuelItemId = ref('');
+const refuelQty = ref(1);
+const refuelTarget = ref('');
+const refuelTransferQty = ref(10);
+const refuelLoading = ref(false);
+const refuelResult = ref<{ ok: boolean; data?: any; error?: string } | null>(null);
+
+const fuelCellsInCargo = computed(() =>
+  inventory.value.filter((i: any) => (i.itemId || '').includes('fuel_cell'))
+);
+
+watch(refuelItemId, (itemId) => {
+  if (!itemId) return;
+  const item = inventory.value.find((i: any) => i.itemId === itemId);
+  if (item) refuelQty.value = item.quantity;
+});
+
+async function execRefuelCells() {
+  if (!refuelItemId.value) return;
+  refuelLoading.value = true;
+  refuelResult.value = null;
+  const r = await execAsync('refuel', { item_id: refuelItemId.value, quantity: refuelQty.value });
+  refuelLoading.value = false;
+  refuelResult.value = r?.ok
+    ? { ok: true, data: r.data ?? r.result ?? r }
+    : { ok: false, error: r?.error || r?.message || 'Refuel failed' };
+}
+
+async function execFuelTransfer() {
+  if (!refuelTarget.value) return;
+  refuelLoading.value = true;
+  refuelResult.value = null;
+  const r = await execAsync('refuel', { target: refuelTarget.value, quantity: refuelTransferQty.value });
+  refuelLoading.value = false;
+  refuelResult.value = r?.ok
+    ? { ok: true, data: r.data ?? r.result ?? r }
+    : { ok: false, error: r?.error || r?.message || 'Transfer failed' };
+}
+
+const distressLoading = ref(false);
+const distressResult = ref<{ ok: boolean; data?: any; error?: string } | null>(null);
+const canSendDistress = computed(() => {
+  const bot = currentBot.value;
+  const fuel = bot.fuel ?? 0;
+  const maxFuel = bot.maxFuel ?? bot.max_fuel ?? 1;
+  return !commandRunning.value && !ldRelocating.value && !bot.docked && fuel < maxFuel;
+});
+const distressDisabledReason = computed(() => {
+  const bot = currentBot.value;
+  if (bot.docked) return 'Must be undocked';
+  const fuel = bot.fuel ?? 0;
+  const maxFuel = bot.maxFuel ?? bot.max_fuel ?? 1;
+  if (fuel >= maxFuel) return 'Tank is full';
+  if (ldRelocating.value) return 'LRT in progress';
+  return '';
+});
+async function execDistressSignal() {
+  if (!canSendDistress.value) return;
+  distressLoading.value = true;
+  distressResult.value = null;
+  const r = await execAsync('distress_signal');
+  distressLoading.value = false;
+  if (r?.ok) {
+    distressResult.value = { ok: true, data: r.data ?? r.result ?? r };
+  } else {
+    distressResult.value = { ok: false, error: r?.error || r?.message || 'Signal rejected' };
+  }
+}
+
 const craftRunning = ref(false);
 const craftResult = ref<{ ok: boolean; crafted?: number; message?: string } | null>(null);
 async function execCraft() {
@@ -1271,3 +1446,71 @@ onMounted(() => {
   scrollToBottom();
 });
 </script>
+
+<style scoped>
+/* ── LRT ship flight animation ─────────────────────────────── */
+@keyframes stars-scroll {
+  from { background-position: 0 0; }
+  to   { background-position: -2000px 0; }
+}
+@keyframes stars-scroll-fast {
+  from { background-position: 0 0; }
+  to   { background-position: -1200px 0; }
+}
+@keyframes ship-throb {
+  0%, 100% { transform: translateY(-50%) scale(1);   filter: drop-shadow(0 0 3px #58a6ff88); }
+  50%       { transform: translateY(-50%) scale(1.08); filter: drop-shadow(0 0 7px #58a6ffcc); }
+}
+@keyframes hyperjump-flash {
+  0%   { opacity: 0; }
+  10%  { opacity: 0.18; }
+  30%  { opacity: 0; }
+  100% { opacity: 0; }
+}
+
+.lrt-anim-box {
+  /* subtle starfield background for depth */
+  background: radial-gradient(ellipse at 50% 50%, #0a1628 0%, #060b14 100%);
+}
+
+.stars-layer {
+  position: absolute;
+  inset: 0;
+  background-image:
+    radial-gradient(1px 1px at 10% 30%, #ffffff55 0%, transparent 100%),
+    radial-gradient(1px 1px at 30% 70%, #ffffff44 0%, transparent 100%),
+    radial-gradient(1.5px 1.5px at 50% 20%, #ffffff66 0%, transparent 100%),
+    radial-gradient(1px 1px at 70% 50%, #ffffff33 0%, transparent 100%),
+    radial-gradient(1px 1px at 90% 80%, #ffffff44 0%, transparent 100%),
+    radial-gradient(1px 1px at 20% 90%, #ffffff22 0%, transparent 100%),
+    radial-gradient(1px 1px at 80% 10%, #ffffff33 0%, transparent 100%),
+    radial-gradient(1px 1px at 60% 40%, #ffffff44 0%, transparent 100%),
+    radial-gradient(1.5px 1.5px at 40% 60%, #aac4ff44 0%, transparent 100%),
+    radial-gradient(1px 1px at 15% 55%, #ffffff22 0%, transparent 100%);
+  background-size: 600px 48px;
+  animation: stars-scroll 6s linear infinite;
+  opacity: 0.7;
+}
+
+.stars-fast {
+  background-image:
+    radial-gradient(1px 1px at 5%  20%, #ffffff88 0%, transparent 100%),
+    radial-gradient(2px 1px at 25% 60%, #aac4ffaa 0%, transparent 100%),
+    radial-gradient(1px 1px at 55% 80%, #ffffff66 0%, transparent 100%),
+    radial-gradient(2px 1px at 75% 35%, #ffffff88 0%, transparent 100%),
+    radial-gradient(1px 1px at 88% 65%, #ffffff55 0%, transparent 100%);
+  background-size: 400px 48px;
+  animation: stars-scroll-fast 2.5s linear infinite;
+  opacity: 0.9;
+}
+
+.ship-icon {
+  position: absolute;
+  top: 50%;
+  left: 14px;
+  font-size: 18px;
+  transform: translateY(-50%);
+  animation: ship-throb 1.6s ease-in-out infinite;
+  z-index: 2;
+}
+</style>

@@ -1,5 +1,5 @@
-import { readFileSync, writeFileSync, existsSync, mkdirSync, readdirSync } from "fs";
-import { join, basename } from "path";
+import { readFileSync, writeFileSync, existsSync, mkdirSync, readdirSync, statSync } from "fs";
+import { join, basename, extname } from "path";
 import type { BotStatus } from "../bot.js";
 import type { Database } from "bun:sqlite";
 import { mapStore } from "../mapstore.js";
@@ -107,6 +107,84 @@ function loadStats(): StatsFile {
     }
   }
   return { daily: {}, lastSeen: {} };
+}
+
+// ── Fleet file helpers ────────────────────────────────────────────────────
+function readFleetFile(): { groups: unknown[]; assignments: Record<string, unknown>; signals: Record<string, unknown> } {
+  try {
+    const file = join(process.cwd(), "data", "settings.json");
+    if (existsSync(file)) {
+      const all = JSON.parse(readFileSync(file, "utf-8"));
+      const f = (all.fleet || {}) as Record<string, unknown>;
+      return {
+        groups: Array.isArray(f.groups) ? f.groups : [],
+        assignments: (f.assignments || {}) as Record<string, unknown>,
+        signals: (f.signals || {}) as Record<string, unknown>,
+      };
+    }
+  } catch { /* fallback */ }
+  return { groups: [], assignments: {}, signals: {} };
+}
+
+function writeFleetFile(data: { groups: unknown[]; assignments: Record<string, unknown>; signals?: Record<string, unknown> }): void {
+  const dir = join(process.cwd(), "data");
+  const file = join(dir, "settings.json");
+  if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
+  let existing: Record<string, unknown> = {};
+  try { if (existsSync(file)) existing = JSON.parse(readFileSync(file, "utf-8")); } catch { /* start fresh */ }
+  const oldFleet = (existing.fleet || {}) as Record<string, unknown>;
+  existing.fleet = { ...oldFleet, groups: data.groups, assignments: data.assignments, signals: data.signals ?? oldFleet.signals ?? {} };
+  writeFileSync(file, JSON.stringify(existing, null, 2) + "\n", "utf-8");
+}
+
+// ── Knowledge Base index ───────────────────────────────────────────────────
+export interface KbEntry { id: string; name: string; description: string; category: string; url: string; }
+let _kbIndexCache: KbEntry[] | null = null;
+
+function buildKbIndex(): KbEntry[] {
+  if (_kbIndexCache) return _kbIndexCache;
+  const kbRoot = join(process.cwd(), "..", "spacemolt-kb", "kb");
+  console.log(`[KB] scanning: ${kbRoot} — exists: ${existsSync(kbRoot)}`);
+  if (!existsSync(kbRoot)) return [];
+  const entries: KbEntry[] = [];
+  const sections: Array<{ subdir: string; urlPrefix: string }> = [
+    { subdir: "items", urlPrefix: "/kb/items/" },
+    { subdir: "recipes", urlPrefix: "/kb/recipes/" },
+    { subdir: "skills", urlPrefix: "/kb/skills/" },
+    { subdir: "ships", urlPrefix: "/kb/ships/" },
+  ];
+  const extractText = (html: string, tag: string, cls?: string): string => {
+    const pat = cls
+      ? new RegExp(`<${tag}[^>]*class="[^"]*${cls}[^"]*"[^>]*>([^<]+)</${tag}>`, "i")
+      : new RegExp(`<${tag}[^>]*>([^<]+)</${tag}>`, "i");
+    return (html.match(pat)?.[1] ?? "").replace(/&amp;/g, "&").replace(/&lt;/g, "<").replace(/&gt;/g, ">").trim();
+  };
+  const scanDir = (dir: string, urlBase: string, cat: string) => {
+    if (!existsSync(dir)) return;
+    for (const entry of readdirSync(dir, { withFileTypes: true })) {
+      if (entry.isDirectory()) {
+        scanDir(join(dir, entry.name), urlBase + entry.name + "/", cat + "/" + entry.name);
+      } else if (entry.name.endsWith(".html") && entry.name !== "index.html") {
+        try {
+          const html = readFileSync(join(dir, entry.name), "utf-8");
+          const id = entry.name.replace(/\.html$/, "");
+          const name = extractText(html, "h2") || id.replace(/_/g, " ");
+          const description = extractText(html, "blockquote", "item-desc") || extractText(html, "p", "desc");
+          entries.push({ id, name, description, category: cat, url: urlBase + entry.name });
+        } catch { /* skip unreadable */ }
+      }
+    }
+  };
+  for (const { subdir, urlPrefix } of sections) {
+    try {
+      scanDir(join(kbRoot, subdir), urlPrefix, subdir);
+    } catch (err) {
+      console.warn(`[KB] error scanning ${subdir}:`, err);
+    }
+  }
+  console.log(`[KB] index built: ${entries.length} entries`);
+  _kbIndexCache = entries;
+  return entries;
 }
 
 /** One-time import of stats.json into bot_stats SQLite table. */
@@ -645,6 +723,91 @@ export class WebServer {
           const allLines = content.split("\n").filter(l => l);
           const lines = allLines.slice(-tail);
           return Response.json({ lines, total: allLines.length });
+        }
+
+        // ── Knowledge Base static files (/kb/*) and JSON index ──────────────
+        if (url.pathname.startsWith("/kb/")) {
+          const kbRoot = join(process.cwd(), "..", "spacemolt-kb", "kb");
+          const filePath = join(kbRoot, url.pathname.slice("/kb/".length));
+          if (existsSync(filePath) && statSync(filePath).isFile()) {
+            const ext = extname(filePath).toLowerCase();
+            const mime =
+              ext === ".html" ? "text/html; charset=utf-8" :
+              ext === ".css"  ? "text/css; charset=utf-8" :
+              ext === ".js"   ? "application/javascript" :
+              ext === ".png"  ? "image/png" :
+              ext === ".svg"  ? "image/svg+xml" : "application/octet-stream";
+            return new Response(Bun.file(filePath), { headers: { "Content-Type": mime, "Cache-Control": "public, max-age=3600" } });
+          }
+          return new Response("Not found", { status: 404 });
+        }
+        if (url.pathname === "/api/kb/index") {
+          try {
+            return Response.json(buildKbIndex());
+          } catch (err) {
+            console.error("[KB] buildKbIndex failed:", err);
+            return new Response(JSON.stringify({ error: String(err) }), { status: 500, headers: { "Content-Type": "application/json" } });
+          }
+        }
+
+        // ── Fleet CRUD endpoints (/api/fleet) ───────────────────
+        if (url.pathname === "/api/fleet" && req.method === "GET") {
+          const data = readFleetFile();
+          return Response.json(data);
+        }
+        if (url.pathname === "/api/fleet/groups" && req.method === "POST") {
+          try {
+            const body = await req.json() as Record<string, unknown>;
+            const data = readFleetFile();
+            const group = { id: body.id || crypto.randomUUID(), name: body.name || "Fleet", objective: body.objective || "mine", targetPoi: body.targetPoi ?? "", depositPoi: body.depositPoi ?? "" };
+            const idx = data.groups.findIndex((g: any) => g.id === group.id);
+            if (idx >= 0) data.groups[idx] = group; else data.groups.push(group);
+            writeFleetFile(data);
+            return Response.json({ ok: true, group });
+          } catch (e) { return Response.json({ ok: false, error: String(e) }, { status: 400 }); }
+        }
+        if (url.pathname.startsWith("/api/fleet/groups/") && req.method === "DELETE") {
+          const groupId = url.pathname.slice("/api/fleet/groups/".length);
+          const data = readFleetFile();
+          data.groups = data.groups.filter((g: any) => g.id !== groupId);
+          for (const [u, a] of Object.entries(data.assignments as Record<string, any>)) {
+            if (a.groupId === groupId) delete (data.assignments as Record<string, any>)[u];
+          }
+          writeFleetFile(data);
+          return Response.json({ ok: true });
+        }
+        if (url.pathname === "/api/fleet/assignments" && req.method === "POST") {
+          try {
+            const body = await req.json() as { username: string; groupId: string; role: string };
+            const data = readFleetFile();
+            (data.assignments as Record<string, any>)[body.username] = { groupId: body.groupId, role: body.role };
+            writeFleetFile(data);
+            return Response.json({ ok: true });
+          } catch (e) { return Response.json({ ok: false, error: String(e) }, { status: 400 }); }
+        }
+        if (url.pathname.startsWith("/api/fleet/assignments/") && req.method === "DELETE") {
+          const username = decodeURIComponent(url.pathname.slice("/api/fleet/assignments/".length));
+          const data = readFleetFile();
+          delete (data.assignments as Record<string, any>)[username];
+          writeFleetFile(data);
+          return Response.json({ ok: true });
+        }
+
+        if (url.pathname === "/api/fleet/order" && req.method === "POST") {
+          try {
+            const body = await req.json() as { username: string; cmd: string; targetPoi?: string; targetSystem?: string };
+            if (!body.username || !body.cmd) return Response.json({ ok: false, error: "username and cmd required" }, { status: 400 });
+            const data = readFleetFile();
+            if (!data.signals) (data as any).signals = {};
+            const existing = ((data as any).signals[body.username] ?? {}) as Record<string, unknown>;
+            (data as any).signals[body.username] = {
+              ...existing,
+              order: { cmd: body.cmd, targetPoi: body.targetPoi, targetSystem: body.targetSystem, issuedAt: Date.now() },
+              lastUpdated: Date.now(),
+            };
+            writeFleetFile(data as any);
+            return Response.json({ ok: true });
+          } catch (e) { return Response.json({ ok: false, error: String(e) }, { status: 400 }); }
         }
 
         // Webhook test endpoint

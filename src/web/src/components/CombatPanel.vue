@@ -1,5 +1,22 @@
 <template>
   <div class="flex-1 overflow-auto scrollbar-dark py-2 px-0 space-y-2">
+    <!-- Active Battle Alert (v0.215: populated from get_system response) -->
+    <div v-if="activeBattle" class="card py-2 px-3 border-red-700/50 bg-red-950/20">
+      <div class="flex items-center justify-between mb-1">
+        <span class="text-xs font-semibold text-red-400 uppercase">⚔️ Active Battle in System</span>
+        <button @click="loadBattleStatus" class="btn text-[11px] px-2 py-0.5 border-red-700/40 text-red-300 hover:bg-red-900/40">Status</button>
+      </div>
+      <div class="text-[11px] text-space-text-dim space-y-0.5">
+        <div v-if="activeBattle.battle_id" class="font-mono text-[10px] opacity-60">ID: {{ activeBattle.battle_id }}</div>
+        <div v-if="activeBattle.participants?.length" class="flex flex-wrap gap-1">
+          <span v-for="p in activeBattle.participants" :key="p.id || p.name"
+            class="px-1.5 py-0 rounded text-[10px]"
+            :class="p.faction ? 'bg-[#21262d] text-space-text' : 'bg-red-900/40 text-red-300'"
+          >{{ p.name || p.username || p.id }}{{ p.ship_class ? ` (${p.ship_class})` : '' }}</span>
+        </div>
+      </div>
+    </div>
+
     <!-- Status bar -->
     <div class="card py-2 px-3">
       <div class="flex items-center justify-between mb-2">
@@ -270,6 +287,7 @@ const battleZones = computed(() => {
 });
 
 const currentBot = computed(() => botStore.bots.find(b => b.username === props.bot.username) || props.bot);
+const activeBattle = computed(() => (currentBot.value as any).activeBattle ?? null);
 const hullPct = computed(() => currentBot.value.maxHull > 0 ? Math.round((currentBot.value.hull / currentBot.value.maxHull) * 100) : 0);
 const shieldPct = computed(() => currentBot.value.maxShield > 0 ? Math.round((currentBot.value.shield / currentBot.value.maxShield) * 100) : 0);
 

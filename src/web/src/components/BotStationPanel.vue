@@ -136,6 +136,7 @@
                       <span v-if="f.recipe_id" class="text-space-accent">⚗️ {{ f.recipe_id }}</span>
                       <span v-if="f.capacity" class="text-space-text-dim">Cap: {{ f.capacity }}</span>
                       <span v-if="f.rent_per_cycle" class="text-space-yellow">💰 {{ f.rent_per_cycle }}cr/cycle</span>
+                      <span v-if="f.rent_paid_until_tick" class="text-space-text-dim">paid to tick {{ f.rent_paid_until_tick.toLocaleString() }}</span>
                     </div>
                     <div v-if="f.yours" class="flex gap-2 mt-1">
                       <button @click.stop="toggleFacility(f)"
@@ -144,6 +145,36 @@
                         :class="f.active !== false ? 'btn-secondary' : 'btn-primary'">
                         {{ actionLoading === f.facility_id ? '⏳' : (f.active !== false ? '⏹ Disable' : '▶ Enable') }}
                       </button>
+                    </div>
+                    <div v-if="upgradesFor(f.facility_id).length" class="mt-1">
+                      <button @click.stop="stationActiveUpgrade = stationActiveUpgrade === f.facility_id ? null : f.facility_id"
+                        class="btn btn-secondary text-[11px] px-2 py-0.5">
+                        ⬆ Upgrade ({{ upgradesFor(f.facility_id).length }})
+                      </button>
+                      <div v-if="stationActiveUpgrade === f.facility_id" class="mt-1.5 space-y-1">
+                        <div v-for="u in upgradesFor(f.facility_id)" :key="u.facility_type || u.type_id || u.id"
+                          class="bg-[#1a1f27] rounded px-2 py-1.5 text-[11px] flex items-center justify-between gap-2">
+                          <div class="min-w-0">
+                            <div class="text-space-text font-medium">{{ u.name }}</div>
+                            <div v-if="u.description" class="text-space-text-dim mt-0.5 line-clamp-2">{{ u.description }}</div>
+                            <div class="flex flex-wrap gap-x-3 gap-y-0 mt-0.5">
+                              <span v-if="u.build_cost" class="text-space-yellow">{{ u.build_cost?.toLocaleString() }}cr</span>
+                              <span v-if="u.labor_cost" class="text-space-text-dim">+{{ u.labor_cost }} labor</span>
+                              <span v-if="u.build_time" class="text-space-text-dim">⏱ {{ u.build_time }}c</span>
+                              <span v-if="u.faction_cap" class="text-space-cyan">cap {{ u.faction_cap?.toLocaleString() }}</span>
+                              <span v-if="u.rent_per_cycle" class="text-space-yellow">💰 {{ u.rent_per_cycle }}cr/cycle</span>
+                            </div>
+                            <div v-if="u.build_materials?.length" class="flex flex-wrap gap-x-2 gap-y-0 mt-0.5">
+                              <span v-for="m in (u.build_materials || [])" :key="m.item_id" class="text-space-text-dim">{{ m.name || m.item_id }}<span class="text-space-text ml-0.5">×{{ m.quantity }}</span></span>
+                            </div>
+                          </div>
+                          <button @click.stop="upgradeFacility(f, u.facility_type || u.type_id)"
+                            :disabled="actionLoading === f.facility_id"
+                            class="btn btn-primary text-[11px] px-2 py-0.5 shrink-0">
+                            {{ actionLoading === f.facility_id ? '⏳' : '⬆' }}
+                          </button>
+                        </div>
+                      </div>
                     </div>
                   </div>
                 </div>
@@ -170,7 +201,8 @@
                 <div class="flex items-start justify-between gap-2 mb-1.5">
                   <div class="min-w-0">
                     <div class="font-medium text-space-text-bright">{{ f.name }}</div>
-                    <div v-if="f.description" class="text-[11px] text-space-text-dim mt-0.5 leading-relaxed">{{ f.description }}</div>
+                    <div v-if="f.maintenance_satisfied === false && f.degraded_description" class="text-[11px] text-yellow-400 mt-0.5 leading-relaxed italic">{{ f.degraded_description }}</div>
+                    <div v-else-if="f.description" class="text-[11px] text-space-text-dim mt-0.5 leading-relaxed">{{ f.description }}</div>
                   </div>
                   <span class="px-1.5 py-0.5 rounded text-[11px] shrink-0"
                     :class="f.active !== false && f.maintenance_satisfied !== false
@@ -213,6 +245,7 @@
                       <div v-if="u.description" class="text-space-text-dim mt-0.5 leading-relaxed line-clamp-2">{{ u.description }}</div>
                       <div class="flex gap-3 mt-0.5">
                         <span v-if="u.build_cost" class="text-space-yellow">{{ u.build_cost?.toLocaleString() }}cr</span>
+                        <span v-if="u.labor_cost" class="text-space-text-dim">+{{ u.labor_cost }} labor</span>
                         <span v-if="u.bonus_type" class="text-space-cyan">+{{ u.bonus_value }} {{ u.bonus_type?.replace(/_/g, ' ') }}</span>
                       </div>
                     </div>
@@ -272,10 +305,13 @@
                       <span v-if="t.personal_service" class="text-space-accent">⚙️ {{ t.personal_service.replace(/_/g, ' ') }}</span>
                       <span v-if="t.rent_per_cycle" class="text-space-yellow">💰 {{ t.rent_per_cycle }}cr/cycle</span>
                       <span v-if="t.build_time" class="text-space-text-dim">⏱ {{ t.build_time }} cycles</span>
+                      <span v-if="typeDetails[t.id]?.upgrades_from_name || t.upgrades_from_name" class="text-space-text-dim">🔓 needs: {{ typeDetails[t.id]?.upgrades_from_name || t.upgrades_from_name }}</span>
+                      <span v-if="typeDetails[t.id]?.upgrades_to_name || t.upgrades_to_name" class="text-space-text-dim">→ {{ typeDetails[t.id]?.upgrades_to_name || t.upgrades_to_name }}</span>
                     </div>
                   </div>
                   <div class="shrink-0 flex flex-col items-end gap-1">
                     <span class="text-[11px] font-semibold" :class="t.build_cost ? 'text-space-yellow' : 'text-space-text-dim'">{{ t.build_cost != null ? t.build_cost.toLocaleString() + ' cr' : '—' }}</span>
+                    <span v-if="typeDetails[t.id]?.labor_cost || t.labor_cost" class="text-[10px] text-space-text-dim">+{{ (typeDetails[t.id]?.labor_cost || t.labor_cost).toLocaleString() }} labor</span>
                     <button @click="buildFacility(t)"
                       :disabled="isBuilt(t.id) || !t.buildable || actionLoading === t.id"
                       class="btn text-[11px] px-2 py-0.5 disabled:opacity-40 disabled:cursor-not-allowed"
@@ -285,6 +321,7 @@
                   </div>
                 </div>
                 <div v-if="buildErrors[t.id]" class="px-2 pb-1.5 text-[11px] text-red-400">⚠ {{ buildErrors[t.id] }}</div>
+                <div v-if="!t.buildable && (typeDetails[t.id]?.hint || t.hint)" class="px-2 pb-1.5 text-[11px] text-space-text-dim/70 italic border-t border-[#30363d] pt-1.5">💡 {{ typeDetails[t.id]?.hint || t.hint }}</div>
                 <div v-if="buildMaterials(t).length" class="px-2 pb-2 pt-0 border-t border-[#30363d] mt-0 flex items-center justify-between gap-2">
                   <div class="min-w-0 pt-1.5">
                     <div class="flex flex-wrap gap-x-2 gap-y-0.5 text-[11px]">
@@ -437,6 +474,7 @@ const actionLoading = ref<string | null>(null);
 const stationFacilities = ref<any[]>([]);
 const myFacilities = ref<any[]>([]);
 const upgradeMap = ref<Record<string, any[]>>({}); // facility_id → upgrade options
+const stationActiveUpgrade = ref<string | null>(null);
 const facilityTypes = ref<any[]>([]);
 
 const currentPlayerId = ref<string>(''); // fetched once via get_status; used to filter player_facilities
@@ -766,10 +804,12 @@ function notif(text: string, type: 'success' | 'warn' | 'error'): void {
 // ── Data loading ──────────────────────────────────────────────
 async function fetchPlayerId(): Promise<void> {
   if (currentPlayerId.value) return;
-  const res = await execAsync('get_status', {});
-  if (res.ok && res.data) {
-    const pid = res.data.player?.id || res.data.player?.player_id || res.data.id || res.data.player_id || '';
-    if (pid) currentPlayerId.value = pid;
+  for (let attempt = 0; attempt < 2; attempt++) {
+    const res = await execAsync('get_status', {});
+    if (res.ok && res.data) {
+      const pid = res.data.player?.id || res.data.player?.player_id || res.data.id || res.data.player_id || '';
+      if (pid) { currentPlayerId.value = pid; return; }
+    }
   }
 }
 
@@ -788,9 +828,10 @@ async function loadFacilities(): Promise<void> {
     if (stationList.length || playerList.length || factionList.length) {
       // v2 split format — player_facilities contains ALL players' personal facilities at this station
       // filter to only current bot's by matching owner_id
+      // Never fall back to all playerList — that would show other players' facilities as "yours"
       const mine = currentPlayerId.value
         ? playerList.filter((f: any) => f.owner_id === currentPlayerId.value)
-        : playerList;
+        : [];
       stationFacilities.value = [
         ...stationList,
         ...mine.map((f: any) => ({ ...f, yours: true })),
@@ -809,17 +850,23 @@ async function loadFacilities(): Promise<void> {
 }
 
 async function loadUpgrades(): Promise<void> {
-  if (!myFacilities.value.length) return;
+  const hasFaction = stationFacilities.value.some((f: any) => f.category === 'faction');
+  if (!myFacilities.value.length && !hasFaction) return;
   const res = await execAsync('facility', { action: 'upgrades' });
   if (!res.ok) return;
   const d = res.data || {};
-  const list: any[] = d.upgrades || d.available_upgrades || (Array.isArray(d) ? d : []);
   const map: Record<string, any[]> = {};
+  const list: any[] = d.upgrades || d.available_upgrades || (Array.isArray(d) ? d : []);
   for (const entry of list) {
     const id: string = entry.facility_id;
     if (!id) continue;
     const opts: any[] = entry.available_upgrades || entry.upgrades || (entry.facility_type ? [entry] : []);
     if (opts.length) map[id] = opts;
+  }
+  for (const entry of (d.faction_upgrades || [])) {
+    const id: string = entry.your_facility_id;
+    if (!id || !entry.upgrade_to) continue;
+    map[id] = [{ ...entry.upgrade_to, facility_type: entry.upgrade_to.type_id, isFactionUpgrade: true }];
   }
   upgradeMap.value = map;
 }
@@ -888,7 +935,7 @@ async function loadTypes(): Promise<void> {
 
 async function reloadAll(): Promise<void> {
   await loadFacilities();
-  if (myFacilities.value.length) await loadUpgrades();
+  await loadUpgrades();
 }
 
 // ── Actions ───────────────────────────────────────────────────
@@ -933,7 +980,9 @@ async function buildFacility(t: any): Promise<void> {
 async function upgradeFacility(f: any, toTypeId: string): Promise<void> {
   actionLoading.value = f.facility_id;
   try {
-    const res = await execAsync('facility', { action: 'upgrade', facility_id: f.facility_id, facility_type: toTypeId });
+    const isFactionUpgrade = upgradesFor(f.facility_id)[0]?.isFactionUpgrade;
+    const action = isFactionUpgrade ? 'faction_upgrade' : 'upgrade';
+    const res = await execAsync('facility', { action, facility_id: f.facility_id, facility_type: toTypeId });
     if (res.ok) {
       notif(`Upgraded ${f.name}!`, 'success');
       activeUpgrade.value = null;
@@ -959,7 +1008,6 @@ onMounted(() => {
   loadFactionCache();
   if ((currentBot.value as any)?.docked) {
     reloadAll();
-    loadTypes();
   }
 });
 
@@ -974,8 +1022,8 @@ watch(() => (currentBot.value as any)?.docked, (docked, prev) => {
     upgradeMap.value = {};
     facilityTypes.value = [];
     expanded.value.clear();
+    stationActiveUpgrade.value = null;
     reloadAll();
-    loadTypes();
   }
 });
 

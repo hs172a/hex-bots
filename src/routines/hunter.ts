@@ -1093,10 +1093,12 @@ export const hunterRoutine: Routine = async function* (ctx: RoutineContext) {
           );
 
           // Submit pirate activity intel to faction (fire-and-forget)
-          if (bot.factionId) {
-            bot.exec("faction_submit_intel", {
-              systems: bot.system ? [bot.system] : [],
-            }).catch(() => {});
+          if (bot.factionId && bot.system) {
+            const sysData = ctx.mapStore.getSystem(bot.system);
+            const sysPayload = sysData
+              ? { system_id: sysData.id, name: sysData.name, pois: sysData.pois.map(p => ({ id: p.id, name: p.name, type: p.type })) }
+              : { system_id: bot.system };
+            bot.exec("faction_submit_intel", { systems: [sysPayload] }).catch(() => {});
           }
 
           yield "loot";

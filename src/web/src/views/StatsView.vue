@@ -248,7 +248,7 @@ async function loadMissionStats() {
   missionLoading.value = true;
   const results: MissionRow[] = [];
   await Promise.all(bots.map(bot => new Promise<void>(resolve => {
-    botStore.sendExec(bot.username, 'get_action_log', { category: 'mission', limit: 500 }, (res: any) => {
+    botStore.sendExec(bot.username, 'get_action_log', { category: 'mission', page: 1, page_size: 100 }, (res: any) => {
       const entries: any[] = res?.data?.entries ?? [];
       const count = entries.length;
       const credits = entries.reduce((s: number, e: any) => s + (Number(e.data?.credits) || 0), 0);

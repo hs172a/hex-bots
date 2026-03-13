@@ -9,7 +9,7 @@ export interface ParsedLogEntry {
 }
 
 export interface ParsedBroadcastEntry {
-  type: 'empty' | 'header' | 'simple' | 'market' | 'combat' | 'forum' | 'alert' | 'content';
+  type: 'empty' | 'header' | 'simple' | 'market' | 'combat' | 'battle' | 'forum' | 'alert' | 'content';
   raw: string;
   tag?: string;
   time?: string;
@@ -143,6 +143,10 @@ export function parseBroadcastLine(raw: string): ParsedBroadcastEntry {
     let botName: string | undefined;
     const bpm = BOT_PREFIX_RE.exec(inner);
     if (bpm) { botName = bpm[1]; inner = bpm[2]; }
+    // battle_alert (v0.215) — [BATTLE] tag
+    if (tag === 'BATTLE') {
+      return { type: 'battle', raw, time, tag, message: inner, botName };
+    }
     const classified = classifyInner(inner, raw);
     if (classified) {
       classified.time = time;
@@ -177,11 +181,28 @@ function getDedupeKey(entry: ParsedBroadcastEntry): string | null {
     case 'market': return null; // never deduplicate actionable cards
     case 'alert':  return `a:${entry.message || entry.raw.replace(/^\d{2}:\d{2}:\d{2}\s*(\[[^\]]+\]\s*)?/, '')}`;
     case 'simple': return `s:${entry.tag || ''}:${entry.message}`;
+    case 'battle': return `b:${entry.message?.match(/battle_id:[^,]+,\s*tick:\s*(\d+)/)?.[1] ?? entry.message}`;
     case 'combat': return `c:${entry.pirate}:${entry.damage}`;
     case 'forum':  return `f:${entry.author}:${entry.forumTitle}`;
     case 'header': return `h:${entry.tag}`;
     default:       return `x:${entry.raw}`;
   }
+}
+
+/** Collapse consecutive identical activity/system log lines (e.g. battle tick spam from N bots). */
+function deduplicateLogEntries(entries: ParsedLogEntry[]): ParsedLogEntry[] {
+  const out: ParsedLogEntry[] = [];
+  for (const e of entries) {
+    const last = out[out.length - 1];
+    if (last && last.raw === e.raw) continue; // skip exact duplicate
+    // Also deduplicate [broadcast][SYSTEM] lines with same category+message ignoring timestamp
+    if (last && e.parsed && last.parsed &&
+        e.parsed.username === 'broadcast' && last.parsed.username === 'broadcast' &&
+        e.parsed.category === last.parsed.category &&
+        e.parsed.message === last.parsed.message) continue;
+    out.push(e);
+  }
+  return out;
 }
 
 export function deduplicateGroups(entries: ParsedBroadcastEntry[]): BroadcastGroup[] {
@@ -270,20 +291,22 @@ export function useDashboardLogs() {
   }
 
   const filteredActivityLogs = computed((): ParsedLogEntry[] => {
-    const entries = botStore.activityLogs.slice(-200).map(parseLogLine);
-    if (!activityBotFilter.value) return entries;
-    return entries.filter(e => e.parsed?.username === activityBotFilter.value);
+    let entries = botStore.activityLogs.slice(-200).map(parseLogLine);
+    if (activityBotFilter.value) entries = entries.filter(e => e.parsed?.username === activityBotFilter.value);
+    return deduplicateLogEntries(entries);
   });
 
   const filteredSystemLogs = computed((): ParsedLogEntry[] => {
-    const entries = botStore.systemLogs.slice(-200).map(parseLogLine);
-    if (!systemBotFilter.value && !systemCatFilter.value) return entries;
-    return entries.filter(e => {
-      if (!e.parsed) return !systemBotFilter.value;
-      if (systemBotFilter.value && e.parsed.username !== systemBotFilter.value) return false;
-      if (systemCatFilter.value && e.parsed.category !== systemCatFilter.value) return false;
-      return true;
-    });
+    let entries = botStore.systemLogs.slice(-200).map(parseLogLine);
+    if (systemBotFilter.value || systemCatFilter.value) {
+      entries = entries.filter(e => {
+        if (!e.parsed) return !systemBotFilter.value;
+        if (systemBotFilter.value && e.parsed.username !== systemBotFilter.value) return false;
+        if (systemCatFilter.value && e.parsed.category !== systemCatFilter.value) return false;
+        return true;
+      });
+    }
+    return deduplicateLogEntries(entries);
   });
 
   const parsedBroadcastLogs = computed((): ParsedBroadcastEntry[] =>

@@ -244,7 +244,7 @@ const MUTATION_INVALIDATIONS: Record<string, string[]> = {
 // Commands with sub-actions that route through v2 endpoints instead of v1.
 // v1: POST /api/v1/{command} { action: "sub", ...params }
 // v2: POST /api/v2/spacemolt_{command}/{action} { ...params }
-const V2_ROUTED_COMMANDS = new Set(["facility", "battle"]);
+const V2_ROUTED_COMMANDS = new Set(["facility", "battle", "intel"]);
 
 // Commands that always route directly to v2 (no sub-action needed).
 // v2: POST /api/v2/spacemolt_{command} { ...params }

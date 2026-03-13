@@ -18,6 +18,9 @@ import {
   logStatus,
 } from "./common.js";
 
+const INTEL_COOLDOWN_MS = 30 * 60_000; // 30 min per-system cooldown
+const lastIntelMs = new Map<string, number>(); // systemId → last submit timestamp
+
 function getScoutSettings(): {
   refuelThreshold: number;
   scanDelayMs: number;
@@ -76,11 +79,17 @@ export const scoutRoutine: Routine = async function* (ctx: RoutineContext) {
         ctx.log("info", `Market data collected at ${station.name}`);
         ctx.mapStore.updateMarket(systemId, bot.poi, marketResp.result as Record<string, unknown>);
 
-        // Submit scan intel to faction (fire-and-forget)
+        // Submit scan intel to faction (fire-and-forget, max once per 30 min per system)
         if (bot.factionId) {
-          bot.exec("faction_submit_intel", {
-            systems: [systemId],
-          }).catch(() => {});
+          const nowMs = Date.now();
+          if (nowMs - (lastIntelMs.get(systemId) ?? 0) >= INTEL_COOLDOWN_MS) {
+            lastIntelMs.set(systemId, nowMs);
+            const sysData = ctx.mapStore.getSystem(systemId);
+            const sysPayload = sysData
+              ? { system_id: sysData.id, name: sysData.name, pois: sysData.pois.map(p => ({ id: p.id, name: p.name, type: p.type })) }
+              : { system_id: systemId };
+            bot.exec("faction_submit_intel", { systems: [sysPayload] }).catch(() => {});
+          }
         }
       }
       await sleep(settings.scanDelayMs);

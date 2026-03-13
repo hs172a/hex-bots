@@ -5,6 +5,112 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [2.6.0] - 2026-03-14
+
+### Added
+
+#### SmartSelector — cleanup + scout integration, faction storage sell boost (`src/routines/smart_selector.ts`)
+- **`cleanupRoutine` integration**: cleanup is now a scored candidate in SmartSelector. Score ramps linearly from 0 → 45 over the configured `cleanupIntervalHours` (default 2h); first-ever run scores 40. Skipped if cleanup ran < 30 min ago. Configurable per-bot via `enableCleanup` / `cleanupIntervalHours` settings keys.
+- **`scoutRoutine` integration**: scout is now a scored candidate. Score based on number of known systems (30+ when < 5 systems mapped, diminishing to 3 on large maps) × exploration skill. 30-min cooldown penalty after recent scout run. Configurable via `enableScout`.
+- **Faction storage sell boost**: `scoreFactionStorageSell()` inspects `mapStore.getAllFactionStorageItems()` and awards +7/+14/+22 to the trader score when total faction storage units exceed 20/100/500 respectively — ensures a trader bot gets priority when items have accumulated.
+- **Improved idle fallback**: when all productive routines score low (miner ≤ 5, trader ≤ 30, no gas/ice POI), both `mission_runner` (+30) **and** `cleanup` (boosted to ≥ 25) receive fallback boosts — the bot always has a useful second option instead of spinning.
+- **FORCED_ROUTINES map**: `cleanup` and `scout` added so they can be force-started via settings.
+- **New settings keys**: `cleanupIntervalHours` (number, default 2), `enableScout` (bool, default true), `enableCleanup` (bool, default true).
+
+#### DataSync — needs_matrix cross-VM sync (`src/datasync.ts`)
+- **Server** (`DataSyncServer`): added `GET /sync/needs-matrix` (returns all `needs_matrix` entries) and `POST /sync/needs-matrix` (merges entries from clients, newer `updated_target_at` wins, clock-skew guard applied).
+- **Client** (`DataSyncClient`): added `pushNeedsMatrix()` (runs on every fast-push cycle, ~60s) and `pullNeedsMatrix()` (runs on every pull cycle, ~300s with initial pull on startup). Coordinator targets written on VM1 are now visible to miner/crafter bots on VM2 within one pull cycle.
+
+#### Crafter — global faction storage ingredient counting (`src/routines/crafter.ts`)
+- `countItem()` now prefers `mapStore.getAllFactionStorageItems()` (global DB, synced across VMs via DataSync) over `bot.factionStorage` (bot-local cache). When the global DB has data, crafting profitability and `fullyFunded` calculations account for items deposited by any bot on any VM, not just the current bot's last `view_faction_storage` snapshot. Falls back to `bot.factionStorage` when global DB is empty.
+
+#### Market page — full redesign (`src/web/src/views/MarketView.vue`)
+- **4 tabs** replacing the previous 2: Overview, Routes, Faction Storage, My Orders.
+- **Routes tab** (`🔀 Routes`): computes all cross-station buy-here / sell-there opportunities from `mapStore.mapData`; shows buy station, sell station, buy price, sell price, margin (₡), margin (%). Stats bar shows route count, best/avg margin. Filters: text search, minimum margin input, sort by margin / % / name.
+- **Faction Storage tab** (`🏭 Faction Storage`): displays all faction storage items from `botStore.factionStorageItems`, grouped by POI with item count and total units stats. Inline withdraw/deposit action panel: select bot, enter item_id + quantity, click Extract / Store. Clicking any item row pre-fills the item_id inputs. Refresh button calls `botStore.fetchFactionStorage()`.
+- **Overview tab** improvements: category filter expanded to 7 options (All, Ores, Refined/Ingots, Components, Fuel & Energy, Weapons, Ships/Hulls) with keyword-matching logic rather than naive substring.
+- **My Orders tab**: unchanged (view orders, edit price inline, cancel with confirmation modal).
+
+### Fixed
+
+#### SmartSelector idle fallback — cleanup as second-option fallback
+- Previously, when all productive routines scored low and `mission_runner` had run within 5 min, the bot had no fallback and defaulted to the lowest-scoring miner. Now `cleanup` is boosted to score ≥ 25 as a second fallback, guaranteeing useful work is done.
+
+---
+
+## [2.5.9] - 2026-03-13
+
+### Changed
+
+#### Action Log viewer — API v0.213.0 compatibility (`src/web/src/views/ActionLogView.vue`, `src/web/src/views/StatsView.vue`)
+- **Breaking**: replaced cursor-based pagination (`before:` param) with page-based (`page`, `page_size`). "Load More" button now shows `page N / M` and appends responses correctly.
+- API now only accepts a **single** `category` string — changed category pills from multi-toggle Set to single-select radio: click a pill to filter, click again (or click 🌐 All) to clear.
+- Added **📦 Storage** category pill — new in v0.213.0, covers deposit/withdrawal events.
+- Added **🏛 Faction Log** toggle button: shows a `faction_id` input and passes it as `faction_id` param to `get_action_log` for faction audit trail (requires faction membership).
+- Footer now shows total entry count and total pages from API response.
+- `StatsView.vue`: fixed `limit: 500` → `page: 1, page_size: 100` (API max is now 100/page).
+- `watch([factionLogMode, factionId])` auto-reloads when faction log mode or ID changes.
+
+### Added
+
+#### Battle alert notifications — API v0.215.0 (`src/botmanager.ts`, `src/web/src/composables/useDashboardLogs.ts`, `src/web/src/views/DashboardView.vue`)
+- `botmanager.ts`: new `battle_alert` notification handler in `bot.on("notifications")`. Formats participant list (up to 6 players, with ship class/name) and system name, then routes to `server.logBroadcast` as `[BATTLE]` tag + `server.logBot` as a combat log entry.
+- `useDashboardLogs.ts`: added `'battle'` to `ParsedBroadcastEntry` type union. `parseBroadcastLine` short-circuits when tag is `'BATTLE'` and returns `type: 'battle'`.
+- `DashboardView.vue`: `'battle'` type renders with `text-red-400` label in the Broadcast/Chat panel (distinct from `'combat'`/orange and `'alert'`/red-500).
+
+#### Active battle display in Combat panel — API v0.215.0 (`src/web/src/components/CombatPanel.vue`, `BotControlPanel.vue`)
+- `BotControlPanel.vue` `processExecResult` for `get_system`: extracts `active_battle` from the response and stores it on the bot via `updateBotInStore({ activeBattle })`.
+- `CombatPanel.vue`: `activeBattle` computed reads from `currentBot.activeBattle`. When set, shows a red-bordered banner at the top of the panel with battle ID, participant names + ship classes, and a quick "Status" button.
+
+---
+
+## [2.5.8] - 2026-03-12
+
+### Fixed
+
+#### Faction → Intel tab showing nothing (`src/api.ts`, `src/web/src/views/FactionView.vue`)
+- **Root cause 1**: `"intel"` was not in `V2_ROUTED_COMMANDS` in `api.ts` — all three intel calls were falling through to the v1 API where these endpoints don't exist.
+- **Root cause 2**: UI called `faction_trade_intel_status`, `faction_query_trade_intel`, `faction_submit_trade_intel` — commands that don't exist in either API version. Correct pattern is `exec('intel', { action: 'trade_intel_status' | 'query_trade_intel' | 'submit_trade_intel', ... })`.
+- **Root cause 3**: `queryIntel` sent `{ query: q }` — actual API param is `{ item_id: q }`.
+- **Root cause 4**: response parsed as `d.results` — actual field is `d.entries` (array of station objects, each with a nested `items: []`). Now flattened to per-item rows for the results table.
+- **Root cause 5**: status stats displayed non-existent fields (`systems_covered`, `freshness_score`). Corrected to `unique_systems`, `intel_level`, `reports_24h`, `total_reports`.
+- Stats panel expanded to 4 columns (Systems, Reports, 24h Reports, Intel Level).
+- Auto-loads intel status when tab is opened for the first time.
+
+### Added
+
+#### Knowledge Base tooltips (`src/web/server.ts`, `src/web/src/stores/kbStore.ts`, `src/web/src/components/KbTooltip.vue`)
+- Server: new `GET /kb/*` route serving `spacemolt-kb/kb/` static files (HTML, CSS, images).
+- Server: new `GET /api/kb/index` route that lazily scans the KB directory and returns a JSON array of `{ id, name, description, category, url }` entries (items, recipes, skills, ships). Built once and cached in-process.
+- `kbStore.ts` — Pinia store: loads the index from `/api/kb/index` on first use, provides `get(itemId)` for O(1) lookup.
+- `KbTooltip.vue` — hover-tooltip component: wraps any text node, shows item name + description + "More info" link to the full KB page. Uses `<Teleport to="body">` with `position: fixed` so it's never clipped.
+- Wired into: craft recipe ingredient names + output (BotControlPanel), faction storage item lists (FactionView → Storage, All Storages tabs).
+- KB is only needed on the UI pool — other pools serve no UI and never call `/api/kb/index`.
+
+#### Expanded Refuel in Manual Control panel (`src/web/src/components/BotControlPanel.vue`)
+- Added a two-row "Refuel" expanded section covering all three API modes:
+  - **⚡ Burn Cells** — select fuel cell type from cargo (auto-populated from inventory: `fuel_cell`, `fuel_cell_premium`, etc.) + quantity (auto-filled from stack size) + Burn button. Works anywhere, no station needed.
+  - **⛽ Transfer Fuel** — select target player from the Nearby list + units to send + Send button. Requires Refueling Pump module; both ships must be at the same POI.
+- Simple `⛽ Refuel` button in the quick row still handles mode 1 (docked + credits, no params).
+- Result card shows: mode (`source`), `fuel_now / fuel_max`, cells used + item name, credit cost, target player + their fuel level, and rescue completion bonus if applicable.
+- `refuelItemId` watch auto-sets quantity to cargo stack size on selection.
+
+#### Distress Signal support in Manual Control panel (`src/web/src/components/BotControlPanel.vue`)
+- New **🆘 SOS Signal** button in the Emergency row (between Dock/Refuel and Withdraw Credits).
+- Automatically disabled with an inline reason when: bot is docked, tank is full, or LRT is in progress — matching the three API-enforced constraints.
+- Fires `distress_signal` via `execAsync`; on success shows a result card with: missions posted, reward cost, nearest station system, fuel needed, and expiry time (converted to minutes).
+- On error shows the API rejection message.
+- Pure UI only — no automation routine changes needed.
+
+#### Ship flight animation in LRT panel (`src/web/src/components/BotControlPanel.vue`)
+- Animated panel appears inside the LRT route box while `ldRelocating` is `true`.
+- Two CSS `@keyframes` layers of horizontally-scrolling star dots (slow ambient + fast parallax) over a deep-space radial gradient background.
+- 🚀 ship emoji pulses with a blue `drop-shadow` glow animation.
+- Current destination system name displayed bottom-right in monospace.
+- Pure CSS (no extra npm packages).
+
+---
+
 ## [2.5.7] - 2026-03-12
 
 ### Fixed

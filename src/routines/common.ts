@@ -125,14 +125,15 @@ export function isStationPoi(poi: SystemPOI): boolean {
   return poi.has_base || (poi.type || "").toLowerCase() === "station";
 }
 
-/** Find the first station POI in a list. Optionally filter by required service. */
+/** Find the first station POI in a list. Optionally filter by required service.
+ *  Always skips POIs in the session reputation blacklist. */
 export function findStation(pois: SystemPOI[], requiredService?: keyof BaseServices): SystemPOI | null {
+  const accessible = pois.filter(p => !SESSION_DOCK_BLACKLIST.has(p.id));
   if (requiredService) {
-    // Prefer station with the required service
-    const withService = pois.find(p => isStationPoi(p) && p.services?.[requiredService] !== false);
+    const withService = accessible.find(p => isStationPoi(p) && p.services?.[requiredService] !== false);
     if (withService) return withService;
   }
-  return pois.find(p => isStationPoi(p)) || null;
+  return accessible.find(p => isStationPoi(p)) || null;
 }
 
 /** Check if a station POI is known to lack a specific service. */
@@ -270,8 +271,13 @@ export function getSystemPoisFromDb(ctx: RoutineContext): SystemPOI[] | null {
   }));
 }
 
+/** Session-scoped blacklist for stations that denied access due to reputation.
+ *  Cleared on process restart; prevents infinite retry loops at rep-locked POIs. */
+const SESSION_DOCK_BLACKLIST = new Set<string>(); // poiId
+
 /** Helper: attempt to dock at a specific POI. Returns true on success.
- *  On "No base at this location" marks the POI in MapStore so BFS skips it. */
+ *  On "No base at this location" marks the POI in MapStore so BFS skips it.
+ *  On reputation-denied errors adds the POI to SESSION_DOCK_BLACKLIST. */
 async function tryDockAt(
   ctx: RoutineContext,
   systemId: string,
@@ -279,6 +285,12 @@ async function tryDockAt(
   poiName: string,
 ): Promise<boolean> {
   const { bot } = ctx;
+
+  if (SESSION_DOCK_BLACKLIST.has(poiId)) {
+    ctx.log("warn", `Skipping ${poiName} — reputation-locked (session blacklist)`);
+    return false;
+  }
+
   if (bot.poi !== poiId) {
     ctx.log("travel", `Traveling to ${poiName}...`);
     await bot.exec("travel", { target_poi: poiId });
@@ -288,16 +300,22 @@ async function tryDockAt(
   const dResp = await bot.exec("dock");
   if (!dResp.error || dResp.error.message.includes("already")) {
     bot.docked = true;
-    await collectFromStorage(ctx);
-    await recordMarketData(ctx);
+    await collectFromStorage(ctx); // internally calls recordMarketData
     await analyzeMarket(ctx);
     await ensureInsured(ctx);
     return true;
   }
-  const msg = dResp.error?.message ?? "";
-  if (msg.toLowerCase().includes("no base") || msg.includes("no_base")) {
+  const msg  = dResp.error?.message ?? "";
+  const code = (dResp.error as any)?.code   ?? "";
+  if (msg.toLowerCase().includes("no base") || msg.includes("no_base") || code === "no_base") {
     ctx.log("error", `${poiName} has no dockable base — invalidating in map DB`);
     ctx.mapStore.markNoBase(systemId, poiId);
+  } else if (
+    code === "insufficient_pirate_rep" || code.startsWith("insufficient_") ||
+    msg.toLowerCase().includes("reputation") || msg.toLowerCase().includes("access denied")
+  ) {
+    SESSION_DOCK_BLACKLIST.add(poiId);
+    ctx.log("warn", `${poiName} requires special reputation — blacklisted for this session`);
   } else {
     ctx.log("error", `Dock failed at ${poiName}: ${msg}`);
   }
@@ -1178,6 +1196,18 @@ export async function ensureFueled(
 
   ctx.log("travel", `Nearest station: ${nearest.poiName} in ${nearest.systemId} (${nearest.hops} jump${nearest.hops !== 1 ? "s" : ""} away)`);
 
+  if (SESSION_DOCK_BLACKLIST.has(nearest.poiId)) {
+    await bot.refreshStatus();
+    const fuelNow = bot.maxFuel > 0 ? Math.round((bot.fuel / bot.maxFuel) * 100) : 100;
+    ctx.log("warn", `${nearest.poiName} is reputation-locked — no accessible station. Fuel: ${fuelNow}%`);
+    if (fuelNow > 20) {
+      // Enough fuel to keep flying — sleep a bit before retrying rather than tight-looping
+      await sleep(5 * 60_000);
+      return true; // continue with available fuel
+    }
+    return await emergencyFuelRecovery(ctx);
+  }
+
   // Navigate there — use navigateToSystem if in a different system
   if (nearest.systemId !== bot.system) {
     // Check if we have enough fuel for at least one jump
@@ -1235,7 +1265,15 @@ export async function ensureFueled(
     bot.docked = true;
     await collectFromStorage(ctx);
   } else {
-    ctx.log("error", `Dock failed: ${dResp.error.message}`);
+    const dCode = (dResp.error as any)?.code ?? "";
+    const dMsg  = dResp.error.message ?? "";
+    if (dCode === "insufficient_pirate_rep" || dCode.startsWith("insufficient_") ||
+        dMsg.toLowerCase().includes("reputation") || dMsg.toLowerCase().includes("access denied")) {
+      SESSION_DOCK_BLACKLIST.add(nearest.poiId);
+      ctx.log("warn", `${nearest.poiName} requires special reputation — blacklisted for this session`);
+    } else {
+      ctx.log("error", `Dock failed: ${dMsg}`);
+    }
     return await emergencyFuelRecovery(ctx);
   }
 
@@ -1847,7 +1885,15 @@ export async function refuelAtStation(
   if (!bot.docked) {
     const dockResp = await bot.exec("dock");
     if (dockResp.error && !dockResp.error.message.includes("already")) {
-      ctx.log("error", `Dock failed: ${dockResp.error.message}`);
+      const rCode = (dockResp.error as any)?.code ?? "";
+      const rMsg  = dockResp.error.message ?? "";
+      if (rCode === "insufficient_pirate_rep" || rCode.startsWith("insufficient_") ||
+          rMsg.toLowerCase().includes("reputation") || rMsg.toLowerCase().includes("access denied")) {
+        SESSION_DOCK_BLACKLIST.add(station.id);
+        ctx.log("warn", `${station.name} requires special reputation — blacklisted for this session`);
+      } else {
+        ctx.log("error", `Dock failed: ${rMsg}`);
+      }
       return await emergencyFuelRecovery(ctx);
     }
     bot.docked = true;
@@ -2438,6 +2484,78 @@ export function writeSettings(updates: Record<string, Record<string, unknown>>):
   }
 
   writeFileSync(file, JSON.stringify(existing, null, 2) + "\n", "utf-8");
+}
+
+// ── Fleet coordination helpers ────────────────────────────────
+
+export interface FleetGroup {
+  id: string;
+  name: string;
+  objective: 'mine' | 'hybrid' | 'custom';
+  targetPoi?: string;
+  depositPoi?: string;
+}
+
+export interface FleetAssignment {
+  groupId: string;
+  role: 'miner' | 'hauler' | 'refueler' | 'scout' | 'combat';
+}
+
+export interface FleetOrder {
+  cmd: 'dock' | 'goto' | 'return_home';
+  targetPoi?: string;
+  targetSystem?: string;
+  issuedAt: number;
+}
+
+export interface FleetSignal {
+  poi?: string;
+  systemId?: string;
+  cargoPct?: number;
+  cargoFull?: boolean;
+  fuelPct?: number;
+  needsFuel?: boolean;
+  order?: FleetOrder | null;
+  lastUpdated: number;
+}
+
+export function readFleetSettings(): {
+  groups: FleetGroup[];
+  assignments: Record<string, FleetAssignment>;
+  signals: Record<string, FleetSignal>;
+} {
+  const all = readSettings();
+  const f = (all.fleet || {}) as Record<string, unknown>;
+  return {
+    groups: Array.isArray(f.groups) ? (f.groups as FleetGroup[]) : [],
+    assignments: ((f.assignments || {}) as Record<string, FleetAssignment>),
+    signals: ((f.signals || {}) as Record<string, FleetSignal>),
+  };
+}
+
+export function writeFleetSignal(username: string, signal: Partial<FleetSignal>): void {
+  const all = readSettings();
+  const fleet = (all.fleet || {}) as Record<string, unknown>;
+  const signals = ((fleet.signals || {}) as Record<string, FleetSignal>);
+  signals[username] = { ...signals[username], ...signal, lastUpdated: Date.now() };
+  writeSettings({ fleet: { ...fleet, signals } as Record<string, unknown> });
+}
+
+export function clearFleetOrder(username: string): void {
+  writeFleetSignal(username, { order: null });
+}
+
+export function getPendingFleetOrder(username: string): FleetOrder | null {
+  const { signals } = readFleetSettings();
+  const order = signals[username]?.order;
+  if (!order) return null;
+  if (Date.now() - order.issuedAt > 10 * 60_000) return null; // expire after 10 min
+  return order;
+}
+
+export function getFleetAssignment(username: string): FleetAssignment | null {
+  const { assignments } = readFleetSettings();
+  return assignments[username] ?? null;
 }
 
 // ── Utilities ────────────────────────────────────────────────

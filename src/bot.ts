@@ -889,8 +889,17 @@ export class Bot extends EventEmitter {
    */
   onFactionStorageViewed?: (rawItems: unknown[], poiId: string, systemId: string) => void;
 
+  /**
+   * Optional guard injected by botmanager. Returns false when the current station
+   * is known to have no faction storage building — skips the API call entirely.
+   */
+  shouldCheckFactionStorage?: (poiId: string) => boolean;
+
   /** Fetch faction storage contents and cache them. Silently returns empty on error. */
   async refreshFactionStorage(): Promise<void> {
+    if (this.poi && this.shouldCheckFactionStorage?.(this.poi) === false) {
+      return; // skip API call — no faction storage building at this station
+    }
     const resp = await this.exec("view_faction_storage");
     if (resp.error) {
       this.factionStorage = [];

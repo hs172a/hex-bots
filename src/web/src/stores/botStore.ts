@@ -86,6 +86,14 @@ export interface KnownOre {
 
 type ExecCallback = (result: any) => void;
 
+export interface FleetGroup {
+  id: string; name: string; objective: 'mine' | 'hybrid' | 'custom';
+  targetPoi?: string; depositPoi?: string;
+}
+export interface FleetAssignment { groupId: string; role: 'miner' | 'hauler' | 'refueler' | 'scout' | 'combat'; }
+export interface FleetOrder { cmd: 'dock' | 'goto' | 'return_home'; targetPoi?: string; targetSystem?: string; issuedAt: number; }
+export interface FleetSignal { poi?: string; systemId?: string; cargoPct?: number; cargoFull?: boolean; fuelPct?: number; needsFuel?: boolean; order?: FleetOrder | null; lastUpdated: number; }
+
 // ── Store ───────────────────────────────────────────────────
 
 export const useBotStore = defineStore('bots', () => {
@@ -186,6 +194,55 @@ export const useBotStore = defineStore('bots', () => {
     } catch { /* ignore */ } finally {
       onlinePlayersLoading.value = false;
     }
+  }
+
+  // ── Fleet groups / assignments / signals ──────────────────────
+  const fleetGroups = ref<FleetGroup[]>([]);
+  const fleetAssignments = ref<Record<string, FleetAssignment>>({});
+  const fleetSignals = ref<Record<string, FleetSignal>>({});
+  const fleetLoading = ref(false);
+
+  async function fetchFleet() {
+    if (fleetLoading.value) return;
+    fleetLoading.value = true;
+    try {
+      const r = await fetch('/api/fleet');
+      if (r.ok) {
+        const d = await r.json();
+        fleetGroups.value = Array.isArray(d.groups) ? d.groups : [];
+        fleetAssignments.value = d.assignments ?? {};
+        fleetSignals.value = d.signals ?? {};
+      }
+    } catch { /* ignore */ } finally { fleetLoading.value = false; }
+  }
+
+  async function saveFleetGroup(group: Omit<FleetGroup, 'id'> & { id?: string }) {
+    await fetch('/api/fleet/groups', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(group) });
+    await fetchFleet();
+  }
+
+  async function deleteFleetGroup(id: string) {
+    await fetch(`/api/fleet/groups/${encodeURIComponent(id)}`, { method: 'DELETE' });
+    await fetchFleet();
+  }
+
+  async function setFleetAssignment(username: string, groupId: string, role: string) {
+    await fetch('/api/fleet/assignments', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ username, groupId, role }) });
+    await fetchFleet();
+  }
+
+  async function removeFleetAssignment(username: string) {
+    await fetch(`/api/fleet/assignments/${encodeURIComponent(username)}`, { method: 'DELETE' });
+    await fetchFleet();
+  }
+
+  async function issueFleetOrder(username: string, cmd: FleetOrder['cmd'], targetSystem?: string, targetPoi?: string) {
+    await fetch('/api/fleet/order', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ username, cmd, targetSystem, targetPoi }),
+    });
+    await fetchFleet();
   }
 
   // ── Per-bot dock results (story, station_condition, unread_chat) ──
@@ -681,5 +738,16 @@ export const useBotStore = defineStore('bots', () => {
     // LRT status per bot
     lrtBots,
     setLrtStatus,
+    // Fleet coordination
+    fleetGroups,
+    fleetAssignments,
+    fleetSignals,
+    fleetLoading,
+    fetchFleet,
+    saveFleetGroup,
+    deleteFleetGroup,
+    setFleetAssignment,
+    removeFleetAssignment,
+    issueFleetOrder,
   };
 });

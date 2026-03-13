@@ -1,6 +1,6 @@
 {
   "name": "hex-bots-orchestrator",
-  "version": "2.5.6",
+  "version": "2.6.0",
   "type": "module",
   "scripts": {
     "start": "bun run src/botmanager.ts",

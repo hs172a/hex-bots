@@ -218,6 +218,7 @@
               <button v-if="isDocked" @click="execCmd('refuel')" :disabled="loading" class="btn text-xs px-3 py-1">⛽ Refuel</button>
               <button v-if="isDocked" @click="execCmd('undock')" :disabled="loading" class="btn text-xs px-3 py-1">🚀 Undock</button>
               <button v-else @click="execCmd('dock')" :disabled="loading" class="btn text-xs px-3 py-1">🔒 Dock</button>
+              <button @click="releaseTow" :disabled="loading" class="btn text-xs px-3 py-1" title="Drop towed wreck at current POI">🪝 Release Tow</button>
               <button @click="fetchShipData(selectedBot!)" :disabled="loading" class="btn text-xs px-3 py-1">🔄 Refresh</button>
             </div>
             <div v-if="!isDocked" class="text-[11px] text-space-text-dim italic mt-1.5">Dock at a station to repair or refuel.</div>
@@ -244,7 +245,10 @@
                 <div class="text-[11px] uppercase text-space-text-dim tracking-wider mb-0.5">{{ m.type || m.slot_type || m.category || m.slot || '—' }}</div>
                 <div class="text-[11px] font-medium text-space-text leading-tight">{{ moduleName(m) }}</div>
                 <div v-if="m.wear != null" class="text-[11px] text-space-text-dim mt-0.5">Wear: {{ m.wear }}{{ typeof m.wear === 'number' ? '%' : '' }}</div>
-                <button v-if="isDocked" @click="uninstallMod(m.module_id || m.id)" class="text-[11px] mt-1.5 px-2 py-0.5 rounded border border-space-border text-space-text-dim hover:border-space-red hover:text-space-red transition-colors w-full">Uninstall</button>
+                <div v-if="isDocked" class="flex gap-1 mt-1.5">
+                <button @click="repairModule(m.module_id || m.id)" class="text-[11px] px-2 py-0.5 rounded border border-space-border text-space-text-dim hover:border-space-cyan hover:text-space-cyan transition-colors flex-1">Repair</button>
+                <button @click="uninstallMod(m.module_id || m.id)" class="text-[11px] px-2 py-0.5 rounded border border-space-border text-space-text-dim hover:border-space-red hover:text-space-red transition-colors flex-1">Uninstall</button>
+              </div>
               </div>
             </div>
             <!-- Install from cargo -->
@@ -345,6 +349,29 @@
                     💰 Sell
                   </button>
                 </template>
+              </div>
+              <!-- List / cancel listing -->
+              <div v-if="!s.is_active && !s.starter_ship && isDocked" class="pt-1 border-t border-[#21262d]">
+                <div v-if="s.is_listed" class="flex items-center justify-between gap-1">
+                  <span class="text-[11px] text-space-text-dim">Listed: {{ s.listing_price != null ? fmt(s.listing_price) + ' cr' : '—' }}</span>
+                  <button @click="cancelShipListing(s.listing_id)" :disabled="loading || !s.listing_id"
+                    class="text-[11px] px-2 py-0.5 rounded border border-space-border text-space-text-dim hover:border-space-red hover:text-space-red transition-colors">
+                    ✕ Delist
+                  </button>
+                </div>
+                <div v-else class="flex gap-1 items-center">
+                  <input
+                    :value="listPrices[s.ship_id] ?? ''"
+                    @input="listPrices[s.ship_id] = Number(($event.target as HTMLInputElement).value) || ''"
+                    type="number" min="1" placeholder="💰 List price…"
+                    class="input text-[11px] flex-1 !py-0.5"
+                  />
+                  <button
+                    @click="listShipForSale(s.ship_id)"
+                    :disabled="loading || !(listPrices[s.ship_id] as number > 0)"
+                    class="text-[11px] px-2 py-0.5 rounded border border-space-border text-space-text-dim hover:border-space-accent hover:text-space-accent transition-colors disabled:opacity-40 shrink-0"
+                  >📋 List</button>
+                </div>
               </div>
               <!-- Transfer ship to player -->
               <div v-if="!s.is_active && !s.starter_ship && isDocked" class="flex gap-1 items-center pt-1 border-t border-[#21262d]">
@@ -683,8 +710,12 @@
               <div v-if="c.progress_pct != null">{{ c.progress_pct }}% done</div>
               <div v-if="c.created_at">📅 {{ c.created_at }}</div>
             </div>
-            <div v-if="c.status === 'ready'" class="mt-2 pt-2 border-t border-[#21262d]">
+            <div v-if="c.status === 'ready'" class="mt-2 pt-2 border-t border-[#21262d] space-y-1.5">
               <span class="text-space-green text-[11px] font-semibold">✅ Your ship is ready for pickup!</span>
+              <button @click="claimCommission(c.commission_id || c.id)" :disabled="loading" class="btn btn-primary text-[11px] px-3 py-1 w-full">🚀 Claim Ship</button>
+            </div>
+            <div v-if="c.status !== 'ready'" class="mt-2 pt-2 border-t border-[#21262d] flex justify-end">
+              <button @click="cancelCommission(c.commission_id || c.id)" :disabled="loading" class="text-[11px] px-2 py-0.5 rounded border border-space-border text-space-text-dim hover:border-space-red hover:text-space-red transition-colors">✕ Cancel</button>
             </div>
             <div v-if="c.status === 'sourcing'" class="mt-2 pt-2 border-t border-[#21262d] space-y-2">
               <div class="text-yellow-300 text-[11px] font-semibold">⏳ Shipyard is sourcing materials — you can donate to speed it up</div>
@@ -762,6 +793,7 @@ const sellConfirmId = ref('');
 const renameShipName = ref('');
 const renameSaving = ref(false);
 const transferTargets = ref<Record<string, string>>({});
+const listPrices = ref<Record<string, number | ''>>({});
 
 function submitSupply(commissionId: string) {
   if (!supplyItemId.value.trim() || !selectedBot.value) return;
@@ -1050,6 +1082,9 @@ function loadFleet() {
           location: s.location || 'Unknown',
           can_switch: !s.is_active,
           starter_ship: !!s.starter_ship,
+          is_listed: !!s.is_listed,
+          listing_id: s.listing_id || '',
+          listing_price: s.listing_price ?? null,
         };
       }).sort((a, b) =>
         // Active ship first, then alphabetical by class name
@@ -1108,11 +1143,78 @@ function uninstallMod(moduleId: string) {
   execCmd('uninstall_mod', { module_id: moduleId });
 }
 
+function repairModule(moduleId: string) {
+  execCmd('repair_module', { module_id: moduleId });
+}
+
+function claimCommission(commissionId: string) {
+  if (!selectedBot.value) return;
+  loading.value = true;
+  botStore.sendExec(selectedBot.value, 'claim_commission', { commission_id: commissionId }, (result: any) => {
+    loading.value = false;
+    if (result.ok) {
+      setStatus('Ship claimed! Check your fleet.', true);
+      loadCommissionStatus();
+      setTimeout(() => loadFleet(), 1000);
+    } else {
+      setStatus(result.error || 'Claim failed', false);
+    }
+  });
+}
+
+function cancelCommission(commissionId: string) {
+  if (!selectedBot.value || !confirm('Cancel this commission? You will receive a 50% refund.')) return;
+  loading.value = true;
+  botStore.sendExec(selectedBot.value, 'cancel_commission', { commission_id: commissionId }, (result: any) => {
+    loading.value = false;
+    if (result.ok) {
+      setStatus('Commission cancelled (50% refunded)', true);
+      loadCommissionStatus();
+    } else {
+      setStatus(result.error || 'Cancel failed', false);
+    }
+  });
+}
+
 function sellShip(shipId: string) {
   sellConfirmId.value = '';
   execCmd('sell_ship', { ship_id: shipId });
   // Reload fleet after selling
   setTimeout(() => loadFleet(), 1500);
+}
+
+function listShipForSale(shipId: string) {
+  const price = listPrices.value[shipId];
+  if (!price || !selectedBot.value) return;
+  loading.value = true;
+  botStore.sendExec(selectedBot.value, 'list_ship_for_sale', { ship_id: shipId, price: Number(price) }, (result: any) => {
+    loading.value = false;
+    if (result.ok) {
+      setStatus(`Ship listed for ${Number(price).toLocaleString()} cr (1% fee charged)`, true);
+      listPrices.value[shipId] = '';
+      setTimeout(() => loadFleet(), 1000);
+    } else {
+      setStatus(result.error || 'Listing failed', false);
+    }
+  });
+}
+
+function cancelShipListing(listingId: string) {
+  if (!selectedBot.value || !listingId) return;
+  loading.value = true;
+  botStore.sendExec(selectedBot.value, 'cancel_ship_listing', { listing_id: listingId }, (result: any) => {
+    loading.value = false;
+    if (result.ok) {
+      setStatus('Ship listing cancelled (fee not refunded)', true);
+      setTimeout(() => loadFleet(), 1000);
+    } else {
+      setStatus(result.error || 'Cancel listing failed', false);
+    }
+  });
+}
+
+function releaseTow() {
+  execCmd('release_tow');
 }
 
 function transferShip(shipId: string) {
@@ -1136,7 +1238,7 @@ function renameShip() {
   if (!selectedBot.value) return;
   const name = renameShipName.value.trim();
   renameSaving.value = true;
-  botStore.sendExec(selectedBot.value, 'rename_ship', { name }, (result: any) => {
+  botStore.sendExec(selectedBot.value, 'name_ship', { name }, (result: any) => {
     renameSaving.value = false;
     if (result.ok) {
       setStatus(name ? `Ship renamed to "${name}"` : 'Ship name cleared', true);
